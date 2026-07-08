@@ -4,6 +4,80 @@ import { PlayerController, RemotePlayer } from "./player.js";
 import { Net } from "./net.js";
 
 /* =========================================================
+   SETTINGS — persisted to localStorage. Sensitivity uses the same
+   numeric scale convention as Call of Duty (roughly 1-20, with ~6
+   being a typical mouse default) rather than an arbitrary 0-1 slider,
+   since that's the scale players are likely already used to.
+========================================================= */
+const SETTINGS_KEY = "capsules-settings";
+const DEFAULT_SETTINGS = { sensitivity: 6, fov: 90 };
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return { ...DEFAULT_SETTINGS };
+    const parsed = JSON.parse(raw);
+    return {
+      sensitivity: typeof parsed.sensitivity === "number" ? parsed.sensitivity : DEFAULT_SETTINGS.sensitivity,
+      fov: typeof parsed.fov === "number" ? parsed.fov : DEFAULT_SETTINGS.fov,
+    };
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
+}
+
+function saveSettings() {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+}
+
+let settings = loadSettings();
+
+// Converts the CoD-style sensitivity number into a radians-per-pixel
+// multiplier for mouse look. Tuned so the default (6) feels close to
+// a typical shooter default.
+function sensitivityMultiplier() {
+  return settings.sensitivity * 0.00035;
+}
+
+function applyFov() {
+  camera.fov = settings.fov;
+  camera.updateProjectionMatrix();
+}
+
+const settingsModal = document.getElementById("settings-modal");
+const sensSlider = document.getElementById("sens-slider");
+const sensValue = document.getElementById("sens-value");
+const fovSlider = document.getElementById("fov-slider");
+const fovValue = document.getElementById("fov-value");
+
+function refreshSettingsUI() {
+  sensSlider.value = settings.sensitivity;
+  sensValue.textContent = settings.sensitivity.toFixed(1);
+  fovSlider.value = settings.fov;
+  fovValue.textContent = settings.fov;
+}
+
+document.getElementById("btn-settings").addEventListener("click", () => {
+  refreshSettingsUI();
+  settingsModal.classList.remove("hidden");
+});
+document.getElementById("btn-settings-close").addEventListener("click", () => {
+  settingsModal.classList.add("hidden");
+});
+
+sensSlider.addEventListener("input", () => {
+  settings.sensitivity = parseFloat(sensSlider.value);
+  sensValue.textContent = settings.sensitivity.toFixed(1);
+  saveSettings();
+});
+fovSlider.addEventListener("input", () => {
+  settings.fov = parseInt(fovSlider.value, 10);
+  fovValue.textContent = settings.fov;
+  saveSettings();
+  applyFov(); // live preview even before a match starts
+});
+
+/* =========================================================
    SCREEN ELEMENTS
 ========================================================= */
 const screens = {
@@ -218,7 +292,7 @@ document.getElementById("btn-cancel-join").addEventListener("click", () => {
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0a0a0d);
 
-const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 1000);
+const camera = new THREE.PerspectiveCamera(settings.fov, innerWidth / innerHeight, 0.1, 1000);
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 
@@ -389,8 +463,9 @@ canvas.addEventListener("click", () => {
 
 addEventListener("mousemove", (e) => {
   if (!matchActive || document.pointerLockElement !== document.body) return;
-  local.yaw -= e.movementX * 0.002;
-  local.pitch -= e.movementY * 0.002;
+  const s = sensitivityMultiplier();
+  local.yaw -= e.movementX * s;
+  local.pitch -= e.movementY * s;
   local.pitch = Math.max(-1.4, Math.min(1.4, local.pitch));
 });
 

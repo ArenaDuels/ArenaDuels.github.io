@@ -25,11 +25,21 @@ export function makeCapsuleMesh(color) {
 }
 
 function makeHpBar() {
-  const bar = new THREE.Mesh(
-    new THREE.PlaneGeometry(1.2, 0.15),
-    new THREE.MeshBasicMaterial({ color: 0x00ff00, side: THREE.DoubleSide })
-  );
-  return bar;
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 16;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#39ff88";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  // Sprites always fully face the camera automatically — no manual
+  // rotation math needed, which is the most reliable way to guarantee
+  // this actually stays facing whoever is looking at it.
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false }));
+  sprite.scale.set(1.2, 0.15, 1);
+  sprite.renderOrder = 998;
+  return sprite;
 }
 
 // A billboard text sprite for a player's name tag, floating above their capsule.
@@ -261,12 +271,7 @@ export class RemotePlayer {
     if (this.visible && this.hp > 0) {
       this.hpBar.position.copy(this.mesh.position);
       this.hpBar.position.y += 1.5;
-      // Billboard on the Y axis only — keeps the bar upright and always
-      // facing the camera left/right, without tilting when you look up/down.
-      const dx = camera.position.x - this.hpBar.position.x;
-      const dz = camera.position.z - this.hpBar.position.z;
-      this.hpBar.rotation.y = Math.atan2(dx, dz);
-      this.hpBar.scale.x = Math.max(this.hp / 100, 0);
+      this.hpBar.scale.x = 1.2 * Math.max(this.hp / 100, 0);
 
       this.nameSprite.position.copy(this.mesh.position);
       this.nameSprite.position.y += 1.85;

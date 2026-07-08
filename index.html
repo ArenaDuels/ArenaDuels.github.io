@@ -10,6 +10,7 @@
   <!-- ===================== MAIN MENU ===================== -->
   <div id="screen-menu" class="screen">
     <div class="menu-panel">
+      <button id="btn-settings" class="settings-btn" title="Settings" aria-label="Settings">⚙</button>
       <h1 class="logo">CAP<span>SULES</span></h1>
       <p class="tagline">Pick an arena. Host or drop in.</p>
 
@@ -21,6 +22,31 @@
         <button id="btn-host" class="btn btn-primary">Host Match</button>
         <button id="btn-join" class="btn btn-secondary">Join Match</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ===================== SETTINGS MODAL ===================== -->
+  <div id="settings-modal" class="modal-overlay hidden">
+    <div class="modal-panel">
+      <p class="eyebrow">Settings</p>
+
+      <div class="setting-row">
+        <div class="setting-label">
+          <span>Sensitivity</span>
+          <span id="sens-value" class="setting-value">6.0</span>
+        </div>
+        <input id="sens-slider" type="range" min="1" max="20" step="0.1" value="6" class="slider">
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-label">
+          <span>Field of View</span>
+          <span id="fov-value" class="setting-value">90</span>
+        </div>
+        <input id="fov-slider" type="range" min="60" max="110" step="1" value="90" class="slider">
+      </div>
+
+      <button id="btn-settings-close" class="btn btn-primary">Done</button>
     </div>
   </div>
 
