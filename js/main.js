@@ -1,7 +1,7 @@
 import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
 import { ARENA_LIST, getArena } from "./arenas.js";
 import { PlayerController, RemotePlayer } from "./player.js";
-import { Net, randomCode } from "./net.js";
+import { Net } from "./net.js";
 
 /* =========================================================
    SCREEN ELEMENTS
@@ -62,7 +62,7 @@ arenaGrid.firstElementChild.classList.add("selected");
 /* =========================================================
    COLOR / SPAWN ASSIGNMENT — deterministic from peer id, so every
    client independently computes the same color/spawn for a given
-   player without needing the host to explicitly assign and sync it.
+   player without needing anyone to explicitly assign and sync it.
 ========================================================= */
 const PALETTE_NONHOST = [0xff4d6a, 0x39ff88, 0xffd166, 0x9b5de5, 0x4cc9f0, 0xff8c42];
 
@@ -72,7 +72,7 @@ function hashId(id) {
   return h;
 }
 function colorForId(id) {
-  if (id === hostId) return 0xffffff; // host is always white
+  if (id === hostId) return 0xffffff; // room creator is always white
   return PALETTE_NONHOST[hashId(id) % PALETTE_NONHOST.length];
 }
 function spawnForId(id, arena) {
@@ -80,13 +80,63 @@ function spawnForId(id, arena) {
 }
 
 /* =========================================================
-   NET
+   NET — every client (host or not) uses identical message
+   handling now; the relay server takes care of fan-out.
 ========================================================= */
 const net = new Net();
-let hostId = null;   // the room-code peer id — same on host and every client
-let myId = null;     // my own peer id
+let hostId = null;
+let myId = null;
 let myName = "";
 let currentArena = null;
+
+net.onData = (msg, fromId) => handleData(msg, fromId);
+
+net.onPeerConnected = (id) => {
+  // Someone new joined the room. Add them (name catches up once their
+  // 'hello' arrives) and make sure they learn who we are too.
+  addOrUpdatePlayer(id, "Player");
+  net.broadcast({ t: "hello", name: myName });
+};
+
+net.onPeerDisconnected = (id) => {
+  if (id === null) {
+    handleServerLost();
+  } else {
+    removePlayer(id);
+  }
+};
+
+function handleData(msg, fromId) {
+  if (msg.t === "hello") {
+    addOrUpdatePlayer(fromId, msg.name);
+  } else if (msg.t === "state") {
+    addOrUpdatePlayer(fromId).applyNetState(msg);
+  } else if (msg.t === "hit") {
+    if (msg.targetId !== myId) return;
+    const died = local.takeDamage(msg.damage);
+    if (died) {
+      myDeaths++;
+      updateScoreHud();
+      local.spawn(mySpawn);
+      net.broadcast({ t: "died", attackerId: msg.attackerId });
+    }
+    // Immediate update — don't wait for the next scheduled sync tick.
+    net.broadcast({ t: "state", id: myId, ...local.getNetState() });
+  } else if (msg.t === "died") {
+    if (msg.attackerId !== myId) return;
+    myKills++;
+    updateScoreHud();
+  }
+}
+
+function handleServerLost() {
+  if (!matchActive) return;
+  matchActive = false;
+  document.exitPointerLock();
+  alert("Lost connection to the server.");
+  net.destroy();
+  showScreen("menu");
+}
 
 /* ---- HOST FLOW ---- */
 async function attemptHost() {
@@ -95,26 +145,15 @@ async function attemptHost() {
   document.getElementById("host-status").textContent = "Getting a code...";
 
   try {
-    const code = await net.host(randomCode());
-    hostId = code;
-    myId = code;
+    const code = await net.host(selectedArenaId);
+    hostId = net.hostId;
+    myId = net.myId;
     myName = getPlayerName();
 
     document.getElementById("host-code-display").textContent = code;
     document.getElementById("host-status").textContent = "Waiting for opponents... (share the code above)";
 
-    net.onPeerConnected = (id) => {
-      if (!matchActive) {
-        beginMatch(selectedArenaId);
-      }
-      broadcastRoster();
-    };
-    net.onPeerDisconnected = (id) => {
-      names.delete(id);
-      removePlayer(id);
-      broadcastRoster();
-    };
-    net.onData = (msg, fromId) => handleHostData(msg, fromId);
+    await beginMatch(selectedArenaId);
   } catch (err) {
     console.error("Host failed:", err);
     document.getElementById("host-status").textContent =
@@ -150,22 +189,19 @@ document.getElementById("btn-join-confirm").addEventListener("click", async () =
   }
   document.getElementById("join-status").textContent = "Connecting...";
 
-  hostId = code;
-  myName = getPlayerName();
-  net.onData = (msg, fromId) => handleClientData(msg, fromId);
-  net.onPeerDisconnected = () => {
-    // Only connection a client has is to the host — losing it ends the match.
-    if (matchActive) handleHostLeft();
-  };
-
   try {
-    await net.join(code);
+    const result = await net.join(code);
+    hostId = result.hostId;
     myId = net.myId;
-    document.getElementById("join-status").textContent = "Connected. Waiting for arena...";
+    myName = getPlayerName();
+
+    await beginMatch(result.arenaId);
+    for (const id of result.peers) addOrUpdatePlayer(id, "Player");
+    net.broadcast({ t: "hello", name: myName });
   } catch (err) {
     console.error("Join failed:", err);
     document.getElementById("join-status").textContent =
-      `Couldn't connect: ${err.message || err.type || "unknown error"} (see console for details)`;
+      `Couldn't connect: ${err.message || "unknown error"} (see console for details)`;
   }
 });
 
@@ -278,8 +314,6 @@ async function buildArena(arena) {
   }
 }
 
-// Common setup used by both host (on first peer connecting) and client
-// (on first roster received) to bootstrap their own local view of the match.
 async function beginMatch(arenaId) {
   currentArena = getArena(arenaId);
   await buildArena(currentArena);
@@ -308,10 +342,10 @@ async function beginMatch(arenaId) {
 
 function addOrUpdatePlayer(id, name) {
   if (players.has(id)) {
-    players.get(id).setName(name);
+    if (name) players.get(id).setName(name);
     return players.get(id);
   }
-  const rp = new RemotePlayer(scene, colorForId(id), name);
+  const rp = new RemotePlayer(scene, colorForId(id), name || "Player");
   rp.spawn(spawnForId(id, currentArena));
   players.set(id, rp);
   return rp;
@@ -322,127 +356,6 @@ function removePlayer(id) {
   if (rp) {
     rp.dispose();
     players.delete(id);
-  }
-}
-
-function handleHostLeft() {
-  matchActive = false;
-  document.exitPointerLock();
-  alert("Host disconnected — match ended.");
-  net.destroy();
-  showScreen("menu");
-}
-
-/* =========================================================
-   HOST-SIDE MESSAGE HANDLING
-   Host relays state/hit/died between all clients so everyone
-   sees everyone, not just the host.
-========================================================= */
-const names = new Map(); // id -> name, host's bookkeeping of everyone's name
-
-function currentRosterPlayers() {
-  const list = [{ id: hostId, name: myName }];
-  for (const [id, name] of names) list.push({ id, name });
-  return list;
-}
-
-function broadcastRoster() {
-  net.broadcast({
-    t: "roster",
-    arenaId: selectedArenaId,
-    hostId,
-    players: currentRosterPlayers(),
-  });
-}
-
-function handleHostData(msg, fromId) {
-  if (msg.t === "hello") {
-    names.set(fromId, msg.name);
-    addOrUpdatePlayer(fromId, msg.name);
-    broadcastRoster();
-  } else if (msg.t === "state") {
-    const rp = addOrUpdatePlayer(fromId, names.get(fromId) || "Player");
-    rp.applyNetState(msg);
-    net.broadcast({ ...msg, id: fromId }, fromId); // relay to everyone else
-  } else if (msg.t === "hit") {
-    routeHit(msg, fromId);
-  } else if (msg.t === "died") {
-    routeDied(msg);
-  }
-}
-
-function routeHit(msg, fromId) {
-  // msg: { t:'hit', targetId, attackerId, damage }
-  if (msg.targetId === myId) {
-    const died = local.takeDamage(msg.damage);
-    if (died) {
-      myDeaths++;
-      updateScoreHud();
-      local.spawn(mySpawn);
-      routeDied({ attackerId: msg.attackerId });
-    }
-    // Send an immediate update instead of waiting for the next scheduled
-    // tick — that tick lives in the render loop, which browsers throttle
-    // hard in backgrounded tabs, so hp changes could take seconds to show
-    // up for the shooter otherwise.
-    net.broadcast({ t: "state", id: myId, ...local.getNetState() });
-  } else {
-    net.broadcast(msg, fromId); // forward on; the real target will pick it up
-  }
-}
-
-function routeDied(msg) {
-  // msg: { attackerId }
-  if (msg.attackerId === myId) {
-    myKills++;
-    updateScoreHud();
-  } else {
-    net.broadcast(msg); // let the real attacker's client claim the kill
-  }
-}
-
-/* =========================================================
-   CLIENT-SIDE MESSAGE HANDLING
-========================================================= */
-function handleClientData(msg) {
-  if (msg.t === "roster") {
-    reconcileRoster(msg);
-  } else if (msg.t === "state") {
-    players.get(msg.id)?.applyNetState(msg);
-  } else if (msg.t === "hit") {
-    if (msg.targetId !== myId) return;
-    const died = local.takeDamage(msg.damage);
-    if (died) {
-      myDeaths++;
-      updateScoreHud();
-      local.spawn(mySpawn);
-      net.broadcast({ t: "died", attackerId: msg.attackerId });
-    }
-    // Same fix as the host side — don't wait for the render-loop tick,
-    // which stalls badly when this tab isn't focused.
-    net.broadcast({ t: "state", id: myId, ...local.getNetState() });
-  } else if (msg.t === "died") {
-    if (msg.attackerId !== myId) return;
-    myKills++;
-    updateScoreHud();
-  }
-}
-
-async function reconcileRoster(msg) {
-  if (!matchActive) {
-    hostId = msg.hostId;
-    await beginMatch(msg.arenaId);
-    net.broadcast({ t: "hello", name: myName });
-  }
-
-  const seen = new Set();
-  for (const p of msg.players) {
-    if (p.id === myId) continue;
-    seen.add(p.id);
-    addOrUpdatePlayer(p.id, p.name);
-  }
-  for (const id of [...players.keys()]) {
-    if (!seen.has(id)) removePlayer(id);
   }
 }
 
