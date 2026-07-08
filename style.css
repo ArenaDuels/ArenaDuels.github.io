@@ -334,3 +334,19 @@ html, body {
   font-weight: 700;
   color: var(--laser);
 }
+
+/* ===== Crosshair — mix-blend-mode: difference inverts against whatever
+   is directly behind it, so it stays visible on any background ===== */
+#crosshair {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ffffff;
+  mix-blend-mode: difference;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 10;
+}

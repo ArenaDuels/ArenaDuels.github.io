@@ -57,13 +57,31 @@ function refreshSettingsUI() {
   fovValue.textContent = settings.fov;
 }
 
-document.getElementById("btn-settings").addEventListener("click", () => {
+document.getElementById("btn-settings").addEventListener("click", openSettings);
+document.getElementById("btn-settings-close").addEventListener("click", closeSettings);
+
+let paused = false;
+
+function openSettings() {
   refreshSettingsUI();
   settingsModal.classList.remove("hidden");
-});
-document.getElementById("btn-settings-close").addEventListener("click", () => {
+  if (matchActive) {
+    paused = true;
+    document.exitPointerLock();
+    // Clear any inputs that might otherwise get "stuck" held down while
+    // the menu is open (keyup events can be missed during the transition).
+    for (const k in keys) keys[k] = false;
+    firing = false;
+  }
+}
+
+function closeSettings() {
   settingsModal.classList.add("hidden");
-});
+  if (matchActive && paused) {
+    paused = false;
+    canvas.requestPointerLock?.() ?? document.body.requestPointerLock();
+  }
+}
 
 sensSlider.addEventListener("input", () => {
   settings.sensitivity = parseFloat(sensSlider.value);
@@ -88,18 +106,21 @@ const screens = {
 const hud = document.getElementById("hud");
 const hudHpCorner = document.getElementById("hud-hp-corner");
 const canvas = document.getElementById("game-canvas");
+const crosshair = document.getElementById("crosshair");
 
 function showScreen(name) {
   for (const key in screens) screens[key].classList.toggle("hidden", key !== name);
   canvas.classList.add("hidden");
   hud.classList.add("hidden");
   hudHpCorner.classList.add("hidden");
+  crosshair.classList.add("hidden");
 }
 function showGame() {
   for (const key in screens) screens[key].classList.add("hidden");
   canvas.classList.remove("hidden");
   hud.classList.remove("hidden");
   hudHpCorner.classList.remove("hidden");
+  crosshair.classList.remove("hidden");
 }
 
 /* =========================================================
@@ -332,6 +353,38 @@ function makeMaterial(tex, fallbackColor, repeat = [1, 1]) {
   return new THREE.MeshStandardMaterial({ color: fallbackColor });
 }
 
+// A thin glowing cylinder used as the LG beam. Regular THREE.Line primitives
+// are capped at ~1px on most GPUs regardless of width settings, which made
+// the old beam nearly invisible — an actual mesh has no such limit.
+function makeLaserMesh(color) {
+  const geo = new THREE.CylinderGeometry(0.025, 0.025, 1, 6, 1, true);
+  const mat = new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: 0.9,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.visible = false;
+  return mesh;
+}
+
+const UP_AXIS = new THREE.Vector3(0, 1, 0);
+function aimLaser(mesh, origin, end) {
+  const dir = new THREE.Vector3().subVectors(end, origin);
+  const len = dir.length();
+  if (len < 0.001) {
+    mesh.visible = false;
+    return;
+  }
+  dir.normalize();
+  mesh.position.copy(origin).addScaledVector(dir, len / 2);
+  mesh.scale.set(1, len, 1);
+  mesh.quaternion.setFromUnitVectors(UP_AXIS, dir);
+  mesh.visible = true;
+}
+
 /* =========================================================
    MATCH STATE
 ========================================================= */
@@ -401,10 +454,7 @@ async function beginMatch(arenaId) {
   local.spawn(mySpawn);
 
   if (laser) scene.remove(laser);
-  laser = new THREE.Line(
-    new THREE.BufferGeometry(),
-    new THREE.LineBasicMaterial({ color: colorForId(myId) })
-  );
+  laser = makeLaserMesh(colorForId(myId));
   scene.add(laser);
 
   myKills = 0;
@@ -445,7 +495,13 @@ function updateScoreHud() {
 const keys = {};
 let firing = false;
 
-addEventListener("keydown", (e) => (keys[e.code] = true));
+addEventListener("keydown", (e) => {
+  keys[e.code] = true;
+  if (e.code === "Escape" && matchActive) {
+    if (paused) closeSettings();
+    else openSettings();
+  }
+});
 addEventListener("keyup", (e) => (keys[e.code] = false));
 addEventListener("mousedown", (e) => {
   if (e.button !== 0) return;
@@ -490,7 +546,7 @@ function loop() {
   const dt = Math.min((now - last) / 1000, 0.05);
   last = now;
 
-  if (!matchActive) {
+  if (!matchActive || paused) {
     renderer.render(scene, camera);
     return;
   }
@@ -521,8 +577,7 @@ function loop() {
     const hit = hits[0];
     const end = hit ? hit.point : origin.clone().add(dir.multiplyScalar(50));
 
-    laser.geometry.setFromPoints([origin, end]);
-    laser.visible = true;
+    aimLaser(laser, origin, end);
 
     if (hit) {
       const idx = targets.indexOf(hit.object);
