@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Capsules</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+
+  <!-- ===================== MAIN MENU ===================== -->
+  <div id="screen-menu" class="screen">
+    <div class="menu-panel">
+      <h1 class="logo">CAP<span>SULES</span></h1>
+      <p class="tagline">Pick an arena. Host or drop in.</p>
+
+      <input id="player-name-input" class="name-input" maxlength="16" placeholder="Your name">
+
+      <div id="arena-grid" class="arena-grid"></div>
+
+      <div class="menu-actions">
+        <button id="btn-host" class="btn btn-primary">Host Match</button>
+        <button id="btn-join" class="btn btn-secondary">Join Match</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== HOST WAIT ===================== -->
+  <div id="screen-host-wait" class="screen hidden">
+    <div class="menu-panel">
+      <p class="eyebrow">Share this code</p>
+      <div id="host-code-display" class="code-pills">------</div>
+      <p id="host-status" class="status-text">Getting a code...</p>
+      <div class="menu-actions">
+        <button id="btn-retry-host" class="btn btn-primary hidden">Retry</button>
+        <button id="btn-cancel-host" class="btn btn-secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== JOIN ===================== -->
+  <div id="screen-joining" class="screen hidden">
+    <div class="menu-panel">
+      <p class="eyebrow">Enter code</p>
+      <input id="join-code-input" class="code-input" maxlength="6" inputmode="numeric" placeholder="000000">
+      <p id="join-status" class="status-text"></p>
+      <div class="menu-actions">
+        <button id="btn-join-confirm" class="btn btn-primary">Connect</button>
+        <button id="btn-cancel-join" class="btn btn-secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== GAME ===================== -->
+  <canvas id="game-canvas" class="hidden"></canvas>
+  <div id="hud" class="hidden">
+    <div id="hud-score">Kills 0 · Deaths 0</div>
+    <div id="hud-controls">Click lock · WASD · Space jump · Hold click = LG</div>
+  </div>
+  <div id="hud-hp-corner" class="hidden">
+    <span id="hud-hp-label">HP</span>
+    <span id="hud-hp-value">100</span>
+  </div>
+
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,250 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400;600&display=swap');
+
+:root {
+  --bg: #0a0a0d;
+  --panel: #131318;
+  --mint: #e8fff4;
+  --laser: #39ff88;
+  --red: #ff4d6a;
+  --text-dim: #8a8a94;
+  --border: #232329;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--mint);
+  font-family: 'JetBrains Mono', monospace;
+  overflow: hidden;
+  height: 100%;
+}
+
+.hidden { display: none !important; }
+
+/* ===== Screens ===== */
+.screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(circle at 50% 0%, #17171d 0%, var(--bg) 60%);
+}
+
+.menu-panel {
+  width: min(480px, 90vw);
+  padding: 40px 36px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  text-align: center;
+}
+
+.logo {
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 700;
+  font-size: 40px;
+  letter-spacing: 1px;
+  margin: 0 0 4px;
+  color: var(--mint);
+}
+.logo span { color: var(--laser); }
+
+.tagline {
+  color: var(--text-dim);
+  font-size: 13px;
+  margin: 0 0 20px;
+}
+
+.name-input {
+  width: 100%;
+  padding: 12px 16px;
+  margin-bottom: 20px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #1a1a20;
+  color: var(--mint);
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 14px;
+  text-align: center;
+}
+.name-input::placeholder { color: var(--text-dim); }
+.name-input:focus {
+  outline: none;
+  border-color: var(--laser);
+}
+
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 3px;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin: 0 0 18px;
+}
+
+/* ===== Arena picker ===== */
+.arena-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+.arena-card {
+  background: #1a1a20;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0;
+  cursor: pointer;
+  overflow: hidden;
+  transition: border-color 0.15s, transform 0.15s;
+  font-family: inherit;
+}
+.arena-card:hover { transform: translateY(-2px); }
+.arena-card.selected {
+  border-color: var(--laser);
+  box-shadow: 0 0 0 1px var(--laser);
+}
+
+.arena-thumb {
+  height: 64px;
+  background-color: #24242c;
+  background-size: cover;
+  background-position: center;
+}
+
+.arena-name {
+  font-size: 11px;
+  padding: 8px 4px;
+  color: var(--mint);
+}
+
+/* ===== Buttons ===== */
+.menu-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.btn {
+  flex: 1;
+  padding: 14px 0;
+  border-radius: 999px;
+  border: none;
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: filter 0.15s, transform 0.1s;
+}
+.btn:active { transform: scale(0.97); }
+
+.btn-primary {
+  background: var(--laser);
+  color: #06210f;
+}
+.btn-primary:hover { filter: brightness(1.1); }
+
+.btn-secondary {
+  background: transparent;
+  color: var(--mint);
+  border: 1px solid var(--border);
+}
+.btn-secondary:hover { border-color: var(--mint); }
+
+/* ===== Room code — six glowing "Tic Tac" pills ===== */
+.code-pills {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 20px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 22px;
+  font-weight: 700;
+}
+.code-pills::before,
+.code-pills::after { content: none; }
+
+#host-code-display {
+  letter-spacing: 10px;
+  padding: 16px 0;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #1c2620, #141c17);
+  border: 1px solid var(--laser);
+  color: var(--laser);
+  text-shadow: 0 0 12px rgba(57,255,136,0.6);
+}
+
+.code-input {
+  width: 100%;
+  padding: 16px 0;
+  margin-bottom: 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #1a1a20;
+  color: var(--mint);
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 10px;
+  text-align: center;
+}
+.code-input:focus {
+  outline: none;
+  border-color: var(--laser);
+}
+
+.status-text {
+  color: var(--text-dim);
+  font-size: 12px;
+  min-height: 16px;
+  margin-bottom: 20px;
+}
+
+/* ===== Game canvas + HUD ===== */
+#game-canvas {
+  position: fixed;
+  inset: 0;
+  display: block;
+}
+
+#hud {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-dim);
+  pointer-events: none;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+}
+#hud-score { color: var(--mint); }
+
+#hud-hp-corner {
+  position: fixed;
+  bottom: 22px;
+  left: 22px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  pointer-events: none;
+  font-family: 'Space Grotesk', sans-serif;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.9);
+}
+#hud-hp-label {
+  font-size: 13px;
+  letter-spacing: 2px;
+  color: var(--text-dim);
+}
+#hud-hp-value {
+  font-size: 36px;
+  font-weight: 700;
+  color: var(--laser);
+}
