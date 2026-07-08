@@ -91,10 +91,14 @@ let currentArena = null;
 
 net.onData = (msg, fromId) => handleData(msg, fromId);
 
-net.onPeerConnected = (id) => {
-  // Someone new joined the room. Add them (name catches up once their
-  // 'hello' arrives) and make sure they learn who we are too.
-  addOrUpdatePlayer(id, "Player");
+net.onPeerConnected = async (id) => {
+  // Someone new joined the room.
+  if (!matchActive) {
+    // This is the host, hearing about the very first joiner — actually
+    // start the match now.
+    await beginMatch(selectedArenaId);
+  }
+  addOrUpdatePlayer(id, "Player"); // name catches up once their 'hello' arrives
   net.broadcast({ t: "hello", name: myName });
 };
 
@@ -152,8 +156,6 @@ async function attemptHost() {
 
     document.getElementById("host-code-display").textContent = code;
     document.getElementById("host-status").textContent = "Waiting for opponents... (share the code above)";
-
-    await beginMatch(selectedArenaId);
   } catch (err) {
     console.error("Host failed:", err);
     document.getElementById("host-status").textContent =

@@ -5,7 +5,7 @@
 // firewalls that block WebRTC.
 
 // ⚠️ Set this to your deployed relay server's URL — see server/README.md.
-const SERVER_URL = "https://arenaduels-relay.onrender.com";
+const SERVER_URL = "wss://arenaduels-relay.onrender.com";
 
 const CONNECT_TIMEOUT_MS = 12000;
 
