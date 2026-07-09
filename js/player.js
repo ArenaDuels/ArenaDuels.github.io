@@ -7,8 +7,8 @@ import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
 // (holding A/D or diagonal movement) while turning the mouse in the air —
 // classic Quake/CPMA-style air strafing / bunny hopping.
 export const MOVE = {
-  GROUND_ACCEL: 10,
-  AIR_ACCEL: 1.3,
+  GROUND_ACCEL: 14,
+  AIR_ACCEL: 8,
   WISH_SPEED: 16,     // target ground speed the accelerate() model chases
   MAX_SPEED_SANITY: 45, // hard safety cap only, not a normal gameplay limit
   FRICTION: 8,
@@ -28,6 +28,8 @@ export function makeCapsuleMesh(color) {
     clearcoatRoughness: 0.1,
   });
   const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.5, 1.2, 8, 16), mat);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
   return mesh;
 }
 
@@ -236,15 +238,27 @@ export class PlayerController {
     }
 
     this.vel.y -= MOVE.GRAVITY * dt;
-    this.mesh.position.addScaledVector(this.vel, dt);
+
+    // Move in small substeps rather than one big jump, and resolve wall
+    // collision after each substep. At the higher speeds air-strafing can
+    // legitimately reach, a single full-dt move can cover more distance
+    // than a wall's thickness in one step — collision never "sees" you
+    // cross it, and you phase straight through. Substepping keeps each
+    // individual move shorter than the thinnest wall so that can't happen.
+    const moveDist = this.vel.length() * dt;
+    const MAX_STEP = 0.2;
+    const steps = Math.max(1, Math.ceil(moveDist / MAX_STEP));
+    const subDt = dt / steps;
+    for (let i = 0; i < steps; i++) {
+      this.mesh.position.addScaledVector(this.vel, subDt);
+      this.#resolveWalls(wallBoxes);
+    }
 
     if (this.mesh.position.y <= 1.4) {
       this.mesh.position.y = 1.4;
       this.vel.y = 0;
       this.onGround = true;
     }
-
-    this.#resolveWalls(wallBoxes);
   }
 
   // What we broadcast over the network each tick.

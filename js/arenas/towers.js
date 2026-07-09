@@ -7,6 +7,7 @@ export default {
   thumb: "./assets/thumbs/towers.png",
   floorSize: 28,
   wallHeight: 5,
+  bgColor: 0x0d0a14,
 
   textures: {
     floor: "./assets/textures/floor.png",
@@ -26,16 +27,20 @@ export default {
     [0.5, 5, 28, 14, 2.5, 0],
   ],
 
-  // Raised platforms — box geometry, top surface acts as extra ground.
+  // Four symmetric raised platforms, one per spawn corner, plus a central
+  // ground-level cover pillar for anyone who drops down to fight below.
   props: [
     { type: "platform", w: 5, h: 1, d: 5, x: -9, y: 2, z: -9 },
     { type: "platform", w: 5, h: 1, d: 5, x: 9, y: 2, z: 9 },
+    { type: "platform", w: 5, h: 1, d: 5, x: -9, y: 2, z: 9 },
+    { type: "platform", w: 5, h: 1, d: 5, x: 9, y: 2, z: -9 },
+    { type: "wall", w: 2, h: 3, d: 2, x: 0, y: 1.5, z: 0 },
   ],
 
   spawns: [
-    { x: -9, y: 3.0, z: -9, yaw: Math.PI / 4 },    // on the first platform
-    { x: 9, y: 3.0, z: 9, yaw: -3 * Math.PI / 4 }, // on the second platform
-    { x: -9, y: 1.4, z: 9, yaw: -Math.PI / 4 },    // ground level, corner 3
-    { x: 9, y: 1.4, z: -9, yaw: 3 * Math.PI / 4 }, // ground level, corner 4
+    { x: -9, y: 3.0, z: -9, yaw: Math.PI / 4 },
+    { x: 9, y: 3.0, z: 9, yaw: -3 * Math.PI / 4 },
+    { x: -9, y: 3.0, z: 9, yaw: -Math.PI / 4 },
+    { x: 9, y: 3.0, z: -9, yaw: 3 * Math.PI / 4 },
   ],
 };

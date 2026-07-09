@@ -6,6 +6,7 @@ export default {
   thumb: "./assets/thumbs/pillars.png",
   floorSize: 24,
   wallHeight: 4,
+  bgColor: 0x0a0d14,
 
   textures: {
     floor: "./assets/textures/floor.png",
@@ -25,10 +26,13 @@ export default {
     [0.5, 4, 24, 12, 2, 0],
   ],
 
-  // Extra props rendered with the "pillar" texture instead of "wall".
+  // Four pillars in a symmetric cross pattern — enough scattered cover for
+  // a full 4-player free-for-all, not just a 1v1 dodge point.
   props: [
     { type: "pillar", w: 1.5, h: 4, d: 1.5, x: -4, y: 2, z: -3 },
     { type: "pillar", w: 1.5, h: 4, d: 1.5, x: 4, y: 2, z: 3 },
+    { type: "pillar", w: 1.5, h: 4, d: 1.5, x: 4, y: 2, z: -3 },
+    { type: "pillar", w: 1.5, h: 4, d: 1.5, x: -4, y: 2, z: 3 },
   ],
 
   spawns: [

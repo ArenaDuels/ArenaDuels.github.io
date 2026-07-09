@@ -404,6 +404,8 @@ scene.background = new THREE.Color(0x0a0a0d);
 const camera = new THREE.PerspectiveCamera(settings.fov, innerWidth / innerHeight, 0.1, 1000);
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 addEventListener("resize", () => {
   camera.aspect = innerWidth / innerHeight;
@@ -414,6 +416,13 @@ addEventListener("resize", () => {
 scene.add(new THREE.AmbientLight(0xffffff, 0.4));
 const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
 dirLight.position.set(5, 10, 5);
+dirLight.castShadow = true;
+dirLight.shadow.mapSize.set(1024, 1024);
+dirLight.shadow.camera.left = -20;
+dirLight.shadow.camera.right = 20;
+dirLight.shadow.camera.top = 20;
+dirLight.shadow.camera.bottom = -20;
+dirLight.shadow.camera.far = 40;
 scene.add(dirLight);
 
 const textureLoader = new THREE.TextureLoader();
@@ -458,6 +467,8 @@ async function buildArena(arena) {
   arenaObjects = [];
   wallBoxes = [];
 
+  scene.background = new THREE.Color(arena.bgColor ?? 0x0a0a0d);
+
   const [floorTex, wallTex] = await Promise.all([
     loadTextureSafe(arena.textures?.floor),
     loadTextureSafe(arena.textures?.wall),
@@ -468,12 +479,15 @@ async function buildArena(arena) {
 
   floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(arena.floorSize, arena.floorSize), floorMat);
   floorMesh.rotation.x = -Math.PI / 2;
+  floorMesh.receiveShadow = true;
   scene.add(floorMesh);
   arenaObjects.push(floorMesh);
 
   for (const [w, h, d, x, y, z] of arena.walls) {
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wallMat);
     mesh.position.set(x, y, z);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
     scene.add(mesh);
     arenaObjects.push(mesh);
     wallBoxes.push(new THREE.Box3().setFromObject(mesh));
@@ -492,6 +506,8 @@ async function buildArena(arena) {
       );
       const mesh = new THREE.Mesh(new THREE.BoxGeometry(prop.w, prop.h, prop.d), mat);
       mesh.position.set(prop.x, prop.y, prop.z);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
       scene.add(mesh);
       arenaObjects.push(mesh);
       wallBoxes.push(new THREE.Box3().setFromObject(mesh));
@@ -592,6 +608,9 @@ setInterval(() => {
   }
 }, 50); // 20Hz
 
+const GUN_OFFSET_LOCAL = new THREE.Vector3(0.18, -0.14, 0);
+const _scratchQuat = new THREE.Quaternion();
+
 function loop() {
   requestAnimationFrame(loop);
   const now = performance.now();
@@ -628,22 +647,19 @@ function loop() {
     const hit = hits[0];
     const end = hit ? hit.point : origin.clone().addScaledVector(dir, 50);
 
-    // Hide the segment closest to the camera — a beam sitting exactly on
-    // your view axis looks like a point from your own eye no matter what,
-    // so a full-length beam mostly just shows an ugly blob glued to your
-    // view. Instead, only draw from a short distance out. Crucially this
-    // stays perfectly colinear with the actual hit-detection ray above —
-    // no lateral offset — so the visible beam can never diverge from
-    // where your crosshair is actually aimed (that divergence was the
-    // "beam passes through them but crosshair isn't on them" bug).
+    // Visual-only gun-barrel offset so the beam is actually visible to you
+    // (a beam sitting exactly on your view axis looks like a point, not a
+    // streak, no matter its length). The offset shrinks toward zero as the
+    // target gets closer, so at close range the visible beam converges
+    // back to exactly the true aim ray — matching your crosshair instead
+    // of diverging from it, which was the earlier close-range bug.
+    // Hit detection above always uses the true, unmodified aim ray.
     const totalLen = origin.distanceTo(end);
-    const NEAR_HIDE = 0.5;
-    if (totalLen > NEAR_HIDE + 0.05) {
-      const visibleStart = origin.clone().addScaledVector(dir, NEAR_HIDE);
-      aimLaser(laser, visibleStart, end);
-    } else {
-      laser.visible = false;
-    }
+    const offsetScale = Math.min(1, totalLen / 3); // fully converged under ~3 units
+    camera.getWorldQuaternion(_scratchQuat);
+    const worldOffset = GUN_OFFSET_LOCAL.clone().multiplyScalar(offsetScale).applyQuaternion(_scratchQuat);
+    const visualOrigin = origin.clone().add(worldOffset);
+    aimLaser(laser, visualOrigin, end);
 
     if (hit) {
       const idx = targets.indexOf(hit.object);
