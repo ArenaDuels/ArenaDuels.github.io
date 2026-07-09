@@ -8,6 +8,7 @@
   --red: #ff4d6a;
   --text-dim: #8a8a94;
   --border: #232329;
+  --crosshair-size: 6px;
 }
 
 * { box-sizing: border-box; }
@@ -144,6 +145,111 @@ html, body {
   color: var(--text-dim);
   font-size: 13px;
   margin: 0 0 20px;
+}
+
+.name-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.name-row .name-input { margin-bottom: 0; flex: 1; }
+
+.dice-btn {
+  width: 44px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #1a1a20;
+  font-size: 18px;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.dice-btn:hover { border-color: var(--laser); }
+.dice-btn:active { transform: scale(0.9) rotate(15deg); }
+
+/* ===== Public/private visibility toggle ===== */
+.visibility-toggle {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  background: #1a1a20;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px;
+}
+.visibility-option {
+  flex: 1;
+  padding: 8px 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.visibility-option.selected {
+  background: var(--laser);
+  color: #06210f;
+}
+
+.browse-btn {
+  margin-top: 10px;
+  width: 100%;
+}
+
+/* ===== Lobby browser ===== */
+.lobby-list {
+  max-height: 300px;
+  overflow-y: auto;
+  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lobby-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: #1a1a20;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  text-align: left;
+}
+
+.lobby-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.lobby-arena-name {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 14px;
+  color: var(--mint);
+}
+.lobby-player-count {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.lobby-join-btn {
+  padding: 8px 18px;
+  border-radius: 999px;
+  border: none;
+  background: var(--laser);
+  color: #06210f;
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+}
+.lobby-join-btn:disabled {
+  background: var(--border);
+  color: var(--text-dim);
+  cursor: default;
 }
 
 .name-input {
@@ -341,8 +447,8 @@ html, body {
   position: fixed;
   top: 50%;
   left: 50%;
-  width: 8px;
-  height: 8px;
+  width: var(--crosshair-size);
+  height: var(--crosshair-size);
   border-radius: 50%;
   background: #ffffff;
   mix-blend-mode: difference;

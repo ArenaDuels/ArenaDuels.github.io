@@ -10,6 +10,7 @@ import { WebSocketServer } from "ws";
 import http from "http";
 
 const PORT = process.env.PORT || 8080;
+const MAX_PLAYERS = 4;
 
 // A tiny HTTP server so hosts like Render have something to health-check.
 const httpServer = http.createServer((req, res) => {
@@ -52,9 +53,30 @@ wss.on("connection", (ws) => {
         tries++;
       }
       const members = new Map([[ws.id, ws]]);
-      rooms.set(code, { hostId: ws.id, arenaId: msg.arenaId, members });
+      rooms.set(code, {
+        hostId: ws.id,
+        arenaId: msg.arenaId,
+        isPublic: !!msg.isPublic,
+        members,
+      });
       ws.room = code;
       send(ws, { t: "room_created", code, id: ws.id });
+      return;
+    }
+
+    if (msg.t === "list_lobbies") {
+      const lobbies = [];
+      for (const [code, room] of rooms) {
+        if (room.isPublic && room.members.size < MAX_PLAYERS) {
+          lobbies.push({
+            code,
+            arenaId: room.arenaId,
+            playerCount: room.members.size,
+            maxPlayers: MAX_PLAYERS,
+          });
+        }
+      }
+      send(ws, { t: "lobby_list", lobbies });
       return;
     }
 
@@ -62,6 +84,10 @@ wss.on("connection", (ws) => {
       const room = rooms.get(msg.code);
       if (!room) {
         send(ws, { t: "join_error", error: "Room not found." });
+        return;
+      }
+      if (room.members.size >= MAX_PLAYERS) {
+        send(ws, { t: "join_error", error: "Room is full (4/4)." });
         return;
       }
       const peerIds = [...room.members.keys()];

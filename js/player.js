@@ -1,14 +1,21 @@
 import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
 
-// ===== Shared movement tuning =====
+// ===== Movement tuning — Quake-style accelerate() model =====
+// Unlike a simple "add force, clamp to max speed" model, this doesn't hard
+// cap your speed after movement. Ground friction keeps normal running feeling
+// controlled, but air acceleration lets you gain extra speed by strafing
+// (holding A/D or diagonal movement) while turning the mouse in the air —
+// classic Quake/CPMA-style air strafing / bunny hopping.
 export const MOVE = {
-  GROUND_ACCEL: 120,
-  AIR_ACCEL: 35,
-  MAX_SPEED: 16,
+  GROUND_ACCEL: 10,
+  AIR_ACCEL: 1.3,
+  WISH_SPEED: 16,     // target ground speed the accelerate() model chases
+  MAX_SPEED_SANITY: 45, // hard safety cap only, not a normal gameplay limit
   FRICTION: 8,
   GRAVITY: 35,
   JUMP_VEL: 12,
   RADIUS: 0.5,
+  EYE_HEIGHT: 1.6,
 };
 
 // Builds a glossy "Tic Tac" capsule mesh in the given color.
@@ -33,16 +40,12 @@ function makeHpBar() {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   const texture = new THREE.CanvasTexture(canvas);
-  // Sprites always fully face the camera automatically — no manual
-  // rotation math needed, which is the most reliable way to guarantee
-  // this actually stays facing whoever is looking at it.
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false }));
   sprite.scale.set(1.2, 0.15, 1);
   sprite.renderOrder = 998;
   return sprite;
 }
 
-// A billboard text sprite for a player's name tag, floating above their capsule.
 function makeNameSprite(name) {
   const canvas = document.createElement("canvas");
   canvas.width = 256;
@@ -73,6 +76,46 @@ function makeNameSprite(name) {
   return sprite;
 }
 
+// ===== LG beam — a thin glowing cylinder mesh (not a THREE.Line, which
+// is capped at ~1px on most GPUs regardless of width settings). Shared by
+// both the local player's own beam and every RemotePlayer's beam. =====
+export function makeLaserMesh(color) {
+  const geo = new THREE.CylinderGeometry(0.035, 0.035, 1, 6, 1, true);
+  const mat = new THREE.MeshBasicMaterial({
+    color,
+    transparent: false,
+    opacity: 1,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.visible = false;
+  return mesh;
+}
+
+const UP_AXIS = new THREE.Vector3(0, 1, 0);
+export function aimLaser(mesh, origin, end) {
+  const dir = new THREE.Vector3().subVectors(end, origin);
+  const len = dir.length();
+  if (len < 0.001) {
+    mesh.visible = false;
+    return;
+  }
+  dir.normalize();
+  mesh.position.copy(origin).addScaledVector(dir, len / 2);
+  mesh.scale.set(1, len, 1);
+  mesh.quaternion.setFromUnitVectors(UP_AXIS, dir);
+  mesh.visible = true;
+}
+
+// Reconstructs a look direction from yaw/pitch alone — used to draw a
+// remote player's beam from their broadcasted state, since they don't have
+// a real camera object on our end. 'YXZ' matches our own camera hierarchy
+// (mesh yaw as the outer/parent rotation, pitch as the inner/child one).
+const _scratchEuler = new THREE.Euler(0, 0, 0, "YXZ");
+export function dirFromYawPitch(yaw, pitch, out = new THREE.Vector3()) {
+  _scratchEuler.set(pitch, yaw, 0, "YXZ");
+  return out.set(0, 0, -1).applyEuler(_scratchEuler);
+}
+
 /**
  * The local, input-driven player. Owns the camera. No hp bar / name tag —
  * those only make sense floating above OTHER players; your own hp lives
@@ -86,7 +129,7 @@ export class PlayerController {
     scene.add(this.mesh);
 
     this.camPivot = new THREE.Object3D();
-    this.camPivot.position.set(0, 1.6, 0);
+    this.camPivot.position.set(0, MOVE.EYE_HEIGHT, 0);
     this.mesh.add(this.camPivot);
     this.camPivot.add(camera);
     this.camera = camera;
@@ -99,6 +142,7 @@ export class PlayerController {
     this.pitch = 0;
 
     this.hp = 100;
+    this.firing = false;
   }
 
   spawn(spawnPoint) {
@@ -127,6 +171,22 @@ export class PlayerController {
     this.vel.z *= newSpeed / speed;
   }
 
+  // Classic Quake accelerate(): adds speed toward wishDir, but only up to
+  // wishSpeed *relative to your current speed along that specific
+  // direction* — not your total speed. That distinction is what makes air
+  // strafing work: turning the mouse while holding a strafe key keeps
+  // presenting a "new" wish direction relative to your velocity, so you
+  // keep gaining speed instead of hitting a hard cap.
+  #accelerate(wishDir, wishSpeed, accel, dt) {
+    const currentSpeed = this.vel.x * wishDir.x + this.vel.z * wishDir.z;
+    const addSpeed = wishSpeed - currentSpeed;
+    if (addSpeed <= 0) return;
+    let accelSpeed = accel * dt * wishSpeed;
+    if (accelSpeed > addSpeed) accelSpeed = addSpeed;
+    this.vel.x += accelSpeed * wishDir.x;
+    this.vel.z += accelSpeed * wishDir.z;
+  }
+
   #resolveWalls(wallBoxes) {
     for (const box of wallBoxes) {
       const cx = Math.max(box.min.x, Math.min(this.mesh.position.x, box.max.x));
@@ -149,21 +209,26 @@ export class PlayerController {
     this.mesh.rotation.y = this.yaw;
     this.camPivot.rotation.x = this.pitch;
 
-    const wishWorld = this.wish.clone()
-      .normalize()
-      .applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw);
-
-    const accel = this.onGround ? MOVE.GROUND_ACCEL : MOVE.AIR_ACCEL;
-    this.vel.x += wishWorld.x * accel * dt;
-    this.vel.z += wishWorld.z * accel * dt;
-
-    const spd = Math.hypot(this.vel.x, this.vel.z);
-    if (spd > MOVE.MAX_SPEED) {
-      this.vel.x *= MOVE.MAX_SPEED / spd;
-      this.vel.z *= MOVE.MAX_SPEED / spd;
+    const wishDir = this.wish.clone();
+    const hasInput = wishDir.lengthSq() > 0.0001;
+    if (hasInput) {
+      wishDir.normalize().applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw);
     }
 
-    if (this.onGround) this.#friction(dt);
+    if (this.onGround) {
+      this.#friction(dt);
+      if (hasInput) this.#accelerate(wishDir, MOVE.WISH_SPEED, MOVE.GROUND_ACCEL, dt);
+    } else if (hasInput) {
+      this.#accelerate(wishDir, MOVE.WISH_SPEED, MOVE.AIR_ACCEL, dt);
+    }
+
+    // Safety cap only — not meant to be reachable in normal play, just
+    // guards against runaway numbers rather than limiting strafe-jump gain.
+    const spd = Math.hypot(this.vel.x, this.vel.z);
+    if (spd > MOVE.MAX_SPEED_SANITY) {
+      this.vel.x *= MOVE.MAX_SPEED_SANITY / spd;
+      this.vel.z *= MOVE.MAX_SPEED_SANITY / spd;
+    }
 
     if (this.onGround && jumpPressed) {
       this.vel.y = MOVE.JUMP_VEL;
@@ -191,6 +256,7 @@ export class PlayerController {
       yaw: this.yaw,
       pitch: this.pitch,
       hp: this.hp,
+      firing: !!this.firing,
     };
   }
 
@@ -205,8 +271,9 @@ export class PlayerController {
 /**
  * A network-driven player (anyone that isn't "me"). No input handling, no
  * physics — just smoothly interpolates toward the last received snapshot.
- * Has an hp bar and name tag, both true world-space billboards (Y-axis
- * rotation only) so they always face the camera without tilting oddly.
+ * Has an hp bar, name tag (both real Sprites — Three.js guarantees these
+ * always fully face the camera), and its own LG beam that lights up
+ * whenever their broadcasted state says they're firing.
  */
 export class RemotePlayer {
   constructor(scene, color = 0xff4444, name = "Player") {
@@ -221,8 +288,13 @@ export class RemotePlayer {
     this.nameSprite = makeNameSprite(name);
     scene.add(this.nameSprite);
 
+    this.laser = makeLaserMesh(color);
+    scene.add(this.laser);
+
     this.targetPos = this.mesh.position.clone();
     this.targetYaw = 0;
+    this.targetPitch = 0;
+    this.firing = false;
     this.visible = true;
   }
 
@@ -242,7 +314,9 @@ export class RemotePlayer {
   applyNetState(state) {
     this.targetPos.set(state.x, state.y, state.z);
     this.targetYaw = state.yaw;
+    this.targetPitch = state.pitch || 0;
     this.hp = state.hp;
+    this.firing = !!state.firing;
     if (state.hp <= 0) {
       this.setVisible(false);
     } else if (!this.visible) {
@@ -257,10 +331,11 @@ export class RemotePlayer {
     this.mesh.visible = v;
     this.hpBar.visible = v && this.hp > 0;
     this.nameSprite.visible = v && this.hp > 0;
+    if (!v) this.laser.visible = false;
   }
 
   dispose() {
-    this.scene.remove(this.mesh, this.hpBar, this.nameSprite);
+    this.scene.remove(this.mesh, this.hpBar, this.nameSprite, this.laser);
   }
 
   update(dt, camera) {
@@ -275,6 +350,16 @@ export class RemotePlayer {
 
       this.nameSprite.position.copy(this.mesh.position);
       this.nameSprite.position.y += 1.85;
+
+      if (this.firing) {
+        const origin = this.mesh.position.clone();
+        origin.y += MOVE.EYE_HEIGHT - 1.4; // mesh position is feet-ish; eye is higher
+        const dir = dirFromYawPitch(this.targetYaw, this.targetPitch);
+        const end = origin.clone().addScaledVector(dir, 50);
+        aimLaser(this.laser, origin, end);
+      } else {
+        this.laser.visible = false;
+      }
     }
   }
 }

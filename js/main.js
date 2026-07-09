@@ -1,16 +1,16 @@
 import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
 import { ARENA_LIST, getArena } from "./arenas.js";
-import { PlayerController, RemotePlayer } from "./player.js";
+import { PlayerController, RemotePlayer, makeLaserMesh, aimLaser } from "./player.js";
 import { Net } from "./net.js";
+import { randomName } from "./names.js";
 
 /* =========================================================
    SETTINGS — persisted to localStorage. Sensitivity uses the same
    numeric scale convention as Call of Duty (roughly 1-20, with ~6
-   being a typical mouse default) rather than an arbitrary 0-1 slider,
-   since that's the scale players are likely already used to.
+   being a typical mouse default) rather than an arbitrary 0-1 slider.
 ========================================================= */
 const SETTINGS_KEY = "capsules-settings";
-const DEFAULT_SETTINGS = { sensitivity: 6, fov: 90 };
+const DEFAULT_SETTINGS = { sensitivity: 6, fov: 90, crosshairSize: 6 };
 
 function loadSettings() {
   try {
@@ -20,6 +20,7 @@ function loadSettings() {
     return {
       sensitivity: typeof parsed.sensitivity === "number" ? parsed.sensitivity : DEFAULT_SETTINGS.sensitivity,
       fov: typeof parsed.fov === "number" ? parsed.fov : DEFAULT_SETTINGS.fov,
+      crosshairSize: typeof parsed.crosshairSize === "number" ? parsed.crosshairSize : DEFAULT_SETTINGS.crosshairSize,
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -32,9 +33,6 @@ function saveSettings() {
 
 let settings = loadSettings();
 
-// Converts the CoD-style sensitivity number into a radians-per-pixel
-// multiplier for mouse look. Tuned so the default (6) feels close to
-// a typical shooter default.
 function sensitivityMultiplier() {
   return settings.sensitivity * 0.00035;
 }
@@ -44,21 +42,26 @@ function applyFov() {
   camera.updateProjectionMatrix();
 }
 
+function applyCrosshairSize() {
+  document.documentElement.style.setProperty("--crosshair-size", `${settings.crosshairSize}px`);
+}
+
 const settingsModal = document.getElementById("settings-modal");
 const sensSlider = document.getElementById("sens-slider");
 const sensValue = document.getElementById("sens-value");
 const fovSlider = document.getElementById("fov-slider");
 const fovValue = document.getElementById("fov-value");
+const crosshairSlider = document.getElementById("crosshair-slider");
+const crosshairValue = document.getElementById("crosshair-value");
 
 function refreshSettingsUI() {
   sensSlider.value = settings.sensitivity;
   sensValue.textContent = settings.sensitivity.toFixed(1);
   fovSlider.value = settings.fov;
   fovValue.textContent = settings.fov;
+  crosshairSlider.value = settings.crosshairSize;
+  crosshairValue.textContent = settings.crosshairSize;
 }
-
-document.getElementById("btn-settings").addEventListener("click", openSettings);
-document.getElementById("btn-settings-close").addEventListener("click", closeSettings);
 
 let paused = false;
 
@@ -68,13 +71,10 @@ function openSettings() {
   if (matchActive) {
     paused = true;
     document.exitPointerLock();
-    // Clear any inputs that might otherwise get "stuck" held down while
-    // the menu is open (keyup events can be missed during the transition).
     for (const k in keys) keys[k] = false;
     firing = false;
   }
 }
-
 function closeSettings() {
   settingsModal.classList.add("hidden");
   if (matchActive && paused) {
@@ -82,6 +82,9 @@ function closeSettings() {
     canvas.requestPointerLock?.() ?? document.body.requestPointerLock();
   }
 }
+
+document.getElementById("btn-settings").addEventListener("click", openSettings);
+document.getElementById("btn-settings-close").addEventListener("click", closeSettings);
 
 sensSlider.addEventListener("input", () => {
   settings.sensitivity = parseFloat(sensSlider.value);
@@ -92,8 +95,16 @@ fovSlider.addEventListener("input", () => {
   settings.fov = parseInt(fovSlider.value, 10);
   fovValue.textContent = settings.fov;
   saveSettings();
-  applyFov(); // live preview even before a match starts
+  applyFov();
 });
+crosshairSlider.addEventListener("input", () => {
+  settings.crosshairSize = parseInt(crosshairSlider.value, 10);
+  crosshairValue.textContent = settings.crosshairSize;
+  saveSettings();
+  applyCrosshairSize();
+});
+
+applyCrosshairSize(); // apply saved size immediately, even before a match
 
 /* =========================================================
    SCREEN ELEMENTS
@@ -102,6 +113,7 @@ const screens = {
   menu: document.getElementById("screen-menu"),
   hostWait: document.getElementById("screen-host-wait"),
   joining: document.getElementById("screen-joining"),
+  browse: document.getElementById("screen-browse"),
 };
 const hud = document.getElementById("hud");
 const hudHpCorner = document.getElementById("hud-hp-corner");
@@ -114,6 +126,7 @@ function showScreen(name) {
   hud.classList.add("hidden");
   hudHpCorner.classList.add("hidden");
   crosshair.classList.add("hidden");
+  stopLobbyPolling();
 }
 function showGame() {
   for (const key in screens) screens[key].classList.add("hidden");
@@ -121,14 +134,22 @@ function showGame() {
   hud.classList.remove("hidden");
   hudHpCorner.classList.remove("hidden");
   crosshair.classList.remove("hidden");
+  stopLobbyPolling();
 }
 
 /* =========================================================
    PLAYER NAME
 ========================================================= */
+const nameInput = document.getElementById("player-name-input");
+nameInput.value = randomName(); // pre-filled, but fully editable
+
+document.getElementById("btn-random-name").addEventListener("click", () => {
+  nameInput.value = randomName();
+});
+
 function getPlayerName() {
-  const raw = document.getElementById("player-name-input").value.trim();
-  return raw || `Player${Math.floor(Math.random() * 900 + 100)}`;
+  const raw = nameInput.value.trim();
+  return raw || randomName();
 }
 
 /* =========================================================
@@ -155,9 +176,19 @@ for (const arena of ARENA_LIST) {
 arenaGrid.firstElementChild.classList.add("selected");
 
 /* =========================================================
-   COLOR / SPAWN ASSIGNMENT — deterministic from peer id, so every
-   client independently computes the same color/spawn for a given
-   player without needing anyone to explicitly assign and sync it.
+   PUBLIC / PRIVATE TOGGLE
+========================================================= */
+let isPublicLobby = false;
+document.querySelectorAll(".visibility-option").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".visibility-option").forEach((b) => b.classList.remove("selected"));
+    btn.classList.add("selected");
+    isPublicLobby = btn.dataset.public === "true";
+  });
+});
+
+/* =========================================================
+   COLOR / SPAWN ASSIGNMENT — deterministic from peer id.
 ========================================================= */
 const PALETTE_NONHOST = [0xff4d6a, 0x39ff88, 0xffd166, 0x9b5de5, 0x4cc9f0, 0xff8c42];
 
@@ -167,7 +198,7 @@ function hashId(id) {
   return h;
 }
 function colorForId(id) {
-  if (id === hostId) return 0xffffff; // room creator is always white
+  if (id === hostId) return 0xffffff;
   return PALETTE_NONHOST[hashId(id) % PALETTE_NONHOST.length];
 }
 function spawnForId(id, arena) {
@@ -175,8 +206,7 @@ function spawnForId(id, arena) {
 }
 
 /* =========================================================
-   NET — every client (host or not) uses identical message
-   handling now; the relay server takes care of fan-out.
+   NET
 ========================================================= */
 const net = new Net();
 let hostId = null;
@@ -187,13 +217,10 @@ let currentArena = null;
 net.onData = (msg, fromId) => handleData(msg, fromId);
 
 net.onPeerConnected = async (id) => {
-  // Someone new joined the room.
   if (!matchActive) {
-    // This is the host, hearing about the very first joiner — actually
-    // start the match now.
     await beginMatch(selectedArenaId);
   }
-  addOrUpdatePlayer(id, "Player"); // name catches up once their 'hello' arrives
+  addOrUpdatePlayer(id, "Player");
   net.broadcast({ t: "hello", name: myName });
 };
 
@@ -219,7 +246,6 @@ function handleData(msg, fromId) {
       local.spawn(mySpawn);
       net.broadcast({ t: "died", attackerId: msg.attackerId });
     }
-    // Immediate update — don't wait for the next scheduled sync tick.
     net.broadcast({ t: "state", id: myId, ...local.getNetState() });
   } else if (msg.t === "died") {
     if (msg.attackerId !== myId) return;
@@ -244,7 +270,7 @@ async function attemptHost() {
   document.getElementById("host-status").textContent = "Getting a code...";
 
   try {
-    const code = await net.host(selectedArenaId);
+    const code = await net.host(selectedArenaId, isPublicLobby);
     hostId = net.hostId;
     myId = net.myId;
     myName = getPlayerName();
@@ -272,20 +298,9 @@ document.getElementById("btn-cancel-host").addEventListener("click", () => {
   showScreen("menu");
 });
 
-/* ---- JOIN FLOW ---- */
-document.getElementById("btn-join").addEventListener("click", () => {
-  showScreen("joining");
-  document.getElementById("join-status").textContent = "";
-});
-
-document.getElementById("btn-join-confirm").addEventListener("click", async () => {
-  const code = document.getElementById("join-code-input").value.trim();
-  if (code.length !== 6) {
-    document.getElementById("join-status").textContent = "Enter the 6-digit code.";
-    return;
-  }
-  document.getElementById("join-status").textContent = "Connecting...";
-
+/* ---- JOIN FLOW (shared by manual code entry and the lobby browser) ---- */
+async function doJoin(code, statusEl) {
+  if (statusEl) statusEl.textContent = "Connecting...";
   try {
     const result = await net.join(code);
     hostId = result.hostId;
@@ -297,12 +312,85 @@ document.getElementById("btn-join-confirm").addEventListener("click", async () =
     net.broadcast({ t: "hello", name: myName });
   } catch (err) {
     console.error("Join failed:", err);
-    document.getElementById("join-status").textContent =
-      `Couldn't connect: ${err.message || "unknown error"} (see console for details)`;
+    if (statusEl) {
+      statusEl.textContent = `Couldn't connect: ${err.message || "unknown error"} (see console for details)`;
+    }
   }
+}
+
+document.getElementById("btn-join").addEventListener("click", () => {
+  showScreen("joining");
+  document.getElementById("join-status").textContent = "";
+});
+document.getElementById("btn-join-confirm").addEventListener("click", () => {
+  const code = document.getElementById("join-code-input").value.trim();
+  const statusEl = document.getElementById("join-status");
+  if (code.length !== 6) {
+    statusEl.textContent = "Enter the 6-digit code.";
+    return;
+  }
+  doJoin(code, statusEl);
+});
+document.getElementById("btn-cancel-join").addEventListener("click", () => {
+  net.destroy();
+  showScreen("menu");
 });
 
-document.getElementById("btn-cancel-join").addEventListener("click", () => {
+/* ---- BROWSE PUBLIC LOBBIES ---- */
+const lobbyListEl = document.getElementById("lobby-list");
+let lobbyPollTimer = null;
+
+function stopLobbyPolling() {
+  if (lobbyPollTimer) {
+    clearInterval(lobbyPollTimer);
+    lobbyPollTimer = null;
+  }
+}
+
+async function refreshLobbyList() {
+  try {
+    const lobbies = await net.listLobbies();
+    renderLobbyList(lobbies);
+  } catch (err) {
+    lobbyListEl.innerHTML = `<p class="status-text">Couldn't load lobbies: ${err.message}</p>`;
+  }
+}
+
+function renderLobbyList(lobbies) {
+  if (lobbies.length === 0) {
+    lobbyListEl.innerHTML = `<p class="status-text">No public lobbies right now — host one!</p>`;
+    return;
+  }
+  lobbyListEl.innerHTML = "";
+  for (const lobby of lobbies) {
+    const arena = getArena(lobby.arenaId);
+    const full = lobby.playerCount >= lobby.maxPlayers;
+    const row = document.createElement("div");
+    row.className = "lobby-row";
+    row.innerHTML = `
+      <div class="lobby-info">
+        <span class="lobby-arena-name">${arena.name}</span>
+        <span class="lobby-player-count">${lobby.playerCount}/${lobby.maxPlayers} players</span>
+      </div>
+      <button class="lobby-join-btn" ${full ? "disabled" : ""}>${full ? "Full" : "Join"}</button>
+    `;
+    if (!full) {
+      row.querySelector(".lobby-join-btn").addEventListener("click", () => {
+        stopLobbyPolling();
+        doJoin(lobby.code, null);
+      });
+    }
+    lobbyListEl.appendChild(row);
+  }
+}
+
+document.getElementById("btn-browse").addEventListener("click", () => {
+  showScreen("browse");
+  lobbyListEl.innerHTML = `<p class="status-text">Loading...</p>`;
+  refreshLobbyList();
+  lobbyPollTimer = setInterval(refreshLobbyList, 3000);
+});
+document.getElementById("btn-cancel-browse").addEventListener("click", () => {
   net.destroy();
   showScreen("menu");
 });
@@ -353,43 +441,11 @@ function makeMaterial(tex, fallbackColor, repeat = [1, 1]) {
   return new THREE.MeshStandardMaterial({ color: fallbackColor });
 }
 
-// A thin glowing cylinder used as the LG beam. Regular THREE.Line primitives
-// are capped at ~1px on most GPUs regardless of width settings, which made
-// the old beam nearly invisible — an actual mesh has no such limit.
-function makeLaserMesh(color) {
-  const geo = new THREE.CylinderGeometry(0.025, 0.025, 1, 6, 1, true);
-  const mat = new THREE.MeshBasicMaterial({
-    color,
-    transparent: true,
-    opacity: 0.9,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-  });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.visible = false;
-  return mesh;
-}
-
-const UP_AXIS = new THREE.Vector3(0, 1, 0);
-function aimLaser(mesh, origin, end) {
-  const dir = new THREE.Vector3().subVectors(end, origin);
-  const len = dir.length();
-  if (len < 0.001) {
-    mesh.visible = false;
-    return;
-  }
-  dir.normalize();
-  mesh.position.copy(origin).addScaledVector(dir, len / 2);
-  mesh.scale.set(1, len, 1);
-  mesh.quaternion.setFromUnitVectors(UP_AXIS, dir);
-  mesh.visible = true;
-}
-
 /* =========================================================
    MATCH STATE
 ========================================================= */
-let local;                      // my PlayerController
-let players = new Map();        // id -> RemotePlayer, everyone else
+let local;
+let players = new Map();
 let wallBoxes = [], floorMesh, arenaObjects = [];
 let raycaster = new THREE.Raycaster();
 let laser;
@@ -512,13 +568,13 @@ addEventListener("mouseup", (e) => {
   firing = false;
 });
 canvas.addEventListener("click", () => {
-  if (matchActive && document.pointerLockElement !== document.body) {
+  if (matchActive && !paused && document.pointerLockElement !== document.body) {
     document.body.requestPointerLock();
   }
 });
 
 addEventListener("mousemove", (e) => {
-  if (!matchActive || document.pointerLockElement !== document.body) return;
+  if (!matchActive || paused || document.pointerLockElement !== document.body) return;
   const s = sensitivityMultiplier();
   local.yaw -= e.movementX * s;
   local.pitch -= e.movementY * s;
@@ -530,15 +586,14 @@ addEventListener("mousemove", (e) => {
 ========================================================= */
 let last = performance.now();
 
-// Runs on setInterval rather than inside the rAF loop below — rAF gets
-// throttled hard (often to ~1fps) in backgrounded/unfocused tabs, which
-// would otherwise make a player's position and hp appear frozen to
-// everyone else whenever their tab isn't in focus.
 setInterval(() => {
   if (matchActive && local) {
     net.broadcast({ t: "state", id: myId, ...local.getNetState() });
   }
 }, 50); // 20Hz
+
+const GUN_OFFSET_LOCAL = new THREE.Vector3(0.2, -0.15, -0.3);
+const _scratchQuat = new THREE.Quaternion();
 
 function loop() {
   requestAnimationFrame(loop);
@@ -555,7 +610,6 @@ function loop() {
   local.update(dt, wallBoxes, keys.Space);
   for (const rp of players.values()) rp.update(dt, camera);
 
-  /* Shooting — raycast against every other visible player + the arena. */
   const targets = [];
   const targetIds = [];
   for (const [id, rp] of players) {
@@ -577,7 +631,13 @@ function loop() {
     const hit = hits[0];
     const end = hit ? hit.point : origin.clone().add(dir.multiplyScalar(50));
 
-    aimLaser(laser, origin, end);
+    // Visual-only: offset where the beam appears to start (like a gun
+    // barrel) so the shooter isn't staring exactly down its own length —
+    // that gave zero parallax and made it basically invisible to yourself.
+    // Hit detection above still uses the true eye position/direction.
+    camera.getWorldQuaternion(_scratchQuat);
+    const visualOrigin = origin.clone().add(GUN_OFFSET_LOCAL.clone().applyQuaternion(_scratchQuat));
+    aimLaser(laser, visualOrigin, end);
 
     if (hit) {
       const idx = targets.indexOf(hit.object);

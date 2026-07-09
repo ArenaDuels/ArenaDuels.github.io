@@ -23,10 +23,10 @@ export class Net {
   }
 
   /** Create a room for the given arena. Resolves with the 6-digit room code. */
-  host(arenaId) {
+  host(arenaId, isPublic) {
     return new Promise((resolve, reject) => {
       const ws = this._connect(reject);
-      ws.onopen = () => ws.send(JSON.stringify({ t: "create_room", arenaId }));
+      ws.onopen = () => ws.send(JSON.stringify({ t: "create_room", arenaId, isPublic: !!isPublic }));
       ws.onmessage = (ev) => {
         const msg = this._parse(ev);
         if (!msg) return;
@@ -40,6 +40,30 @@ export class Net {
           this._wire();
           resolve(msg.code);
         }
+      };
+    });
+  }
+
+  /** One-shot fetch of currently open public lobbies. */
+  listLobbies() {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(SERVER_URL);
+      const timeout = setTimeout(() => {
+        ws.close();
+        reject(new Error("Timed out fetching lobby list."));
+      }, 8000);
+      ws.onopen = () => ws.send(JSON.stringify({ t: "list_lobbies" }));
+      ws.onmessage = (ev) => {
+        const msg = this._parse(ev);
+        if (msg && msg.t === "lobby_list") {
+          clearTimeout(timeout);
+          ws.close();
+          resolve(msg.lobbies);
+        }
+      };
+      ws.onerror = () => {
+        clearTimeout(timeout);
+        reject(new Error("Couldn't reach the relay server."));
       };
     });
   }

@@ -14,14 +14,23 @@
       <h1 class="logo">CAP<span>SULES</span></h1>
       <p class="tagline">Pick an arena. Host or drop in.</p>
 
-      <input id="player-name-input" class="name-input" maxlength="16" placeholder="Your name">
+      <div class="name-row">
+        <input id="player-name-input" class="name-input" maxlength="16" placeholder="Your name">
+        <button id="btn-random-name" class="dice-btn" title="Random name" aria-label="Random name">🎲</button>
+      </div>
 
       <div id="arena-grid" class="arena-grid"></div>
+
+      <div class="visibility-toggle" id="visibility-toggle">
+        <button class="visibility-option selected" data-public="false">Private (code)</button>
+        <button class="visibility-option" data-public="true">Public (listed)</button>
+      </div>
 
       <div class="menu-actions">
         <button id="btn-host" class="btn btn-primary">Host Match</button>
         <button id="btn-join" class="btn btn-secondary">Join Match</button>
       </div>
+      <button id="btn-browse" class="btn btn-secondary browse-btn">Browse Public Lobbies</button>
     </div>
   </div>
 
@@ -44,6 +53,14 @@
           <span id="fov-value" class="setting-value">90</span>
         </div>
         <input id="fov-slider" type="range" min="60" max="110" step="1" value="90" class="slider">
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-label">
+          <span>Crosshair Size</span>
+          <span id="crosshair-value" class="setting-value">6</span>
+        </div>
+        <input id="crosshair-slider" type="range" min="2" max="16" step="1" value="6" class="slider">
       </div>
 
       <button id="btn-settings-close" class="btn btn-primary">Done</button>
@@ -73,6 +90,17 @@
         <button id="btn-join-confirm" class="btn btn-primary">Connect</button>
         <button id="btn-cancel-join" class="btn btn-secondary">Cancel</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ===================== BROWSE PUBLIC LOBBIES ===================== -->
+  <div id="screen-browse" class="screen hidden">
+    <div class="menu-panel">
+      <p class="eyebrow">Public Lobbies</p>
+      <div id="lobby-list" class="lobby-list">
+        <p class="status-text">Loading...</p>
+      </div>
+      <button id="btn-cancel-browse" class="btn btn-secondary">Back</button>
     </div>
   </div>
 
