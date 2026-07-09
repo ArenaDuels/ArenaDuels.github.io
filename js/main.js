@@ -592,9 +592,6 @@ setInterval(() => {
   }
 }, 50); // 20Hz
 
-const GUN_OFFSET_LOCAL = new THREE.Vector3(0.2, -0.15, -0.3);
-const _scratchQuat = new THREE.Quaternion();
-
 function loop() {
   requestAnimationFrame(loop);
   const now = performance.now();
@@ -629,15 +626,24 @@ function loop() {
 
     const hits = raycaster.intersectObjects([...targets, ...solidObjects], false);
     const hit = hits[0];
-    const end = hit ? hit.point : origin.clone().add(dir.multiplyScalar(50));
+    const end = hit ? hit.point : origin.clone().addScaledVector(dir, 50);
 
-    // Visual-only: offset where the beam appears to start (like a gun
-    // barrel) so the shooter isn't staring exactly down its own length —
-    // that gave zero parallax and made it basically invisible to yourself.
-    // Hit detection above still uses the true eye position/direction.
-    camera.getWorldQuaternion(_scratchQuat);
-    const visualOrigin = origin.clone().add(GUN_OFFSET_LOCAL.clone().applyQuaternion(_scratchQuat));
-    aimLaser(laser, visualOrigin, end);
+    // Hide the segment closest to the camera — a beam sitting exactly on
+    // your view axis looks like a point from your own eye no matter what,
+    // so a full-length beam mostly just shows an ugly blob glued to your
+    // view. Instead, only draw from a short distance out. Crucially this
+    // stays perfectly colinear with the actual hit-detection ray above —
+    // no lateral offset — so the visible beam can never diverge from
+    // where your crosshair is actually aimed (that divergence was the
+    // "beam passes through them but crosshair isn't on them" bug).
+    const totalLen = origin.distanceTo(end);
+    const NEAR_HIDE = 0.5;
+    if (totalLen > NEAR_HIDE + 0.05) {
+      const visibleStart = origin.clone().addScaledVector(dir, NEAR_HIDE);
+      aimLaser(laser, visibleStart, end);
+    } else {
+      laser.visible = false;
+    }
 
     if (hit) {
       const idx = targets.indexOf(hit.object);
