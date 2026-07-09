@@ -608,9 +608,6 @@ setInterval(() => {
   }
 }, 50); // 20Hz
 
-const GUN_OFFSET_LOCAL = new THREE.Vector3(0.18, -0.14, 0);
-const _scratchQuat = new THREE.Quaternion();
-
 function loop() {
   requestAnimationFrame(loop);
   const now = performance.now();
@@ -647,19 +644,13 @@ function loop() {
     const hit = hits[0];
     const end = hit ? hit.point : origin.clone().addScaledVector(dir, 50);
 
-    // Visual-only gun-barrel offset so the beam is actually visible to you
-    // (a beam sitting exactly on your view axis looks like a point, not a
-    // streak, no matter its length). The offset shrinks toward zero as the
-    // target gets closer, so at close range the visible beam converges
-    // back to exactly the true aim ray — matching your crosshair instead
-    // of diverging from it, which was the earlier close-range bug.
-    // Hit detection above always uses the true, unmodified aim ray.
-    const totalLen = origin.distanceTo(end);
-    const offsetScale = Math.min(1, totalLen / 3); // fully converged under ~3 units
-    camera.getWorldQuaternion(_scratchQuat);
-    const worldOffset = GUN_OFFSET_LOCAL.clone().multiplyScalar(offsetScale).applyQuaternion(_scratchQuat);
-    const visualOrigin = origin.clone().add(worldOffset);
-    aimLaser(laser, visualOrigin, end);
+    // Visual beam starts from the gun's actual muzzle — a real object in
+    // the scene, not an approximated offset — so it has genuine parallax
+    // and you can actually see it, while hit detection above always uses
+    // the true eye position/direction regardless.
+    const muzzlePos = new THREE.Vector3();
+    local.gunMuzzle.getWorldPosition(muzzlePos);
+    aimLaser(laser, muzzlePos, end);
 
     if (hit) {
       const idx = targets.indexOf(hit.object);

@@ -8,8 +8,7 @@ import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
 // classic Quake/CPMA-style air strafing / bunny hopping.
 export const MOVE = {
   GROUND_ACCEL: 14,
-  AIR_ACCEL: 8,
-  WISH_SPEED: 16,     // target ground speed the accelerate() model chases
+  WISH_SPEED: 16,     // target speed, both ground accelerate() and air instant-redirect chase this
   MAX_SPEED_SANITY: 45, // hard safety cap only, not a normal gameplay limit
   FRICTION: 8,
   GRAVITY: 35,
@@ -78,6 +77,51 @@ function makeNameSprite(name) {
   return sprite;
 }
 
+// A simple low-poly first-person gun viewmodel, parented to the camera so
+// it stays fixed in screen space (bottom-right) exactly like a real FPS
+// weapon. Returns the group (to attach) and a muzzle Object3D whose real
+// WORLD position we use as the laser's true visual origin — genuine
+// parallax from an actual point in the scene, not an approximated offset.
+function makeGunViewmodel(color) {
+  const group = new THREE.Group();
+  group.renderOrder = 1000;
+
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x1c1c22, roughness: 0.4, metalness: 0.4 });
+  const accentMat = new THREE.MeshStandardMaterial({
+    color, emissive: color, emissiveIntensity: 0.7, roughness: 0.3,
+  });
+
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.14, 0.42), bodyMat);
+  group.add(body);
+
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.045, 0.34, 8), accentMat);
+  barrel.rotation.x = Math.PI / 2;
+  barrel.position.set(0, 0.015, -0.36);
+  group.add(barrel);
+
+  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.2, 0.11), bodyMat);
+  grip.position.set(0, -0.14, 0.1);
+  grip.rotation.x = 0.35;
+  group.add(grip);
+
+  const muzzle = new THREE.Object3D();
+  muzzle.position.set(0, 0.015, -0.55);
+  group.add(muzzle);
+
+  group.position.set(0.3, -0.26, -0.5);
+  group.rotation.y = -0.05;
+
+  group.traverse((o) => {
+    if (o.isMesh) {
+      o.castShadow = false;
+      o.receiveShadow = false;
+      o.frustumCulled = false; // stays visible even at extreme look angles
+    }
+  });
+
+  return { group, muzzle };
+}
+
 // ===== LG beam — a thin glowing cylinder mesh (not a THREE.Line, which
 // is capped at ~1px on most GPUs regardless of width settings). Shared by
 // both the local player's own beam and every RemotePlayer's beam. =====
@@ -135,6 +179,10 @@ export class PlayerController {
     this.mesh.add(this.camPivot);
     this.camPivot.add(camera);
     this.camera = camera;
+
+    const { group: gunGroup, muzzle } = makeGunViewmodel(color);
+    camera.add(gunGroup);
+    this.gunMuzzle = muzzle;
 
     this.vel = new THREE.Vector3();
     this.wish = new THREE.Vector3();
@@ -221,7 +269,17 @@ export class PlayerController {
       this.#friction(dt);
       if (hasInput) this.#accelerate(wishDir, MOVE.WISH_SPEED, MOVE.GROUND_ACCEL, dt);
     } else if (hasInput) {
-      this.#accelerate(wishDir, MOVE.WISH_SPEED, MOVE.AIR_ACCEL, dt);
+      // Full air control: snap horizontal velocity directly toward the
+      // wish direction rather than only adding speed along it. This is
+      // what makes direction changes feel instant instead of "sliding"
+      // in your old direction — the classic Quake air-accelerate formula
+      // only adds speed, it never removes your existing momentum, so
+      // reversing direction takes a while to fight through the old
+      // velocity. If you release all movement keys mid-air, your
+      // momentum still carries through untouched — this only kicks in
+      // while you're actively holding a direction.
+      this.vel.x = wishDir.x * MOVE.WISH_SPEED;
+      this.vel.z = wishDir.z * MOVE.WISH_SPEED;
     }
 
     // Safety cap only — not meant to be reachable in normal play, just
