@@ -474,7 +474,13 @@ async function buildArena(arena) {
     loadTextureSafe(arena.textures?.wall),
   ]);
 
-  const floorMat = makeMaterial(floorTex, arena.fallbackColors?.floor ?? 0x222222, [4, 4]);
+  // Scale tile repeat to the arena's actual floor size (~5 units per tile)
+  // rather than a fixed repeat count — otherwise a bigger arena stretches
+  // the same texture across fewer, larger tiles than a smaller one, making
+  // tiling density inconsistent between arenas.
+  const TILE_UNIT = 5;
+  const floorRepeat = Math.max(1, Math.round(arena.floorSize / TILE_UNIT));
+  const floorMat = makeMaterial(floorTex, arena.fallbackColors?.floor ?? 0x222222, [floorRepeat, floorRepeat]);
   const wallMat = makeMaterial(wallTex, arena.fallbackColors?.wall ?? 0x333333, [2, 1]);
 
   floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(arena.floorSize, arena.floorSize), floorMat);
@@ -602,6 +608,12 @@ addEventListener("mousemove", (e) => {
 ========================================================= */
 let last = performance.now();
 
+// Fixed timestep for physics — see the comment on PlayerController.updatePhysics
+// in player.js for why. Rendering (and mouse-look) still happens every rAF frame.
+const FIXED_DT = 1 / 60;
+const MAX_PHYSICS_STEPS_PER_FRAME = 8; // avoid a "spiral of death" after a big stall
+let physicsAccumulator = 0;
+
 setInterval(() => {
   if (matchActive && local) {
     net.broadcast({ t: "state", id: myId, ...local.getNetState() });
@@ -611,7 +623,7 @@ setInterval(() => {
 function loop() {
   requestAnimationFrame(loop);
   const now = performance.now();
-  const dt = Math.min((now - last) / 1000, 0.05);
+  const dt = Math.min((now - last) / 1000, 0.25);
   last = now;
 
   if (!matchActive || paused) {
@@ -620,7 +632,16 @@ function loop() {
   }
 
   local.applyInput(keys, firing);
-  local.update(dt, wallBoxes, keys.Space);
+  local.updateLook(); // every render frame — keeps aiming maximally smooth
+
+  physicsAccumulator += dt;
+  let steps = 0;
+  while (physicsAccumulator >= FIXED_DT && steps < MAX_PHYSICS_STEPS_PER_FRAME) {
+    local.updatePhysics(FIXED_DT, wallBoxes, keys.Space);
+    physicsAccumulator -= FIXED_DT;
+    steps++;
+  }
+
   for (const rp of players.values()) rp.update(dt, camera);
 
   const targets = [];

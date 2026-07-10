@@ -1,10 +1,11 @@
-// Pillars — bigger arena, two center pillars for cover/dodging LG shots.
+// Pillars — a proper large arena with a 3x3-style scattered pillar field
+// for real 4-player cover, not just a couple of dodge points.
 
 export default {
   id: "pillars",
   name: "Pillars",
   thumb: "./assets/thumbs/pillars.png",
-  floorSize: 24,
+  floorSize: 40,
   wallHeight: 4,
   bgColor: 0x0a0d14,
 
@@ -20,25 +21,31 @@ export default {
   },
 
   walls: [
-    [24, 4, 0.5, 0, 2, -12],
-    [24, 4, 0.5, 0, 2, 12],
-    [0.5, 4, 24, -12, 2, 0],
-    [0.5, 4, 24, 12, 2, 0],
+    [40, 4, 0.5, 0, 2, -20],
+    [40, 4, 0.5, 0, 2, 20],
+    [0.5, 4, 40, -20, 2, 0],
+    [0.5, 4, 40, 20, 2, 0],
   ],
 
-  // Four pillars in a symmetric cross pattern — enough scattered cover for
-  // a full 4-player free-for-all, not just a 1v1 dodge point.
+  // Nine pillars: a ring around the middle plus a bigger central one —
+  // enough scattered cover to break sightlines across the whole arena
+  // instead of just around one spot.
   props: [
-    { type: "pillar", w: 1.5, h: 4, d: 1.5, x: -4, y: 2, z: -3 },
-    { type: "pillar", w: 1.5, h: 4, d: 1.5, x: 4, y: 2, z: 3 },
-    { type: "pillar", w: 1.5, h: 4, d: 1.5, x: 4, y: 2, z: -3 },
-    { type: "pillar", w: 1.5, h: 4, d: 1.5, x: -4, y: 2, z: 3 },
+    { type: "pillar", w: 1.5, h: 4, d: 1.5, x: -8, y: 2, z: -8 },
+    { type: "pillar", w: 1.5, h: 4, d: 1.5, x: 8, y: 2, z: 8 },
+    { type: "pillar", w: 1.5, h: 4, d: 1.5, x: 8, y: 2, z: -8 },
+    { type: "pillar", w: 1.5, h: 4, d: 1.5, x: -8, y: 2, z: 8 },
+    { type: "pillar", w: 1.5, h: 4, d: 1.5, x: 0, y: 2, z: -12 },
+    { type: "pillar", w: 1.5, h: 4, d: 1.5, x: 0, y: 2, z: 12 },
+    { type: "pillar", w: 1.5, h: 4, d: 1.5, x: -12, y: 2, z: 0 },
+    { type: "pillar", w: 1.5, h: 4, d: 1.5, x: 12, y: 2, z: 0 },
+    { type: "pillar", w: 2, h: 4, d: 2, x: 0, y: 2, z: 0 },
   ],
 
   spawns: [
-    { x: -9, y: 1.4, z: -9, yaw: Math.PI / 4 },
-    { x: 9, y: 1.4, z: 9, yaw: -3 * Math.PI / 4 },
-    { x: -9, y: 1.4, z: 9, yaw: -Math.PI / 4 },
-    { x: 9, y: 1.4, z: -9, yaw: 3 * Math.PI / 4 },
+    { x: -15, y: 1.4, z: -15, yaw: Math.PI / 4 },
+    { x: 15, y: 1.4, z: 15, yaw: -3 * Math.PI / 4 },
+    { x: -15, y: 1.4, z: 15, yaw: -Math.PI / 4 },
+    { x: 15, y: 1.4, z: -15, yaw: 3 * Math.PI / 4 },
   ],
 };

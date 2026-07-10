@@ -1,4 +1,4 @@
-# Capsules relay server
+# ArenaDuels relay server
 
 A tiny WebSocket relay. No WebRTC, no STUN/TURN, no NAT traversal —
 just plain WebSocket over TCP (port 443 once deployed with HTTPS), which

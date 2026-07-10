@@ -14,7 +14,11 @@ export const MOVE = {
   GRAVITY: 35,
   JUMP_VEL: 12,
   RADIUS: 0.5,
-  EYE_HEIGHT: 1.6,
+  // The capsule (CapsuleGeometry(0.5, 1.2, ...)) is 2.2 units tall total
+  // and centered on its own position, so its "head" top is 1.1 above
+  // center. This puts the camera right around eye level on that head,
+  // not floating above it.
+  EYE_HEIGHT: 1.0,
 };
 
 // Builds a glossy "Tic Tac" capsule mesh in the given color.
@@ -238,15 +242,22 @@ export class PlayerController {
   }
 
   #resolveWalls(wallBoxes) {
+    // Small margin beyond the exact radius — without it, a resting position
+    // exactly tangent to a wall is a floating-point-unstable boundary that
+    // can flicker between "colliding" and "not colliding" frame to frame
+    // (worse now that collision runs multiple times per frame via
+    // substepping), which reads as camera stutter since the camera is
+    // attached to this position.
+    const pushRadius = MOVE.RADIUS + 0.01;
     for (const box of wallBoxes) {
       const cx = Math.max(box.min.x, Math.min(this.mesh.position.x, box.max.x));
       const cz = Math.max(box.min.z, Math.min(this.mesh.position.z, box.max.z));
       let dx = this.mesh.position.x - cx;
       let dz = this.mesh.position.z - cz;
       const dist2 = dx * dx + dz * dz;
-      if (dist2 < MOVE.RADIUS * MOVE.RADIUS) {
+      if (dist2 < pushRadius * pushRadius) {
         const dist = Math.sqrt(dist2) || 0.0001;
-        const push = MOVE.RADIUS - dist;
+        const push = pushRadius - dist;
         dx /= dist;
         dz /= dist;
         this.mesh.position.x += dx * push;
@@ -255,10 +266,22 @@ export class PlayerController {
     }
   }
 
-  update(dt, wallBoxes, jumpPressed) {
+  // Applies mouse-look rotation. Called every render frame (not tied to
+  // the fixed physics step below) so aiming stays maximally smooth at
+  // whatever refresh rate the display actually runs at.
+  updateLook() {
     this.mesh.rotation.y = this.yaw;
     this.camPivot.rotation.x = this.pitch;
+  }
 
+  // Physics/movement — called with a FIXED dt from a timestep accumulator
+  // in main.js, not the raw variable render-frame time. Real frame timing
+  // is never perfectly steady (a frame that runs a hair long or short
+  // makes that single frame's movement visibly bigger/smaller than its
+  // neighbors), which is what caused the intermittent stutter. A fixed
+  // timestep makes every physics step identical regardless of actual
+  // frame timing, eliminating that as a source of jitter.
+  updatePhysics(dt, wallBoxes, jumpPressed) {
     const wishDir = this.wish.clone();
     const hasInput = wishDir.lengthSq() > 0.0001;
     if (hasInput) {

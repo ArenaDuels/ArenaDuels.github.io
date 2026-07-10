@@ -134,8 +134,8 @@ html, body {
 .logo {
   font-family: 'Space Grotesk', sans-serif;
   font-weight: 700;
-  font-size: 40px;
-  letter-spacing: 1px;
+  font-size: 32px;
+  letter-spacing: 0.5px;
   margin: 0 0 4px;
   color: var(--mint);
 }

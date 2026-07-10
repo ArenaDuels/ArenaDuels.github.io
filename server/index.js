@@ -1,4 +1,4 @@
-// Capsules relay server.
+// ArenaDuels relay server.
 // Plain WebSocket relay — no WebRTC, no STUN/TURN, no NAT traversal needed.
 // Every client just makes one normal outbound WebSocket connection to this
 // server (identical to any HTTPS request as far as routers/firewalls are
@@ -15,7 +15,7 @@ const MAX_PLAYERS = 4;
 // A tiny HTTP server so hosts like Render have something to health-check.
 const httpServer = http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("Capsules relay server is running.\n");
+  res.end("ArenaDuels relay server is running.\n");
 });
 
 const wss = new WebSocketServer({ server: httpServer });
@@ -130,5 +130,5 @@ wss.on("connection", (ws) => {
 });
 
 httpServer.listen(PORT, () => {
-  console.log(`Capsules relay server listening on port ${PORT}`);
+  console.log(`ArenaDuels relay server listening on port ${PORT}`);
 });

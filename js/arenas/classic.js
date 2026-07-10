@@ -27,16 +27,6 @@ export default {
     [0.5, 4, 20, 10, 2, 0],
   ],
 
-  // Four low cover blocks near the corners — tall enough to duck behind
-  // and break sightlines, short enough that a jump or the raised terrain
-  // at range still lets you shoot over them. Reuses the wall texture.
-  props: [
-    { type: "wall", w: 1.6, h: 2.4, d: 1.6, x: -4, y: 1.2, z: -4 },
-    { type: "wall", w: 1.6, h: 2.4, d: 1.6, x: 4, y: 1.2, z: -4 },
-    { type: "wall", w: 1.6, h: 2.4, d: 1.6, x: -4, y: 1.2, z: 4 },
-    { type: "wall", w: 1.6, h: 2.4, d: 1.6, x: 4, y: 1.2, z: 4 },
-  ],
-
   spawns: [
     { x: -6, y: 1.4, z: 0, yaw: Math.PI / 2 },
     { x: 6, y: 1.4, z: 0, yaw: -Math.PI / 2 },
