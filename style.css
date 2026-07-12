@@ -131,6 +131,26 @@ html, body {
   box-shadow: 0 0 8px rgba(57, 255, 136, 0.6);
 }
 
+/* ===== Pause menu ===== */
+.pause-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: center;
+}
+.pause-panel .eyebrow { margin-bottom: 6px; }
+.pause-panel .btn { width: 100%; }
+
+.btn-leave {
+  background: transparent;
+  color: var(--red);
+  border: 1px solid rgba(255, 77, 106, 0.4);
+}
+.btn-leave:hover {
+  background: rgba(255, 77, 106, 0.1);
+  border-color: var(--red);
+}
+
 .logo {
   font-family: 'Space Grotesk', sans-serif;
   font-weight: 700;
@@ -201,42 +221,80 @@ html, body {
 
 /* ===== Lobby browser ===== */
 .lobby-list {
-  max-height: 300px;
+  max-height: 340px;
   overflow-y: auto;
   margin-bottom: 20px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+  padding-right: 2px;
+}
+.lobby-list::-webkit-scrollbar { width: 6px; }
+.lobby-list::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 999px;
 }
 
 .lobby-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
+  gap: 14px;
+  padding: 10px 14px 10px 10px;
   background: #1a1a20;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 14px;
   text-align: left;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.lobby-row:hover {
+  border-color: var(--border);
+  transform: translateY(-1px);
+}
+
+.lobby-thumb {
+  width: 52px;
+  height: 52px;
+  border-radius: 10px;
+  background-color: #24242c;
+  background-size: cover;
+  background-position: center;
+  flex-shrink: 0;
 }
 
 .lobby-info {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
 }
 .lobby-arena-name {
   font-family: 'Space Grotesk', sans-serif;
+  font-weight: 700;
   font-size: 14px;
   color: var(--mint);
 }
+.lobby-player-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.lobby-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--laser);
+  box-shadow: 0 0 6px rgba(57, 255, 136, 0.8);
+  flex-shrink: 0;
+}
+.lobby-dot.full { background: var(--text-dim); box-shadow: none; }
 .lobby-player-count {
   font-size: 11px;
   color: var(--text-dim);
 }
 
 .lobby-join-btn {
-  padding: 8px 18px;
+  padding: 9px 20px;
   border-radius: 999px;
   border: none;
   background: var(--laser);
@@ -245,7 +303,11 @@ html, body {
   font-weight: 700;
   font-size: 12px;
   cursor: pointer;
+  flex-shrink: 0;
+  transition: filter 0.15s, transform 0.1s;
 }
+.lobby-join-btn:hover { filter: brightness(1.1); }
+.lobby-join-btn:active { transform: scale(0.95); }
 .lobby-join-btn:disabled {
   background: var(--border);
   color: var(--text-dim);
@@ -347,6 +409,24 @@ html, body {
   border: 1px solid var(--border);
 }
 .btn-secondary:hover { border-color: var(--mint); }
+
+.btn-danger {
+  background: transparent;
+  color: var(--red);
+  border: 1px solid rgba(255, 77, 106, 0.4);
+}
+.btn-danger:hover {
+  border-color: var(--red);
+  background: rgba(255, 77, 106, 0.08);
+}
+
+.pause-panel {
+  text-align: center;
+}
+.pause-actions {
+  flex-direction: column;
+  gap: 10px;
+}
 
 /* ===== Room code — six glowing "Tic Tac" pills ===== */
 .code-pills {

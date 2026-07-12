@@ -64,27 +64,59 @@ function refreshSettingsUI() {
 }
 
 let paused = false;
+const pauseMenu = document.getElementById("pause-menu");
 
-function openSettings() {
+// Settings can be reached two ways: from the main menu (no match running,
+// "Done" just closes it) or from the pause menu mid-match ("Done" returns
+// to the pause menu rather than resuming outright, so the player still has
+// to explicitly choose Resume or Leave).
+function openSettingsFromMenu() {
   refreshSettingsUI();
   settingsModal.classList.remove("hidden");
-  if (matchActive) {
-    paused = true;
-    document.exitPointerLock();
-    for (const k in keys) keys[k] = false;
-    firing = false;
-  }
 }
 function closeSettings() {
   settingsModal.classList.add("hidden");
   if (matchActive && paused) {
-    paused = false;
-    canvas.requestPointerLock?.() ?? document.body.requestPointerLock();
+    pauseMenu.classList.remove("hidden");
   }
 }
 
-document.getElementById("btn-settings").addEventListener("click", openSettings);
+function openPauseMenu() {
+  if (!matchActive) return;
+  paused = true;
+  document.exitPointerLock();
+  for (const k in keys) keys[k] = false;
+  firing = false;
+  settingsModal.classList.add("hidden");
+  pauseMenu.classList.remove("hidden");
+}
+function resumeMatch() {
+  paused = false;
+  pauseMenu.classList.add("hidden");
+  settingsModal.classList.add("hidden");
+  canvas.requestPointerLock?.() ?? document.body.requestPointerLock();
+}
+function leaveMatch() {
+  matchActive = false;
+  paused = false;
+  pauseMenu.classList.add("hidden");
+  settingsModal.classList.add("hidden");
+  document.exitPointerLock();
+  net.destroy();
+  players.forEach((rp) => rp.dispose());
+  players.clear();
+  showScreen("menu");
+}
+
+document.getElementById("btn-settings").addEventListener("click", openSettingsFromMenu);
 document.getElementById("btn-settings-close").addEventListener("click", closeSettings);
+document.getElementById("btn-resume").addEventListener("click", resumeMatch);
+document.getElementById("btn-pause-settings").addEventListener("click", () => {
+  pauseMenu.classList.add("hidden");
+  refreshSettingsUI();
+  settingsModal.classList.remove("hidden");
+});
+document.getElementById("btn-leave-match").addEventListener("click", leaveMatch);
 
 sensSlider.addEventListener("input", () => {
   settings.sensitivity = parseFloat(sensSlider.value);
@@ -216,8 +248,17 @@ let currentArena = null;
 
 net.onData = (msg, fromId) => handleData(msg, fromId);
 
+let matchStarting = false;
+
 net.onPeerConnected = async (id) => {
-  if (!matchActive) {
+  // matchActive only flips true *after* the async arena build finishes —
+  // if two peers connect close together, both could see matchActive still
+  // false and both call beginMatch(), corrupting arenaObjects/wallBoxes
+  // with an interleaved double-build (this was the missing-walls bug).
+  // matchStarting closes that race by being set synchronously, before any
+  // await, so the second caller sees it immediately.
+  if (!matchActive && !matchStarting) {
+    matchStarting = true;
     await beginMatch(selectedArenaId);
   }
   addOrUpdatePlayer(id, "Player");
@@ -368,9 +409,13 @@ function renderLobbyList(lobbies) {
     const row = document.createElement("div");
     row.className = "lobby-row";
     row.innerHTML = `
+      <div class="lobby-thumb" style="background-image:url('${arena.thumb}')"></div>
       <div class="lobby-info">
         <span class="lobby-arena-name">${arena.name}</span>
-        <span class="lobby-player-count">${lobby.playerCount}/${lobby.maxPlayers} players</span>
+        <div class="lobby-player-row">
+          <span class="lobby-dot ${full ? "full" : ""}"></span>
+          <span class="lobby-player-count">${lobby.playerCount}/${lobby.maxPlayers} players</span>
+        </div>
       </div>
       <button class="lobby-join-btn" ${full ? "disabled" : ""}>${full ? "Full" : "Join"}</button>
     `;
@@ -433,7 +478,12 @@ function loadTextureSafe(url) {
     textureLoader.load(
       url,
       (tex) => {
-        tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+        // Mirrored (not plain) repeat — makes adjacent tile edges match
+        // perfectly even if the source image isn't a truly seamless tile,
+        // since a mirrored copy's edge pixels are identical to the
+        // original's by construction. Fixes visible seams without needing
+        // a different source texture.
+        tex.wrapS = tex.wrapT = THREE.MirroredRepeatWrapping;
         resolve(tex);
       },
       undefined,
@@ -478,7 +528,7 @@ async function buildArena(arena) {
   // rather than a fixed repeat count — otherwise a bigger arena stretches
   // the same texture across fewer, larger tiles than a smaller one, making
   // tiling density inconsistent between arenas.
-  const TILE_UNIT = 5;
+  const TILE_UNIT = 10;
   const floorRepeat = Math.max(1, Math.round(arena.floorSize / TILE_UNIT));
   const floorMat = makeMaterial(floorTex, arena.fallbackColors?.floor ?? 0x222222, [floorRepeat, floorRepeat]);
   const wallMat = makeMaterial(wallTex, arena.fallbackColors?.wall ?? 0x333333, [2, 1]);
@@ -576,8 +626,8 @@ let firing = false;
 addEventListener("keydown", (e) => {
   keys[e.code] = true;
   if (e.code === "Escape" && matchActive) {
-    if (paused) closeSettings();
-    else openSettings();
+    if (paused) resumeMatch();
+    else openPauseMenu();
   }
 });
 addEventListener("keyup", (e) => (keys[e.code] = false));
@@ -595,11 +645,22 @@ canvas.addEventListener("click", () => {
   }
 });
 
+// Guards against rare, anomalously large single-event mouse deltas —
+// some browser/OS combinations occasionally produce a spike around
+// Pointer Lock's cursor-recentering behavior, and it tends to show up
+// more on the vertical axis than horizontal. A single huge delta shows
+// as a visible snap/stutter; this clamps it to a sane maximum.
+const MAX_MOUSE_DELTA = 80;
+function sanitizeDelta(v) {
+  if (!Number.isFinite(v)) return 0;
+  return Math.max(-MAX_MOUSE_DELTA, Math.min(MAX_MOUSE_DELTA, v));
+}
+
 addEventListener("mousemove", (e) => {
   if (!matchActive || paused || document.pointerLockElement !== document.body) return;
   const s = sensitivityMultiplier();
-  local.yaw -= e.movementX * s;
-  local.pitch -= e.movementY * s;
+  local.yaw -= sanitizeDelta(e.movementX) * s;
+  local.pitch -= sanitizeDelta(e.movementY) * s;
   local.pitch = Math.max(-1.4, Math.min(1.4, local.pitch));
 });
 
@@ -610,8 +671,8 @@ let last = performance.now();
 
 // Fixed timestep for physics — see the comment on PlayerController.updatePhysics
 // in player.js for why. Rendering (and mouse-look) still happens every rAF frame.
-const FIXED_DT = 1 / 60;
-const MAX_PHYSICS_STEPS_PER_FRAME = 8; // avoid a "spiral of death" after a big stall
+const FIXED_DT = 1 / 120;
+const MAX_PHYSICS_STEPS_PER_FRAME = 16; // avoid a "spiral of death" after a big stall
 let physicsAccumulator = 0;
 
 setInterval(() => {
