@@ -130,7 +130,7 @@ fovSlider.addEventListener("input", () => {
   applyFov();
 });
 crosshairSlider.addEventListener("input", () => {
-  settings.crosshairSize = parseInt(crosshairSlider.value, 10);
+  settings.crosshairSize = parseInt(crossshairSlider.value, 10);
   crosshairValue.textContent = settings.crosshairSize;
   saveSettings();
   applyCrosshairSize();
@@ -319,9 +319,7 @@ async function attemptHost() {
     document.getElementById("host-code-display").textContent = code;
     document.getElementById("host-status").textContent = "Waiting for opponents... (share the code above)";
   } catch (err) {
-    console.error("Host failed:", err);
-    document.getElementById("host-status").textContent =
-      `Failed to host: ${err.message || err.type || "unknown error"} (see console for details)`;
+    document.getElementById("host-status").textContent = "Failed to host match.";
     document.getElementById("btn-retry-host").classList.remove("hidden");
   }
 }
@@ -352,9 +350,8 @@ async function doJoin(code, statusEl) {
     for (const id of result.peers) addOrUpdatePlayer(id, "Player");
     net.broadcast({ t: "hello", name: myName });
   } catch (err) {
-    console.error("Join failed:", err);
     if (statusEl) {
-      statusEl.textContent = `Couldn't connect: ${err.message || "unknown error"} (see console for details)`;
+      statusEl.textContent = "Couldn't connect. Check the code and try again.";
     }
   }
 }
@@ -393,7 +390,7 @@ async function refreshLobbyList() {
     const lobbies = await net.listLobbies();
     renderLobbyList(lobbies);
   } catch (err) {
-    lobbyListEl.innerHTML = `<p class="status-text">Couldn't load lobbies: ${err.message}</p>`;
+    lobbyListEl.innerHTML = `<p class="status-text">Couldn't load lobbies</p>`;
   }
 }
 
@@ -590,6 +587,7 @@ async function beginMatch(arenaId) {
   updateScoreHud();
 
   matchActive = true;
+  matchStarting = false;
   showGame();
   canvas.requestPointerLock?.() ?? document.body.requestPointerLock();
 }
