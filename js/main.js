@@ -693,7 +693,6 @@ function loop() {
   }
 
   local.applyInput(keys, firing);
-  local.updateLook(); // every render frame — keeps aiming maximally smooth
 
   physicsAccumulator += dt;
   let steps = 0;
@@ -702,6 +701,8 @@ function loop() {
     physicsAccumulator -= FIXED_DT;
     steps++;
   }
+
+  local.updateLook(); // After physics collision resolves — keeps aiming smooth without glitches
 
   for (const rp of players.values()) rp.update(dt, camera);
 
