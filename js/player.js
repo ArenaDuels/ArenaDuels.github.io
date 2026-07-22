@@ -178,9 +178,21 @@ export class PlayerController {
     this.mesh.visible = false; // hide own body from own camera
     scene.add(this.mesh);
 
+    // The camera lives under its own root, separate from the physics body
+    // (this.mesh). Physics moves in fixed timesteps that don't line up
+    // perfectly with however often the display actually renders — without
+    // this separation, the camera would inherit that fixed-step motion
+    // directly and visibly stutter/judder on displays whose refresh rate
+    // doesn't evenly divide the physics rate (i.e. almost all of them).
+    // Instead we interpolate viewRoot's position between the last two
+    // physics states each render frame (see interpolateView below), so
+    // motion looks perfectly smooth regardless of display Hz.
+    this.viewRoot = new THREE.Object3D();
+    scene.add(this.viewRoot);
+
     this.camPivot = new THREE.Object3D();
     this.camPivot.position.set(0, MOVE.EYE_HEIGHT, 0);
-    this.mesh.add(this.camPivot);
+    this.viewRoot.add(this.camPivot);
     this.camPivot.add(camera);
     this.camera = camera;
 
@@ -197,10 +209,14 @@ export class PlayerController {
 
     this.hp = 100;
     this.firing = false;
+
+    this.prevPos = this.mesh.position.clone();
   }
 
   spawn(spawnPoint) {
     this.mesh.position.set(spawnPoint.x, spawnPoint.y, spawnPoint.z);
+    this.viewRoot.position.copy(this.mesh.position);
+    this.prevPos.copy(this.mesh.position);
     this.yaw = spawnPoint.yaw || 0;
     this.pitch = 0;
     this.vel.set(0, 0, 0);
@@ -270,8 +286,19 @@ export class PlayerController {
   // the fixed physics step below) so aiming stays maximally smooth at
   // whatever refresh rate the display actually runs at.
   updateLook() {
-    this.mesh.rotation.y = this.yaw;
+    this.viewRoot.rotation.y = this.yaw;
     this.camPivot.rotation.x = this.pitch;
+  }
+
+  // Smoothly places viewRoot somewhere between the physics body's previous
+  // and current position, based on how far into the *next* (not yet run)
+  // physics step we currently are. Called once per render frame, after
+  // any physics steps for that frame have run. This is what actually
+  // eliminates the stutter — physics stepping alone only makes each
+  // individual step consistent, it doesn't make the steps line up with
+  // however often the screen redraws.
+  interpolateView(alpha) {
+    this.viewRoot.position.lerpVectors(this.prevPos, this.mesh.position, alpha);
   }
 
   // Physics/movement — called with a FIXED dt from a timestep accumulator
@@ -282,6 +309,8 @@ export class PlayerController {
   // timestep makes every physics step identical regardless of actual
   // frame timing, eliminating that as a source of jitter.
   updatePhysics(dt, wallBoxes, jumpPressed) {
+    this.prevPos.copy(this.mesh.position);
+
     const wishDir = this.wish.clone();
     const hasInput = wishDir.lengthSq() > 0.0001;
     if (hasInput) {

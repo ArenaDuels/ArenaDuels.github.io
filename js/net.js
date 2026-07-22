@@ -103,9 +103,8 @@ export class Net {
       this._settled = true;
       ws.close();
       reject(new Error(
-        "Couldn't reach the relay server (timed out). Check the server is " +
-        "deployed and awake — free-tier servers can take ~30-60s to wake up " +
-        "after being idle."
+        "Couldn't reach the server in time. It may still be waking up " +
+        "from sleep — try again in a moment."
       ));
     }, CONNECT_TIMEOUT_MS);
 
@@ -113,7 +112,7 @@ export class Net {
       if (this._settled) return;
       this._settled = true;
       clearTimeout(this._timeout);
-      reject(new Error("Couldn't reach the relay server. Is SERVER_URL set correctly in net.js?"));
+      reject(new Error("Couldn't reach the server. Please try again shortly."));
     };
 
     return ws;

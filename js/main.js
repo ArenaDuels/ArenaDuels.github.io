@@ -105,6 +105,8 @@ function leaveMatch() {
   net.destroy();
   players.forEach((rp) => rp.dispose());
   players.clear();
+  hideRoomCodeBanner();
+  clearScorchMarks();
   showScreen("menu");
 }
 
@@ -263,6 +265,7 @@ net.onPeerConnected = async (id) => {
   }
   addOrUpdatePlayer(id, "Player");
   net.broadcast({ t: "hello", name: myName });
+  hideRoomCodeBanner();
 };
 
 net.onPeerDisconnected = (id) => {
@@ -307,21 +310,43 @@ function handleServerLost() {
 /* ---- HOST FLOW ---- */
 async function attemptHost() {
   document.getElementById("btn-retry-host").classList.add("hidden");
-  document.getElementById("host-code-display").textContent = "------";
   document.getElementById("host-status").textContent = "Getting a code...";
+
+  // Render's free tier can take 30-60s to wake up from sleep on the first
+  // connection in a while — if it's taking more than a few seconds, let
+  // the player know what's actually happening instead of leaving them
+  // staring at a generic loading message.
+  const wakeupTimer = setTimeout(() => {
+    document.getElementById("host-status").textContent =
+      "Server is waking up — this can take up to a minute on the first connection...";
+  }, 3000);
 
   try {
     const code = await net.host(selectedArenaId, isPublicLobby);
+    clearTimeout(wakeupTimer);
     hostId = net.hostId;
     myId = net.myId;
     myName = getPlayerName();
 
-    document.getElementById("host-code-display").textContent = code;
-    document.getElementById("host-status").textContent = "Waiting for opponents... (share the code above)";
+    // Drop straight into the arena instead of sitting on a waiting screen —
+    // the room code follows as an in-game banner until someone joins.
+    matchStarting = true;
+    await beginMatch(selectedArenaId);
+    showRoomCodeBanner(code);
   } catch (err) {
+    clearTimeout(wakeupTimer);
     document.getElementById("host-status").textContent = "Failed to host match.";
     document.getElementById("btn-retry-host").classList.remove("hidden");
   }
+}
+
+const roomCodeBanner = document.getElementById("room-code-banner");
+function showRoomCodeBanner(code) {
+  document.getElementById("room-code-value").textContent = code;
+  roomCodeBanner.classList.remove("hidden");
+}
+function hideRoomCodeBanner() {
+  roomCodeBanner.classList.add("hidden");
 }
 
 document.getElementById("btn-host").addEventListener("click", () => {
@@ -340,8 +365,16 @@ document.getElementById("btn-cancel-host").addEventListener("click", () => {
 /* ---- JOIN FLOW (shared by manual code entry and the lobby browser) ---- */
 async function doJoin(code, statusEl) {
   if (statusEl) statusEl.textContent = "Connecting...";
+
+  const wakeupTimer = setTimeout(() => {
+    if (statusEl) {
+      statusEl.textContent = "Server is waking up — this can take up to a minute on the first connection...";
+    }
+  }, 3000);
+
   try {
     const result = await net.join(code);
+    clearTimeout(wakeupTimer);
     hostId = result.hostId;
     myId = net.myId;
     myName = getPlayerName();
@@ -350,6 +383,7 @@ async function doJoin(code, statusEl) {
     for (const id of result.peers) addOrUpdatePlayer(id, "Player");
     net.broadcast({ t: "hello", name: myName });
   } catch (err) {
+    clearTimeout(wakeupTimer);
     if (statusEl) {
       statusEl.textContent = "Couldn't connect. Check the code and try again.";
     }
@@ -505,6 +539,78 @@ let players = new Map();
 let wallBoxes = [], floorMesh, arenaObjects = [];
 let raycaster = new THREE.Raycaster();
 let laser;
+
+// ===== Scorch marks — a small burn decal wherever the beam hits a solid
+// surface, fading out over 5 seconds. One shared texture (cheap), a
+// cloned material per mark so each can fade independently. =====
+function makeScorchTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext("2d");
+  const grad = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grad.addColorStop(0, "rgba(8,6,6,0.95)");
+  grad.addColorStop(0.45, "rgba(18,12,10,0.7)");
+  grad.addColorStop(0.75, "rgba(40,18,10,0.3)");
+  grad.addColorStop(1, "rgba(40,18,10,0)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(canvas);
+}
+const scorchTexture = makeScorchTexture();
+let scorchMarks = []; // { mesh, mat, createdAt }
+const SCORCH_LIFETIME_MS = 5000;
+let lastScorchTime = 0;
+const SCORCH_MIN_INTERVAL_MS = 150; // throttle while holding the beam on one spot
+
+function spawnScorchMark(point, worldNormal) {
+  const now = performance.now();
+  if (now - lastScorchTime < SCORCH_MIN_INTERVAL_MS) return;
+  lastScorchTime = now;
+
+  const size = 0.35 + Math.random() * 0.15;
+  const geo = new THREE.CircleGeometry(size, 16);
+  const mat = new THREE.MeshBasicMaterial({
+    map: scorchTexture,
+    transparent: true,
+    opacity: 0.85,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -4,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.copy(point).addScaledVector(worldNormal, 0.02);
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), worldNormal);
+  mesh.rotation.z = Math.random() * Math.PI * 2;
+  scene.add(mesh);
+  scorchMarks.push({ mesh, mat, createdAt: now });
+}
+
+function updateScorchMarks() {
+  const now = performance.now();
+  for (let i = scorchMarks.length - 1; i >= 0; i--) {
+    const s = scorchMarks[i];
+    const age = now - s.createdAt;
+    if (age >= SCORCH_LIFETIME_MS) {
+      scene.remove(s.mesh);
+      s.mesh.geometry.dispose();
+      s.mat.dispose();
+      scorchMarks.splice(i, 1);
+    } else {
+      s.mat.opacity = 0.85 * (1 - age / SCORCH_LIFETIME_MS);
+    }
+  }
+}
+
+function clearScorchMarks() {
+  for (const s of scorchMarks) {
+    scene.remove(s.mesh);
+    s.mesh.geometry.dispose();
+    s.mat.dispose();
+  }
+  scorchMarks = [];
+}
 let matchActive = false;
 let mySpawn;
 let myKills = 0, myDeaths = 0;
@@ -574,7 +680,7 @@ async function beginMatch(arenaId) {
 
   mySpawn = spawnForId(myId, currentArena);
 
-  if (local) scene.remove(local.mesh);
+  if (local) scene.remove(local.mesh, local.viewRoot);
   local = new PlayerController(scene, camera, colorForId(myId));
   local.spawn(mySpawn);
 
@@ -700,7 +806,8 @@ function loop() {
     steps++;
   }
 
-  local.updateLook(); // After physics collision resolves — keeps aiming smooth without glitches
+  local.updateLook();
+  local.interpolateView(physicsAccumulator / FIXED_DT);
 
   for (const rp of players.values()) rp.update(dt, camera);
 
@@ -712,7 +819,7 @@ function loop() {
       targetIds.push(id);
     }
   }
-  const solidObjects = arenaObjects.filter((o) => o !== floorMesh);
+  const solidObjects = arenaObjects; // includes the floor now, so floor shots register too
 
   if (firing) {
     const origin = new THREE.Vector3();
@@ -738,11 +845,19 @@ function loop() {
       if (idx !== -1) {
         const targetId = targetIds[idx];
         net.broadcast({ t: "hit", targetId, attackerId: myId, damage: 40 * dt });
+      } else if (hit.face) {
+        const worldNormal = hit.face.normal
+          .clone()
+          .transformDirection(hit.object.matrixWorld)
+          .normalize();
+        spawnScorchMark(hit.point, worldNormal);
       }
     }
   } else {
     laser.visible = false;
   }
+
+  updateScorchMarks();
 
   document.getElementById("hud-hp-value").textContent = Math.ceil(local.hp);
 

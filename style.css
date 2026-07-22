@@ -576,6 +576,41 @@ html, body {
   color: var(--laser);
 }
 
+/* ===== Room code banner — shown while hosting solo, waiting for others ===== */
+#room-code-banner {
+  position: fixed;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 20px;
+  background: rgba(19, 19, 24, 0.85);
+  border: 1px solid var(--laser);
+  border-radius: 999px;
+  font-family: 'Space Grotesk', sans-serif;
+  pointer-events: none;
+  box-shadow: 0 0 16px rgba(57, 255, 136, 0.25);
+}
+.room-code-label {
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+#room-code-value {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  color: var(--laser);
+  text-shadow: 0 0 10px rgba(57, 255, 136, 0.6);
+}
+.room-code-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
 /* ===== Crosshair — mix-blend-mode: difference inverts against whatever
    is directly behind it, so it stays visible on any background ===== */
 #crosshair {
