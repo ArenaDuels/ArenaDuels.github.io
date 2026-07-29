@@ -141,8 +141,11 @@ function makeFirstPersonGun(color) {
 // whichever way the capsule is facing since it's a child of that mesh.
 function makeHeldGun(color) {
   const { group } = makeGunModel(color);
-  group.position.set(0.28, 0.05, -0.35);
-  group.rotation.y = -0.1;
+  // Capsule radius is 0.5 — the previous 0.28 offset put the gun's
+  // attachment point *inside* that radius, so it rendered embedded in
+  // the body instead of held beside it. 0.6 clears it.
+  group.position.set(0.6, 0.05, -0.2);
+  group.rotation.y = -0.2;
   group.scale.setScalar(1.15); // slightly bigger — reads better at typical view distance
   group.traverse((o) => {
     if (o.isMesh) {
@@ -296,20 +299,20 @@ export class PlayerController {
   #resolveCollision(wallBoxes) {
     const STEP_TOLERANCE = 0.5; // how much higher than your current feet a surface can be and still auto step-up
     const STAND_MARGIN = MOVE.RADIUS * 0.6; // lets your capsule center be slightly past a box's edge and still count as "on" it
-    const feetRef = this.mesh.position.y - 1.4; // 0 == standing on the world floor, matching the original ground convention
+    const REST_OFFSET = 1.4; // established convention: capsule center sits this far above whatever it's resting on
+    const feetLevel = this.mesh.position.y - REST_OFFSET;
 
-    let surfaceRef = 0; // world floor is always a valid fallback surface
+    let surfaceTopY = 0; // world floor
     for (const box of wallBoxes) {
       const overX = this.mesh.position.x > box.min.x - STAND_MARGIN && this.mesh.position.x < box.max.x + STAND_MARGIN;
       const overZ = this.mesh.position.z > box.min.z - STAND_MARGIN && this.mesh.position.z < box.max.z + STAND_MARGIN;
       if (overX && overZ) {
-        const topRef = box.max.y - 1.4;
-        if (topRef <= feetRef + STEP_TOLERANCE && topRef > surfaceRef) {
-          surfaceRef = topRef;
+        if (box.max.y <= feetLevel + STEP_TOLERANCE && box.max.y > surfaceTopY) {
+          surfaceTopY = box.max.y;
         }
       }
     }
-    const restY = surfaceRef + 1.4;
+    const restY = surfaceTopY + REST_OFFSET;
 
     if (this.mesh.position.y <= restY) {
       this.mesh.position.y = restY;
