@@ -540,10 +540,13 @@ let wallBoxes = [], floorMesh, arenaObjects = [];
 let raycaster = new THREE.Raycaster();
 let laser;
 
-// ===== Scorch marks — a small burn decal wherever the beam hits a solid
-// surface, fading out over 5 seconds. One shared texture (cheap), a
-// cloned material per mark so each can fade independently. =====
-function makeScorchTexture() {
+// ===== Scorch marks — instead of a stamp per hit, we track the beam's hit
+// point over time and connect consecutive points into a continuous scorched
+// streak (like dragging a hot wire across the surface) rather than a chain
+// of separate dots. A round dot marks the start of each stroke, and thin
+// stretched quads connect each subsequent point to the last one. All marks
+// fade out and get cleaned up after 5 seconds. =====
+function makeScorchDotTexture() {
   const canvas = document.createElement("canvas");
   canvas.width = 128;
   canvas.height = 128;
@@ -557,34 +560,95 @@ function makeScorchTexture() {
   ctx.fillRect(0, 0, 128, 128);
   return new THREE.CanvasTexture(canvas);
 }
-const scorchTexture = makeScorchTexture();
+function makeScorchLineTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 32;
+  canvas.height = 128;
+  const ctx = canvas.getContext("2d");
+  const grad = ctx.createLinearGradient(0, 0, 32, 0); // fades across the thin width, solid along the length
+  grad.addColorStop(0, "rgba(40,18,10,0)");
+  grad.addColorStop(0.5, "rgba(12,9,8,0.85)");
+  grad.addColorStop(1, "rgba(40,18,10,0)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 32, 128);
+  return new THREE.CanvasTexture(canvas);
+}
+const scorchDotTexture = makeScorchDotTexture();
+const scorchLineTexture = makeScorchLineTexture();
 let scorchMarks = []; // { mesh, mat, createdAt }
 const SCORCH_LIFETIME_MS = 5000;
-let lastScorchTime = 0;
-const SCORCH_MIN_INTERVAL_MS = 150; // throttle while holding the beam on one spot
 
-function spawnScorchMark(point, worldNormal) {
-  const now = performance.now();
-  if (now - lastScorchTime < SCORCH_MIN_INTERVAL_MS) return;
-  lastScorchTime = now;
+// Tracks the in-progress stroke so consecutive frames connect up rather
+// than each spawning an independent mark.
+let lastScorchPoint = null;
+let lastScorchNormal = null;
 
-  const size = 0.35 + Math.random() * 0.15;
-  const geo = new THREE.CircleGeometry(size, 16);
-  const mat = new THREE.MeshBasicMaterial({
-    map: scorchTexture,
+function makeScorchMaterial(map) {
+  return new THREE.MeshBasicMaterial({
+    map,
     transparent: true,
     opacity: 0.85,
     depthWrite: false,
+    side: THREE.DoubleSide,
     polygonOffset: true,
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -4,
   });
-  const mesh = new THREE.Mesh(geo, mat);
+}
+
+function addScorchMesh(mesh) {
+  scene.add(mesh);
+  scorchMarks.push({ mesh, mat: mesh.material, createdAt: performance.now() });
+}
+
+function spawnScorchDot(point, worldNormal) {
+  const size = 0.3 + Math.random() * 0.1;
+  const mesh = new THREE.Mesh(new THREE.CircleGeometry(size, 16), makeScorchMaterial(scorchDotTexture));
   mesh.position.copy(point).addScaledVector(worldNormal, 0.02);
   mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), worldNormal);
   mesh.rotation.z = Math.random() * Math.PI * 2;
-  scene.add(mesh);
-  scorchMarks.push({ mesh, mat, createdAt: now });
+  addScorchMesh(mesh);
+}
+
+function spawnScorchLine(pointA, pointB, worldNormal) {
+  const dir = new THREE.Vector3().subVectors(pointB, pointA);
+  const length = dir.length();
+  if (length < 0.02) return; // aim barely moved — not worth a segment
+  dir.normalize();
+
+  // Build an orthonormal basis flush against the surface: right/dir/normal.
+  const right = new THREE.Vector3().crossVectors(dir, worldNormal).normalize();
+  const trueNormal = new THREE.Vector3().crossVectors(right, dir).normalize();
+
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.28, length), makeScorchMaterial(scorchLineTexture));
+  const mid = new THREE.Vector3().addVectors(pointA, pointB).multiplyScalar(0.5);
+  mesh.position.copy(mid).addScaledVector(trueNormal, 0.02);
+  const basis = new THREE.Matrix4().makeBasis(right, dir, trueNormal);
+  mesh.quaternion.setFromRotationMatrix(basis);
+  addScorchMesh(mesh);
+}
+
+// Call this whenever the beam lands on a solid surface this frame. Extends
+// the current stroke if the new point is a plausible continuation of the
+// last one (roughly the same flat surface, not too far away); otherwise
+// starts a fresh stroke with a dot.
+function updateScorchStroke(point, worldNormal) {
+  const sameSurface =
+    lastScorchPoint &&
+    lastScorchNormal.dot(worldNormal) > 0.9 &&
+    point.distanceTo(lastScorchPoint) < 2;
+
+  if (sameSurface) {
+    spawnScorchLine(lastScorchPoint, point, worldNormal);
+  } else {
+    spawnScorchDot(point, worldNormal);
+  }
+  lastScorchPoint = point.clone();
+  lastScorchNormal = worldNormal.clone();
+}
+function endScorchStroke() {
+  lastScorchPoint = null;
+  lastScorchNormal = null;
 }
 
 function updateScorchMarks() {
@@ -845,16 +909,20 @@ function loop() {
       if (idx !== -1) {
         const targetId = targetIds[idx];
         net.broadcast({ t: "hit", targetId, attackerId: myId, damage: 40 * dt });
+        endScorchStroke(); // hit a player, not environment — don't connect scorch marks across this
       } else if (hit.face) {
         const worldNormal = hit.face.normal
           .clone()
           .transformDirection(hit.object.matrixWorld)
           .normalize();
-        spawnScorchMark(hit.point, worldNormal);
+        updateScorchStroke(hit.point, worldNormal);
       }
+    } else {
+      endScorchStroke();
     }
   } else {
     laser.visible = false;
+    endScorchStroke();
   }
 
   updateScorchMarks();

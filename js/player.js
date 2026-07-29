@@ -86,9 +86,12 @@ function makeNameSprite(name) {
 // weapon. Returns the group (to attach) and a muzzle Object3D whose real
 // WORLD position we use as the laser's true visual origin — genuine
 // parallax from an actual point in the scene, not an approximated offset.
-function makeGunViewmodel(color) {
+// Builds the gun mesh itself — body/barrel/grip/muzzle — without any
+// position/rotation applied, so callers can place it differently depending
+// on context: as a first-person viewmodel (child of the camera) or as a
+// third-person "held gun" visible to other players (child of the capsule).
+function makeGunModel(color) {
   const group = new THREE.Group();
-  group.renderOrder = 1000;
 
   const bodyMat = new THREE.MeshStandardMaterial({ color: 0x1c1c22, roughness: 0.4, metalness: 0.4 });
   const accentMat = new THREE.MeshStandardMaterial({
@@ -112,18 +115,42 @@ function makeGunViewmodel(color) {
   muzzle.position.set(0, 0.015, -0.55);
   group.add(muzzle);
 
+  return { group, muzzle };
+}
+
+// First-person viewmodel: fixed in the bottom-right of the screen, no
+// shadows (casting a shadow of your own gun onto your own view looks odd),
+// not affected by frustum culling so it never disappears at extreme angles.
+function makeFirstPersonGun(color) {
+  const { group, muzzle } = makeGunModel(color);
+  group.renderOrder = 1000;
   group.position.set(0.3, -0.26, -0.5);
   group.rotation.y = -0.05;
-
   group.traverse((o) => {
     if (o.isMesh) {
       o.castShadow = false;
       o.receiveShadow = false;
-      o.frustumCulled = false; // stays visible even at extreme look angles
+      o.frustumCulled = false;
     }
   });
-
   return { group, muzzle };
+}
+
+// Third-person "held gun" visible to other players — attached to the
+// capsule body, positioned like it's held out in front, rotates with
+// whichever way the capsule is facing since it's a child of that mesh.
+function makeHeldGun(color) {
+  const { group } = makeGunModel(color);
+  group.position.set(0.28, 0.05, -0.35);
+  group.rotation.y = -0.1;
+  group.scale.setScalar(1.15); // slightly bigger — reads better at typical view distance
+  group.traverse((o) => {
+    if (o.isMesh) {
+      o.castShadow = true;
+      o.receiveShadow = true;
+    }
+  });
+  return group;
 }
 
 // ===== LG beam — a thin glowing cylinder mesh (not a THREE.Line, which
@@ -196,7 +223,7 @@ export class PlayerController {
     this.camPivot.add(camera);
     this.camera = camera;
 
-    const { group: gunGroup, muzzle } = makeGunViewmodel(color);
+    const { group: gunGroup, muzzle } = makeFirstPersonGun(color);
     camera.add(gunGroup);
     this.gunMuzzle = muzzle;
 
@@ -257,15 +284,48 @@ export class PlayerController {
     this.vel.z += accelSpeed * wishDir.z;
   }
 
-  #resolveWalls(wallBoxes) {
+  // Proper 3D collision: finds the highest surface (a box-top, or the
+  // world floor) below the player that they're over, and rests them on
+  // it — not just the single hardcoded ground height like before. This is
+  // what makes stairs and multi-level platforms actually work: each step
+  // is just a slightly higher box, and walking into its footprint lets you
+  // step up onto it. Side-collision (getting blocked by a wall/step from
+  // the side) only applies to boxes whose top is still above you — once
+  // you're standing at or above a box's top, its footprint stops blocking
+  // you sideways, so you can walk across its surface and off the edge.
+  #resolveCollision(wallBoxes) {
+    const STEP_TOLERANCE = 0.5; // how much higher than your current feet a surface can be and still auto step-up
+    const STAND_MARGIN = MOVE.RADIUS * 0.6; // lets your capsule center be slightly past a box's edge and still count as "on" it
+    const feetRef = this.mesh.position.y - 1.4; // 0 == standing on the world floor, matching the original ground convention
+
+    let surfaceRef = 0; // world floor is always a valid fallback surface
+    for (const box of wallBoxes) {
+      const overX = this.mesh.position.x > box.min.x - STAND_MARGIN && this.mesh.position.x < box.max.x + STAND_MARGIN;
+      const overZ = this.mesh.position.z > box.min.z - STAND_MARGIN && this.mesh.position.z < box.max.z + STAND_MARGIN;
+      if (overX && overZ) {
+        const topRef = box.max.y - 1.4;
+        if (topRef <= feetRef + STEP_TOLERANCE && topRef > surfaceRef) {
+          surfaceRef = topRef;
+        }
+      }
+    }
+    const restY = surfaceRef + 1.4;
+
+    if (this.mesh.position.y <= restY) {
+      this.mesh.position.y = restY;
+      this.vel.y = 0;
+      this.onGround = true;
+    } else {
+      this.onGround = false;
+    }
+
     // Small margin beyond the exact radius — without it, a resting position
     // exactly tangent to a wall is a floating-point-unstable boundary that
-    // can flicker between "colliding" and "not colliding" frame to frame
-    // (worse now that collision runs multiple times per frame via
-    // substepping), which reads as camera stutter since the camera is
-    // attached to this position.
+    // can flicker between "colliding" and "not colliding" frame to frame,
+    // which reads as camera stutter since the camera is attached to it.
     const pushRadius = MOVE.RADIUS + 0.01;
     for (const box of wallBoxes) {
+      if (this.mesh.position.y >= box.max.y - 0.05) continue; // standing on/above its top — don't wall-block against it
       const cx = Math.max(box.min.x, Math.min(this.mesh.position.x, box.max.x));
       const cz = Math.max(box.min.z, Math.min(this.mesh.position.z, box.max.z));
       let dx = this.mesh.position.x - cx;
@@ -361,13 +421,7 @@ export class PlayerController {
     const subDt = dt / steps;
     for (let i = 0; i < steps; i++) {
       this.mesh.position.addScaledVector(this.vel, subDt);
-      this.#resolveWalls(wallBoxes);
-    }
-
-    if (this.mesh.position.y <= 1.4) {
-      this.mesh.position.y = 1.4;
-      this.vel.y = 0;
-      this.onGround = true;
+      this.#resolveCollision(wallBoxes);
     }
   }
 
@@ -404,6 +458,11 @@ export class RemotePlayer {
     this.scene = scene;
     this.mesh = makeCapsuleMesh(color);
     scene.add(this.mesh);
+
+    // Visible to everyone else, unlike the local player's own first-person
+    // viewmodel — attached to the capsule body so it turns with them.
+    this.heldGun = makeHeldGun(color);
+    this.mesh.add(this.heldGun);
 
     this.hp = 100;
     this.hpBar = makeHpBar();
