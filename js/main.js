@@ -132,7 +132,7 @@ fovSlider.addEventListener("input", () => {
   applyFov();
 });
 crosshairSlider.addEventListener("input", () => {
-  settings.crosshairSize = parseInt(crossshairSlider.value, 10);
+  settings.crosshairSize = parseInt(crosshairSlider.value, 10);
   crosshairValue.textContent = settings.crosshairSize;
   saveSettings();
   applyCrosshairSize();

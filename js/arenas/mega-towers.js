@@ -1,89 +1,128 @@
-// Mega Towers — two hollow "outpost" towers facing each other across an
-// open field. Each has a solid ground floor with a doorway, a window band
-// you can shoot through, an interior staircase leading up to a mezzanine
-// platform (sitting right at window height, so the climb is worth it),
-// and a parapet above. Built with a small generator function below rather
-// than hand-listing every wall segment.
+// Mega Towers — two tall outposts facing each other. Each has three levels
+// (ground, mezzanine, roof) connected by a dedicated stairwell that never
+// overlaps the floor platforms, and windows placed at actual eye-level for
+// whichever floor they serve — not just "a gap somewhere in the wall."
 
-const SIZE = 10;      // tower footprint (square)
+const SIZE = 12;
 const HALF = SIZE / 2;
 const WALL_T = 0.5;
 
-const BOTTOM_H = 2.2;                 // solid ground-floor wall band
-const WINDOW_H = 1.2;                 // gap you can shoot through
-const TOP_Y0 = BOTTOM_H + WINDOW_H;   // where the upper solid band starts
-const TOP_H = 2.6;                    // parapet above the window band
-const TOWER_HEIGHT = TOP_Y0 + TOP_H;  // ~6.0 total
+// A standing player's eyes sit ~2.4 units above whatever floor they're on
+// (1.4 resting offset + 1.0 camera height) — windows are centered on that,
+// not on an arbitrary height, so they're actually usable from the floor
+// they're attached to.
+const EYE_OFFSET = 2.4;
 
-const MEZZ_Y = BOTTOM_H + WINDOW_H / 2; // platform sits mid-window-height
+const GROUND_LOW_H = 1.8;                                  // solid wall below the window
+const GROUND_WINDOW_H = 1.2;                                // ground-floor window band
+const GROUND_HIGH_H = 0.6;                                  // solid band supporting the mezzanine
+const MEZZ_Y = GROUND_LOW_H + GROUND_WINDOW_H + GROUND_HIGH_H; // 3.6 — mezzanine floor height
 
-// Builds one tower's walls/stairs/platform, centered at (cx, cz).
-// doorSide: 'north' | 'south' | 'east' | 'west' — which wall has the entry gap.
+const MEZZ_LOW_H = 1.8;
+const MEZZ_WINDOW_H = 1.2;                                  // mezzanine window band
+const MEZZ_HIGH_H = 0.8;                                    // parapet above it
+const ROOF_Y = MEZZ_Y + MEZZ_LOW_H + MEZZ_WINDOW_H + MEZZ_HIGH_H; // 7.4 — roof height, noticeably tall
+
+const STRIP_D = 4; // depth of the dedicated stairwell strip (always the north side of the footprint)
+
+// Builds one tower centered at (cx, cz). doorSide is which outer wall has
+// the entry gap ('east' | 'west' | 'north' | 'south'); the stairwell is
+// always on the north side of the footprint regardless, so both towers
+// share the same internal layout even with doors facing opposite ways.
 function buildTower(cx, cz, doorSide) {
   const props = [];
+  const doorW = 2.6;
 
-  function addWallRun(axis, fixedCoord, hasDoor) {
-    const doorW = 2.6;
-    const sideW = (SIZE - doorW) / 2;
+  function wallBand(axis, fixedCoord, yStart, h, hasDoorGap) {
+    const y = yStart + h / 2;
     if (axis === "x") {
-      if (hasDoor) {
-        props.push({ type: "wall", w: sideW, h: BOTTOM_H, d: WALL_T, x: cx - SIZE / 2 + sideW / 2, y: BOTTOM_H / 2, z: fixedCoord });
-        props.push({ type: "wall", w: sideW, h: BOTTOM_H, d: WALL_T, x: cx + SIZE / 2 - sideW / 2, y: BOTTOM_H / 2, z: fixedCoord });
+      if (hasDoorGap) {
+        const sideW = (SIZE - doorW) / 2;
+        props.push({ type: "wall", w: sideW, h, d: WALL_T, x: cx - SIZE / 2 + sideW / 2, y, z: fixedCoord });
+        props.push({ type: "wall", w: sideW, h, d: WALL_T, x: cx + SIZE / 2 - sideW / 2, y, z: fixedCoord });
       } else {
-        props.push({ type: "wall", w: SIZE, h: BOTTOM_H, d: WALL_T, x: cx, y: BOTTOM_H / 2, z: fixedCoord });
+        props.push({ type: "wall", w: SIZE, h, d: WALL_T, x: cx, y, z: fixedCoord });
       }
-      props.push({ type: "wall", w: SIZE, h: TOP_H, d: WALL_T, x: cx, y: TOP_Y0 + TOP_H / 2, z: fixedCoord });
     } else {
-      if (hasDoor) {
-        props.push({ type: "wall", w: WALL_T, h: BOTTOM_H, d: sideW, x: fixedCoord, y: BOTTOM_H / 2, z: cz - SIZE / 2 + sideW / 2 });
-        props.push({ type: "wall", w: WALL_T, h: BOTTOM_H, d: sideW, x: fixedCoord, y: BOTTOM_H / 2, z: cz + SIZE / 2 - sideW / 2 });
+      if (hasDoorGap) {
+        const sideW = (SIZE - doorW) / 2;
+        props.push({ type: "wall", w: WALL_T, h, d: sideW, x: fixedCoord, y, z: cz - SIZE / 2 + sideW / 2 });
+        props.push({ type: "wall", w: WALL_T, h, d: sideW, x: fixedCoord, y, z: cz + SIZE / 2 - sideW / 2 });
       } else {
-        props.push({ type: "wall", w: WALL_T, h: BOTTOM_H, d: SIZE, x: fixedCoord, y: BOTTOM_H / 2, z: cz });
+        props.push({ type: "wall", w: WALL_T, h, d: SIZE, x: fixedCoord, y, z: cz });
       }
-      props.push({ type: "wall", w: WALL_T, h: TOP_H, d: SIZE, x: fixedCoord, y: TOP_Y0 + TOP_H / 2, z: cz });
     }
   }
 
-  addWallRun("x", cz - HALF, doorSide === "north");
-  addWallRun("x", cz + HALF, doorSide === "south");
-  addWallRun("z", cx - HALF, doorSide === "west");
-  addWallRun("z", cx + HALF, doorSide === "east");
+  function buildSide(axis, fixedCoord, hasDoor) {
+    wallBand(axis, fixedCoord, 0, GROUND_LOW_H, hasDoor);
+    wallBand(axis, fixedCoord, GROUND_LOW_H + GROUND_WINDOW_H, GROUND_HIGH_H, false);
+    wallBand(axis, fixedCoord, MEZZ_Y, MEZZ_LOW_H, false);
+    wallBand(axis, fixedCoord, MEZZ_Y + MEZZ_LOW_H + MEZZ_WINDOW_H, MEZZ_HIGH_H, false);
+  }
 
-  // Staircase along the interior west wall, climbing to the mezzanine.
-  const STEP_COUNT = 10;
-  const stairX = cx - HALF + 1.3;
-  const runStart = cz - HALF + 1;
-  const runLength = SIZE - 2;
-  for (let i = 0; i < STEP_COUNT; i++) {
-    const topY = (MEZZ_Y * (i + 1)) / STEP_COUNT;
-    const stepZ = runStart + (runLength * (i + 0.5)) / STEP_COUNT;
+  buildSide("x", cz - HALF, doorSide === "north");
+  buildSide("x", cz + HALF, doorSide === "south");
+  buildSide("z", cx - HALF, doorSide === "west");
+  buildSide("z", cx + HALF, doorSide === "east");
+
+  // Stairwell: always the north strip of the footprint, entirely separate
+  // from the floor platforms below (south portion) — the two can never
+  // visually or physically overlap since they occupy different Z ranges.
+  const stairZ = cz - HALF + STRIP_D / 2;
+
+  // Flight 1 (west half of the strip): ground -> mezzanine.
+  const f1xStart = cx - HALF + 1;
+  const f1xEnd = cx - 0.5;
+  const F1_STEPS = 10;
+  for (let i = 0; i < F1_STEPS; i++) {
+    const topY = (MEZZ_Y * (i + 1)) / F1_STEPS;
+    const x = f1xStart + ((f1xEnd - f1xStart) * (i + 0.5)) / F1_STEPS;
     const boxH = 0.22;
     props.push({
-      type: "wall", w: 1.8, h: boxH,
-      d: runLength / STEP_COUNT + 0.05,
-      x: stairX, y: topY - boxH / 2, z: stepZ,
+      type: "wall", w: (f1xEnd - f1xStart) / F1_STEPS + 0.05, h: boxH, d: STRIP_D - 0.6,
+      x, y: topY - boxH / 2, z: stairZ,
     });
   }
 
-  // Mezzanine platform — the eastern half of the footprint, leaving the
-  // western half (the stairwell) open so you can walk up into it.
-  props.push({
-    type: "wall",
-    w: SIZE / 2 - 0.4, h: 0.3, d: SIZE - 1,
-    x: cx + SIZE / 4, y: MEZZ_Y - 0.15, z: cz,
-  });
+  // Flight 2 (east half of the strip): mezzanine -> roof.
+  const f2xStart = cx + 0.5;
+  const f2xEnd = cx + HALF - 1;
+  const F2_STEPS = 10;
+  for (let i = 0; i < F2_STEPS; i++) {
+    const topY = MEZZ_Y + ((ROOF_Y - MEZZ_Y) * (i + 1)) / F2_STEPS;
+    const x = f2xStart + ((f2xEnd - f2xStart) * (i + 0.5)) / F2_STEPS;
+    const boxH = 0.22;
+    props.push({
+      type: "wall", w: (f2xEnd - f2xStart) / F2_STEPS + 0.05, h: boxH, d: STRIP_D - 0.6,
+      x, y: topY - boxH / 2, z: stairZ,
+    });
+  }
+
+  // Mezzanine + roof platforms — the south portion of the footprint, well
+  // clear of the stairwell strip. Same XZ footprint, stacked at two
+  // different heights, so climbing the stairwell and stepping south onto
+  // the floor works identically at both levels.
+  const platZStart = cz - HALF + STRIP_D;
+  const platZEnd = cz + HALF;
+  const platDepth = platZEnd - platZStart - 0.3;
+  const platCenterZ = (platZStart + platZEnd) / 2;
+  const platWidth = SIZE - 0.6;
+
+  props.push({ type: "wall", w: platWidth, h: 0.3, d: platDepth, x: cx, y: MEZZ_Y - 0.15, z: platCenterZ });
+  props.push({ type: "wall", w: platWidth, h: 0.3, d: platDepth, x: cx, y: ROOF_Y - 0.15, z: platCenterZ });
 
   return props;
 }
 
-const TOWER_A = { x: -16, z: 0 };
-const TOWER_B = { x: 16, z: 0 };
+const TOWER_A = { x: -18, z: 0 };
+const TOWER_B = { x: 18, z: 0 };
 
 export default {
   id: "mega-towers",
   name: "Mega Towers",
   thumb: "./assets/thumbs/mega-towers.png",
-  floorSize: 50,
+  floorSize: 55,
   wallHeight: 8,
   bgColor: 0x0a0d14,
 
@@ -97,10 +136,10 @@ export default {
   },
 
   walls: [
-    [50, 8, 0.5, 0, 4, -25],
-    [50, 8, 0.5, 0, 4, 25],
-    [0.5, 8, 50, -25, 4, 0],
-    [0.5, 8, 50, 25, 4, 0],
+    [55, 8, 0.5, 0, 4, -27.5],
+    [55, 8, 0.5, 0, 4, 27.5],
+    [0.5, 8, 55, -27.5, 4, 0],
+    [0.5, 8, 55, 27.5, 4, 0],
   ],
 
   // Towers face each other — A's door faces east (toward B), B's faces west.
@@ -109,13 +148,12 @@ export default {
     ...buildTower(TOWER_B.x, TOWER_B.z, "west"),
   ],
 
-  // Two spawns per tower: one on the mezzanine, one at ground level, so
-  // a 4-player match splits evenly and each tower has both an interior
-  // and elevated presence from the start.
+  // One ground spawn and one roof spawn per tower — a 4-player match starts
+  // split between both towers, at both the bottom and the very top.
   spawns: [
-    { x: TOWER_A.x + SIZE / 4, y: MEZZ_Y + 1.4, z: TOWER_A.z, yaw: Math.PI / 2 },
-    { x: TOWER_A.x, y: 1.4, z: TOWER_A.z - 2, yaw: Math.PI / 2 },
-    { x: TOWER_B.x - SIZE / 4, y: MEZZ_Y + 1.4, z: TOWER_B.z, yaw: -Math.PI / 2 },
-    { x: TOWER_B.x, y: 1.4, z: TOWER_B.z - 2, yaw: -Math.PI / 2 },
+    { x: TOWER_A.x, y: 1.4, z: TOWER_A.z + 3, yaw: Math.PI / 2 },
+    { x: TOWER_A.x, y: ROOF_Y + 1.4, z: TOWER_A.z + 3, yaw: Math.PI / 2 },
+    { x: TOWER_B.x, y: 1.4, z: TOWER_B.z + 3, yaw: -Math.PI / 2 },
+    { x: TOWER_B.x, y: ROOF_Y + 1.4, z: TOWER_B.z + 3, yaw: -Math.PI / 2 },
   ],
 };
