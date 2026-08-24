@@ -6,7 +6,7 @@
 <link rel="stylesheet" href="./style.css">
 </head>
 <body>
-
+  
   <!-- ===================== MAIN MENU ===================== -->
   <div id="screen-menu" class="screen">
     <div class="menu-panel">
@@ -34,13 +34,76 @@
     </div>
   </div>
 
-  <!-- ===================== PAUSE MENU ===================== -->
-  <div id="pause-menu" class="modal-overlay hidden">
-    <div class="modal-panel pause-panel">
-      <p class="eyebrow">Paused</p>
-      <button id="btn-resume" class="btn btn-primary">Resume</button>
-      <button id="btn-pause-settings" class="btn btn-secondary">Settings</button>
-      <button id="btn-leave-match" class="btn btn-leave">Leave Match</button>
+  <!-- ===================== PLAYER CUSTOMIZATION MODAL ===================== -->
+  <div id="customization-modal" class="modal-overlay hidden">
+    <div class="modal-panel">
+      <p class="eyebrow">Customize Your Player</p>
+      
+      <div class="customization-section">
+        <p class="custom-label">Color</p>
+        <div class="color-picker" id="color-picker"></div>
+      </div>
+
+      <div class="customization-section">
+        <p class="custom-label">Pattern</p>
+        <div class="pattern-picker" id="pattern-picker"></div>
+      </div>
+
+      <div class="customization-section">
+        <p class="custom-label">Accessory</p>
+        <div class="accessory-picker" id="accessory-picker"></div>
+      </div>
+
+      <button id="btn-customization-close" class="btn btn-primary">Done</button>
+    </div>
+  </div>
+
+  <!-- ===================== MATCH SETTINGS MODAL ===================== -->
+  <div id="match-settings-modal" class="modal-overlay hidden">
+    <div class="modal-panel">
+      <p class="eyebrow">Match Settings</p>
+
+      <div class="setting-row">
+        <div class="setting-label">
+          <span>Time Limit (minutes)</span>
+          <span id="time-limit-value" class="setting-value">10</span>
+        </div>
+        <input id="time-limit-slider" type="range" min="1" max="30" step="1" value="10" class="slider">
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-label">
+          <span>Score Limit (kills)</span>
+          <span id="score-limit-value" class="setting-value">20</span>
+        </div>
+        <input id="score-limit-slider" type="range" min="5" max="100" step="5" value="20" class="slider">
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-label">
+          <span>Starting Health</span>
+          <span id="starting-health-value" class="setting-value">100</span>
+        </div>
+        <input id="starting-health-slider" type="range" min="50" max="200" step="10" value="100" class="slider">
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-label">
+          <span>Health Steal (%)</span>
+          <span id="health-steal-value" class="setting-value">0</span>
+        </div>
+        <input id="health-steal-slider" type="range" min="0" max="50" step="5" value="0" class="slider">
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-label">
+          <span>Respawn Delay (seconds)</span>
+          <span id="respawn-delay-value" class="setting-value">2</span>
+        </div>
+        <input id="respawn-delay-slider" type="range" min="0" max="10" step="0.5" value="2" class="slider">
+      </div>
+
+      <button id="btn-match-settings-close" class="btn btn-primary">Start Match</button>
     </div>
   </div>
 
@@ -85,6 +148,7 @@
         <input id="crosshair-slider" type="range" min="2" max="16" step="1" value="6" class="slider">
       </div>
 
+      <button id="btn-customization-open" class="btn btn-secondary">Customize Player</button>
       <button id="btn-settings-close" class="btn btn-primary">Done</button>
     </div>
   </div>
@@ -92,9 +156,10 @@
   <!-- ===================== HOST WAIT ===================== -->
   <div id="screen-host-wait" class="screen hidden">
     <div class="menu-panel">
-      <p class="eyebrow">Share this code</p>
+      <p class="eyebrow">Configure Your Match</p>
       <div id="host-code-display" class="code-pills">------</div>
-      <p id="host-status" class="status-text">Getting a code...</p>
+      <button id="btn-match-settings-open" class="btn btn-primary">Match Settings</button>
+      <p id="host-status" class="status-text">Configure match settings and start...</p>
       <div class="menu-actions">
         <button id="btn-retry-host" class="btn btn-primary hidden">Retry</button>
         <button id="btn-cancel-host" class="btn btn-secondary">Cancel</button>
@@ -115,6 +180,16 @@
     </div>
   </div>
 
+  <!-- ===================== RECONNECT PROMPT ===================== -->
+  <div id="reconnect-prompt" class="modal-overlay hidden">
+    <div class="modal-panel reconnect-panel">
+      <p class="eyebrow">Connection Lost</p>
+      <p class="reconnect-message">Reconnecting in <span id="reconnect-countdown">10</span>s...</p>
+      <button id="btn-reconnect-now" class="btn btn-primary">Reconnect Now</button>
+      <button id="btn-reconnect-cancel" class="btn btn-secondary">Leave Match</button>
+    </div>
+  </div>
+
   <!-- ===================== BROWSE PUBLIC LOBBIES ===================== -->
   <div id="screen-browse" class="screen hidden">
     <div class="menu-panel">
@@ -131,6 +206,7 @@
   <div id="crosshair" class="hidden"></div>
   <div id="hud" class="hidden">
     <div id="hud-score">Kills 0 · Deaths 0</div>
+    <div id="hud-timer">10:00</div>
   </div>
   <div id="hud-hp-corner" class="hidden">
     <span id="hud-hp-label">HP</span>
@@ -140,6 +216,18 @@
     <span class="room-code-label">Room Code</span>
     <span id="room-code-value">------</span>
     <span class="room-code-hint">waiting for players to join...</span>
+  </div>
+
+  <!-- ===================== KILL FEED ===================== -->
+  <div id="kill-feed" class="kill-feed hidden"></div>
+
+  <!-- ===================== SCOREBOARD ===================== -->
+  <div id="scoreboard-overlay" class="modal-overlay hidden">
+    <div class="modal-panel scoreboard-panel">
+      <p class="eyebrow">Match Over</p>
+      <div id="scoreboard-content" class="scoreboard-content"></div>
+      <button id="btn-scoreboard-close" class="btn btn-primary">Back to Menu</button>
+    </div>
   </div>
 
   <script type="module" src="./js/main.js"></script>
