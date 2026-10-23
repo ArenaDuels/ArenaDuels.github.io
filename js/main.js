@@ -95,7 +95,7 @@ function resumeMatch() {
   paused = false;
   pauseMenu.classList.add("hidden");
   settingsModal.classList.add("hidden");
-  canvas.requestPointerLock?.() ?? document.body.requestPointerLock();
+  lockPointer();
 }
 function leaveMatch() {
   matchActive = false;
@@ -143,6 +143,24 @@ crosshairSlider.addEventListener("input", () => {
 });
 
 applyCrosshairSize(); // apply saved size immediately, even before a match
+
+// Always lock onto <body> — that's the element the mouse-look handler checks
+// for. (Resume/start used to lock the canvas instead, so mouse-look silently
+// did nothing until the next click moved the lock.) Also asks for raw mouse
+// input where the browser supports it, so OS mouse acceleration can't make
+// turning uneven; falls back to a normal lock otherwise.
+function lockPointer() {
+  const el = document.body;
+  const plain = () => {
+    try { el.requestPointerLock()?.catch?.(() => {}); } catch {}
+  };
+  try {
+    const p = el.requestPointerLock({ unadjustedMovement: true });
+    if (p && typeof p.catch === "function") p.catch(plain);
+  } catch {
+    plain();
+  }
+}
 
 /* =========================================================
    SCREEN ELEMENTS
@@ -708,18 +726,41 @@ function makeScorchMaterial(map) {
   });
 }
 
-function addScorchMesh(mesh) {
+// Shared geometry + a small set of pre-faded materials: marks used to
+// allocate their own geometry and material every frame while sweeping the
+// beam (hundreds alive at once, each its own draw call) which hitched the
+// frame rate exactly while you were tracking something.
+const SCORCH_FADE_STEPS = 8;
+const MAX_SCORCH_MARKS = 300;
+const SCORCH_MIN_SEGMENT = 0.25; // don't add a segment until the beam has moved this far
+const scorchDotGeo = new THREE.CircleGeometry(1, 16);
+const scorchLineGeo = new THREE.PlaneGeometry(1, 1);
+const scorchDotMats = [];
+const scorchLineMats = [];
+for (let i = 0; i < SCORCH_FADE_STEPS; i++) {
+  const opacity = 0.85 * (1 - (i + 0.5) / SCORCH_FADE_STEPS);
+  const dm = makeScorchMaterial(scorchDotTexture);
+  dm.opacity = opacity;
+  scorchDotMats.push(dm);
+  const lm = makeScorchMaterial(scorchLineTexture);
+  lm.opacity = opacity;
+  scorchLineMats.push(lm);
+}
+
+function addScorchMesh(mesh, mats) {
   scene.add(mesh);
-  scorchMarks.push({ mesh, mat: mesh.material, createdAt: performance.now() });
+  scorchMarks.push({ mesh, mats, createdAt: performance.now() });
+  if (scorchMarks.length > MAX_SCORCH_MARKS) scene.remove(scorchMarks.shift().mesh);
 }
 
 function spawnScorchDot(point, worldNormal) {
   const size = 0.3 + Math.random() * 0.1;
-  const mesh = new THREE.Mesh(new THREE.CircleGeometry(size, 16), makeScorchMaterial(scorchDotTexture));
+  const mesh = new THREE.Mesh(scorchDotGeo, scorchDotMats[0]);
+  mesh.scale.setScalar(size);
   mesh.position.copy(point).addScaledVector(worldNormal, 0.02);
   mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), worldNormal);
   mesh.rotation.z = Math.random() * Math.PI * 2;
-  addScorchMesh(mesh);
+  addScorchMesh(mesh, scorchDotMats);
 }
 
 function spawnScorchLine(pointA, pointB, worldNormal) {
@@ -732,12 +773,13 @@ function spawnScorchLine(pointA, pointB, worldNormal) {
   const right = new THREE.Vector3().crossVectors(dir, worldNormal).normalize();
   const trueNormal = new THREE.Vector3().crossVectors(right, dir).normalize();
 
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.28, length), makeScorchMaterial(scorchLineTexture));
+  const mesh = new THREE.Mesh(scorchLineGeo, scorchLineMats[0]);
+  mesh.scale.set(0.28, length, 1);
   const mid = new THREE.Vector3().addVectors(pointA, pointB).multiplyScalar(0.5);
   mesh.position.copy(mid).addScaledVector(trueNormal, 0.02);
   const basis = new THREE.Matrix4().makeBasis(right, dir, trueNormal);
   mesh.quaternion.setFromRotationMatrix(basis);
-  addScorchMesh(mesh);
+  addScorchMesh(mesh, scorchLineMats);
 }
 
 // Call this whenever the beam lands on a solid surface this frame. Extends
@@ -751,6 +793,7 @@ function updateScorchStroke(point, worldNormal) {
     point.distanceTo(lastScorchPoint) < 2;
 
   if (sameSurface) {
+    if (point.distanceTo(lastScorchPoint) < SCORCH_MIN_SEGMENT) return; // keep the stroke open, wait for more movement
     spawnScorchLine(lastScorchPoint, point, worldNormal);
   } else {
     spawnScorchDot(point, worldNormal);
@@ -770,21 +813,16 @@ function updateScorchMarks() {
     const age = now - s.createdAt;
     if (age >= SCORCH_LIFETIME_MS) {
       scene.remove(s.mesh);
-      s.mesh.geometry.dispose();
-      s.mat.dispose();
       scorchMarks.splice(i, 1);
     } else {
-      s.mat.opacity = 0.85 * (1 - age / SCORCH_LIFETIME_MS);
+      const step = Math.min(SCORCH_FADE_STEPS - 1, Math.floor((age / SCORCH_LIFETIME_MS) * SCORCH_FADE_STEPS));
+      s.mesh.material = s.mats[step];
     }
   }
 }
 
 function clearScorchMarks() {
-  for (const s of scorchMarks) {
-    scene.remove(s.mesh);
-    s.mesh.geometry.dispose();
-    s.mat.dispose();
-  }
+  for (const s of scorchMarks) scene.remove(s.mesh);
   scorchMarks = [];
 }
 let matchActive = false;
@@ -871,7 +909,7 @@ async function beginMatch(arenaId) {
   matchActive = true;
   matchStarting = false;
   showGame();
-  canvas.requestPointerLock?.() ?? document.body.requestPointerLock();
+  lockPointer();
 }
 
 function addOrUpdatePlayer(id, name) {
@@ -921,19 +959,15 @@ addEventListener("mouseup", (e) => {
 });
 canvas.addEventListener("click", () => {
   if (matchActive && !paused && document.pointerLockElement !== document.body) {
-    document.body.requestPointerLock();
+    lockPointer();
   }
 });
 
-// Guards against rare, anomalously large single-event mouse deltas —
-// some browser/OS combinations occasionally produce a spike around
-// Pointer Lock's cursor-recentering behavior, and it tends to show up
-// more on the vertical axis than horizontal. A single huge delta shows
-// as a visible snap/stutter; this clamps it to a sane maximum.
-const MAX_MOUSE_DELTA = 80;
+// Do not clamp mouse deltas: Pointer Lock reports movement accumulated since
+// the previous mouse event, and a hard per-event limit makes fast flicks feel
+// capped. Only reject invalid values; sensitivity is the intended speed control.
 function sanitizeDelta(v) {
-  if (!Number.isFinite(v)) return 0;
-  return Math.max(-MAX_MOUSE_DELTA, Math.min(MAX_MOUSE_DELTA, v));
+  return Number.isFinite(v) ? v : 0;
 }
 
 addEventListener("mousemove", (e) => {
@@ -948,6 +982,8 @@ addEventListener("mousemove", (e) => {
    MAIN LOOP
 ========================================================= */
 let last = performance.now();
+const hudHpValue = document.getElementById("hud-hp-value");
+let lastHpText = "";
 
 // Fixed timestep for physics — see the comment on PlayerController.updatePhysics
 // in player.js for why. Rendering (and mouse-look) still happens every rAF frame.
@@ -984,8 +1020,15 @@ function loop() {
     steps++;
   }
 
+  // After a long stall we hit the step cap and still owe time. Drop that
+  // backlog — otherwise alpha goes above 1 and the camera is thrown ahead of
+  // the player, then snaps back.
+  if (physicsAccumulator > FIXED_DT) physicsAccumulator = 0;
+  const alpha = physicsAccumulator / FIXED_DT;
+
   local.updateLook();
-  local.interpolateView(physicsAccumulator / FIXED_DT);
+  local.interpolateView(alpha);
+  if (botManager) botManager.interpolate(alpha);
 
   for (const rp of players.values()) rp.update(dt, camera);
 
@@ -1045,7 +1088,11 @@ function loop() {
 
   updateScorchMarks();
 
-  document.getElementById("hud-hp-value").textContent = Math.ceil(local.hp);
+  const hpText = String(Math.ceil(local.hp));
+  if (hpText !== lastHpText) {
+    lastHpText = hpText;
+    hudHpValue.textContent = hpText;
+  }
 
   renderer.render(scene, camera);
 }

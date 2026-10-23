@@ -54,6 +54,8 @@ class Bot {
     this.wish = new THREE.Vector3(); // world-space move direction (y unused)
     this.yaw = 0; // kept unwrapped so remote clients never lerp the long way round
     this.pitch = 0;
+    this.prevPos = new THREE.Vector3(); // last physics step, for smooth rendering
+    this.prevYaw = 0;
     this.hp = 100;
     this.alive = true;
     this.onGround = true;
@@ -232,6 +234,8 @@ class Bot {
   update(dt, mgr) {
     const s = this.s;
     this.t += dt;
+    this.prevPos.copy(this.pos);
+    this.prevYaw = this.yaw;
     _eye.set(this.pos.x, this.pos.y + EYE, this.pos.z);
 
     this.retargetTimer -= dt;
@@ -437,7 +441,10 @@ export class BotManager {
       add({ id: this.ctx.getMyId(), pos: local.mesh.position, mesh: local.mesh });
     }
     for (const [id, rp] of this.ctx.players) {
-      if (rp.visible && rp.hp > 0) add({ id, pos: rp.mesh.position, mesh: rp.mesh });
+      if (rp.visible && rp.hp > 0) {
+        const b = this.bots.get(id);
+        add({ id, pos: b ? b.pos : rp.mesh.position, mesh: rp.mesh });
+      }
     }
   }
 
@@ -527,6 +534,8 @@ export class BotManager {
     bot.vel.set(0, 0, 0);
     bot.yaw = bestSpawn.yaw || 0;
     bot.pitch = 0;
+    bot.prevPos.copy(bot.pos);
+    bot.prevYaw = bot.yaw;
     bot.hp = 100;
     bot.alive = true;
     bot.onGround = true;
@@ -561,6 +570,25 @@ export class BotManager {
     if (bot.alive) {
       rp.mesh.position.copy(bot.pos);
       rp.mesh.rotation.y = bot.yaw;
+      rp.mesh.updateMatrixWorld();
+    }
+  }
+
+  // Called once per render frame (not per physics step), like the local
+  // player's camera: draws each bot between its last two physics states so
+  // it moves smoothly on any refresh rate instead of in 60Hz jumps.
+  interpolate(alpha) {
+    for (const bot of this.bots.values()) {
+      if (!bot.alive) continue;
+      const rp = this.ctx.players.get(bot.id);
+      if (!rp) continue;
+      const yaw = bot.prevYaw + (bot.yaw - bot.prevYaw) * alpha;
+      rp.mesh.position.lerpVectors(bot.prevPos, bot.pos, alpha);
+      rp.mesh.rotation.y = yaw;
+      // RemotePlayer.update() eases toward these every frame — keep them
+      // equal to what we just drew so it doesn't drag the bot ahead.
+      rp.targetPos.copy(rp.mesh.position);
+      rp.targetYaw = yaw;
       rp.mesh.updateMatrixWorld();
     }
   }

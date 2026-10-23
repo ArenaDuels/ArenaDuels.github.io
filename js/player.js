@@ -377,7 +377,7 @@ export class PlayerController {
     const wishDir = this.wish.clone();
     const hasInput = wishDir.lengthSq() > 0.0001;
     if (hasInput) {
-      wishDir.normalize().applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw);
+      wishDir.normalize().applyAxisAngle(UP_AXIS, this.yaw);
     }
 
     if (this.onGround) {
