@@ -142,6 +142,26 @@
 
       <div class="setting-row">
         <div class="setting-label">
+          <span>Input Device</span>
+          <span class="setting-value">Mouse / Controller</span>
+        </div>
+        <select id="controller-mode" class="slider" aria-label="Input device">
+          <option value="mouse">Mouse &amp; Keyboard</option>
+          <option value="controller">Controller</option>
+        </select>
+      </div>
+
+      <div id="controller-sens-row" class="setting-row hidden">
+        <div class="setting-label">
+          <span>Controller Look Sensitivity</span>
+          <span id="controller-sens-value" class="setting-value">3.0</span>
+        </div>
+        <input id="controller-sens-slider" type="range" min="0.5" max="10" step="0.1" value="3" class="slider">
+        <p id="controller-status" class="status-text">Connect a controller to use controller mode.</p>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-label">
           <span>Sensitivity</span>
           <span id="sens-value" class="setting-value">6.0</span>
         </div>

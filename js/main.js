@@ -11,7 +11,7 @@ import { BotManager, BOT_SKILLS } from "./bots.js";
    being a typical mouse default) rather than an arbitrary 0-1 slider.
 ========================================================= */
 const SETTINGS_KEY = "capsules-settings";
-const DEFAULT_SETTINGS = { sensitivity: 6, fov: 90, crosshairSize: 6 };
+const DEFAULT_SETTINGS = { sensitivity: 6, controllerEnabled: false, controllerSensitivity: 3.0, fov: 90, crosshairSize: 6 };
 
 function loadSettings() {
   try {
@@ -20,6 +20,8 @@ function loadSettings() {
     const parsed = JSON.parse(raw);
     return {
       sensitivity: typeof parsed.sensitivity === "number" ? parsed.sensitivity : DEFAULT_SETTINGS.sensitivity,
+      controllerEnabled: typeof parsed.controllerEnabled === "boolean" ? parsed.controllerEnabled : DEFAULT_SETTINGS.controllerEnabled,
+      controllerSensitivity: typeof parsed.controllerSensitivity === "number" ? parsed.controllerSensitivity : DEFAULT_SETTINGS.controllerSensitivity,
       fov: typeof parsed.fov === "number" ? parsed.fov : DEFAULT_SETTINGS.fov,
       crosshairSize: typeof parsed.crosshairSize === "number" ? parsed.crosshairSize : DEFAULT_SETTINGS.crosshairSize,
     };
@@ -50,6 +52,11 @@ function applyCrosshairSize() {
 const settingsModal = document.getElementById("settings-modal");
 const sensSlider = document.getElementById("sens-slider");
 const sensValue = document.getElementById("sens-value");
+const controllerMode = document.getElementById("controller-mode");
+const controllerSensSlider = document.getElementById("controller-sens-slider");
+const controllerSensValue = document.getElementById("controller-sens-value");
+const controllerSensRow = document.getElementById("controller-sens-row");
+const controllerStatus = document.getElementById("controller-status");
 const fovSlider = document.getElementById("fov-slider");
 const fovValue = document.getElementById("fov-value");
 const crosshairSlider = document.getElementById("crosshair-slider");
@@ -58,6 +65,11 @@ const crosshairValue = document.getElementById("crosshair-value");
 function refreshSettingsUI() {
   sensSlider.value = settings.sensitivity;
   sensValue.textContent = settings.sensitivity.toFixed(1);
+  controllerMode.value = settings.controllerEnabled ? "controller" : "mouse";
+  controllerSensSlider.value = settings.controllerSensitivity;
+  controllerSensValue.textContent = settings.controllerSensitivity.toFixed(1);
+  controllerSensRow.classList.toggle("hidden", !settings.controllerEnabled);
+  sensSlider.closest(".setting-row").classList.toggle("hidden", settings.controllerEnabled);
   fovSlider.value = settings.fov;
   fovValue.textContent = settings.fov;
   crosshairSlider.value = settings.crosshairSize;
@@ -140,6 +152,23 @@ crosshairSlider.addEventListener("input", () => {
   crosshairValue.textContent = settings.crosshairSize;
   saveSettings();
   applyCrosshairSize();
+});
+
+controllerMode.addEventListener("change", () => {
+  settings.controllerEnabled = controllerMode.value === "controller";
+  refreshSettingsUI();
+  saveSettings();
+  if (settings.controllerEnabled) {
+    document.exitPointerLock();
+    controllerStatus.textContent = "Controller mode selected — connect a gamepad and move a stick.";
+  } else {
+    controllerStatus.textContent = "Mouse and keyboard mode selected.";
+  }
+});
+controllerSensSlider.addEventListener("input", () => {
+  settings.controllerSensitivity = parseFloat(controllerSensSlider.value);
+  controllerSensValue.textContent = settings.controllerSensitivity.toFixed(1);
+  saveSettings();
 });
 
 applyCrosshairSize(); // apply saved size immediately, even before a match
@@ -979,6 +1008,44 @@ addEventListener("mousemove", (e) => {
 });
 
 /* =========================================================
+   CONTROLLER SUPPORT — standard browser Gamepad API
+========================================================= */
+const controllerKeys = {};
+let controllerFiring = false;
+let controllerStartWasDown = false;
+function deadzone(value, threshold = 0.16) {
+  if (Math.abs(value) < threshold) return 0;
+  return Math.sign(value) * (Math.abs(value) - threshold) / (1 - threshold);
+}
+function pollController(dt) {
+  for (const code of ["KeyW", "KeyA", "KeyS", "KeyD", "Space"]) controllerKeys[code] = false;
+  controllerFiring = false;
+  if (!settings.controllerEnabled || !matchActive || paused) return;
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  const pad = Array.from(pads).find(p => p && p.connected);
+  if (!pad) {
+    controllerStatus.textContent = "Controller mode selected — no controller detected. Connect one and press a button.";
+    return;
+  }
+  controllerStatus.textContent = `Controller connected: ${pad.id}`;
+  const lx = deadzone(pad.axes[0] || 0), ly = deadzone(pad.axes[1] || 0);
+  controllerKeys.KeyW = ly < -0.12;
+  controllerKeys.KeyS = ly > 0.12;
+  controllerKeys.KeyA = lx < -0.12;
+  controllerKeys.KeyD = lx > 0.12;
+  controllerKeys.Space = !!(pad.buttons[0] && pad.buttons[0].pressed); // A / Cross
+  controllerFiring = !!((pad.buttons[7] && pad.buttons[7].value > 0.25) || (pad.buttons[5] && pad.buttons[5].pressed)); // RT or RB
+  const rx = deadzone(pad.axes[2] || 0), ry = deadzone(pad.axes[3] || 0);
+  const lookSpeed = settings.controllerSensitivity * 2.2 * dt;
+  local.yaw -= rx * lookSpeed;
+  local.pitch += ry * lookSpeed;
+  local.pitch = Math.max(-1.4, Math.min(1.4, local.pitch));
+  const startDown = !!(pad.buttons[9] && pad.buttons[9].pressed);
+  if (startDown && !controllerStartWasDown) openPauseMenu();
+  controllerStartWasDown = startDown;
+}
+
+/* =========================================================
    MAIN LOOP
 ========================================================= */
 let last = performance.now();
@@ -1009,12 +1076,15 @@ function loop() {
     return;
   }
 
-  local.applyInput(keys, firing);
+  pollController(dt);
+  const activeKeys = settings.controllerEnabled ? controllerKeys : keys;
+  const activeFiring = settings.controllerEnabled ? controllerFiring : firing;
+  local.applyInput(activeKeys, activeFiring);
 
   physicsAccumulator += dt;
   let steps = 0;
   while (physicsAccumulator >= FIXED_DT && steps < MAX_PHYSICS_STEPS_PER_FRAME) {
-    local.updatePhysics(FIXED_DT, wallBoxes, keys.Space);
+    local.updatePhysics(FIXED_DT, wallBoxes, activeKeys.Space);
     if (botManager) botManager.update(FIXED_DT);
     physicsAccumulator -= FIXED_DT;
     steps++;
@@ -1042,7 +1112,7 @@ function loop() {
   }
   const solidObjects = arenaObjects; // includes the floor now, so floor shots register too
 
-  if (firing) {
+  if (activeFiring) {
     const origin = new THREE.Vector3();
     camera.getWorldPosition(origin);
     const dir = new THREE.Vector3();
