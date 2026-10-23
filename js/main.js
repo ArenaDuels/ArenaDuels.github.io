@@ -3,6 +3,7 @@ import { ARENA_LIST, getArena } from "./arenas.js";
 import { PlayerController, RemotePlayer, makeLaserMesh, aimLaser } from "./player.js";
 import { Net } from "./net.js";
 import { randomName } from "./names.js";
+import { BotManager, BOT_SKILLS } from "./bots.js";
 
 /* =========================================================
    SETTINGS — persisted to localStorage. Sensitivity uses the same
@@ -103,6 +104,9 @@ function leaveMatch() {
   settingsModal.classList.add("hidden");
   document.exitPointerLock();
   net.destroy();
+  botManager?.dispose();
+  botManager = null;
+  pendingHostStart = null;
   players.forEach((rp) => rp.dispose());
   players.clear();
   hideRoomCodeBanner();
@@ -251,6 +255,8 @@ let currentArena = null;
 net.onData = (msg, fromId) => handleData(msg, fromId);
 
 let matchStarting = false;
+let pendingHostStart = null; // { code } while a private host is on the settings screen
+let botManager = null;       // host only
 
 net.onPeerConnected = async (id) => {
   // matchActive only flips true *after* the async arena build finishes —
@@ -259,7 +265,10 @@ net.onPeerConnected = async (id) => {
   // with an interleaved double-build (this was the missing-walls bug).
   // matchStarting closes that race by being set synchronously, before any
   // await, so the second caller sees it immediately.
-  if (!matchActive && !matchStarting) {
+  if (pendingHostStart) {
+    // Host was still on the settings screen — start with whatever is set now.
+    await startPendingHost();
+  } else if (!matchActive && !matchStarting) {
     matchStarting = true;
     await beginMatch(selectedArenaId);
   }
@@ -282,20 +291,37 @@ function handleData(msg, fromId) {
   } else if (msg.t === "state") {
     addOrUpdatePlayer(fromId).applyNetState(msg);
   } else if (msg.t === "hit") {
-    if (msg.targetId !== myId) return;
-    const died = local.takeDamage(msg.damage);
-    if (died) {
-      myDeaths++;
-      updateScoreHud();
-      local.spawn(mySpawn);
-      net.broadcast({ t: "died", attackerId: msg.attackerId });
+    // Host only: a remote player shot one of the bots.
+    if (botManager && botManager.has(msg.targetId)) {
+      botManager.damage(msg.targetId, msg.attackerId, msg.damage);
+      return;
     }
-    net.broadcast({ t: "state", id: myId, ...local.getNetState() });
+    if (msg.targetId !== myId) return;
+    applyDamageToLocal(msg.attackerId, msg.damage);
   } else if (msg.t === "died") {
+    if (botManager) botManager.creditKill(msg.attackerId); // a bot killed a remote player
     if (msg.attackerId !== myId) return;
     myKills++;
     updateScoreHud();
+  } else if (msg.t === "bots") {
+    // Host-simulated bots: show them like any other remote player.
+    for (const b of msg.bots) {
+      const rp = players.get(b.id) || addOrUpdatePlayer(b.id, b.name);
+      rp.applyNetState(b);
+    }
   }
+}
+
+function applyDamageToLocal(attackerId, damage, echoState = true) {
+  const died = local.takeDamage(damage);
+  if (died) {
+    myDeaths++;
+    updateScoreHud();
+    local.spawn(mySpawn);
+    net.broadcast({ t: "died", attackerId });
+    if (botManager) botManager.creditKill(attackerId);
+  }
+  if (echoState || died) net.broadcast({ t: "state", id: myId, ...local.getNetState() });
 }
 
 function handleServerLost() {
@@ -304,13 +330,19 @@ function handleServerLost() {
   document.exitPointerLock();
   alert("Lost connection to the server.");
   net.destroy();
+  botManager?.dispose();
+  botManager = null;
+  pendingHostStart = null;
   showScreen("menu");
 }
 
 /* ---- HOST FLOW ---- */
 async function attemptHost() {
   document.getElementById("btn-retry-host").classList.add("hidden");
+  document.getElementById("btn-start-host").classList.add("hidden");
+  document.getElementById("host-code-display").textContent = "------";
   document.getElementById("host-status").textContent = "Getting a code...";
+  pendingHostStart = null;
 
   // Render's free tier can take 30-60s to wake up from sleep on the first
   // connection in a while — if it's taking more than a few seconds, let
@@ -328,11 +360,20 @@ async function attemptHost() {
     myId = net.myId;
     myName = getPlayerName();
 
-    // Drop straight into the arena instead of sitting on a waiting screen —
-    // the room code follows as an in-game banner until someone joins.
-    matchStarting = true;
-    await beginMatch(selectedArenaId);
-    showRoomCodeBanner(code);
+    if (isPublicLobby) {
+      // Public lobbies drop straight into the arena — the room code follows
+      // as an in-game banner until someone joins.
+      matchStarting = true;
+      await beginMatch(selectedArenaId);
+      showRoomCodeBanner(code);
+    } else {
+      // Private matches stop at the settings screen first (bots live there).
+      pendingHostStart = { code };
+      document.getElementById("host-code-display").textContent = code;
+      document.getElementById("host-status").textContent =
+        "Open Match Settings to add bots, then start. Friends can join with this code.";
+      document.getElementById("btn-start-host").classList.remove("hidden");
+    }
   } catch (err) {
     clearTimeout(wakeupTimer);
     document.getElementById("host-status").textContent = "Failed to host match.";
@@ -359,8 +400,79 @@ document.getElementById("btn-retry-host").addEventListener("click", () => {
 });
 document.getElementById("btn-cancel-host").addEventListener("click", () => {
   net.destroy();
+  pendingHostStart = null;
+  document.getElementById("btn-start-host").classList.add("hidden");
   showScreen("menu");
 });
+
+/* ---- PRIVATE MATCH SETTINGS (bots) ---- */
+const matchSettings = { botCount: 0, botSkill: 2 };
+const matchSettingsModal = document.getElementById("match-settings-modal");
+const botCountSlider = document.getElementById("bot-count-slider");
+const botCountValue = document.getElementById("bot-count-value");
+const botSkillSlider = document.getElementById("bot-skill-slider");
+const botSkillValue = document.getElementById("bot-skill-value");
+
+botCountSlider.addEventListener("input", () => {
+  matchSettings.botCount = parseInt(botCountSlider.value, 10);
+  botCountValue.textContent = matchSettings.botCount === 0 ? "Off" : matchSettings.botCount;
+});
+botSkillSlider.addEventListener("input", () => {
+  matchSettings.botSkill = parseInt(botSkillSlider.value, 10);
+  botSkillValue.textContent = BOT_SKILLS[matchSettings.botSkill].label;
+});
+
+document.getElementById("btn-match-settings-open").addEventListener("click", () => {
+  matchSettingsModal.classList.remove("hidden");
+});
+document.getElementById("btn-match-settings-close").addEventListener("click", () => {
+  matchSettingsModal.classList.add("hidden");
+  startPendingHost();
+});
+document.getElementById("btn-start-host").addEventListener("click", startPendingHost);
+
+async function startPendingHost() {
+  if (!pendingHostStart || matchStarting || matchActive) return;
+  const { code } = pendingHostStart;
+  pendingHostStart = null;
+  matchSettingsModal.classList.add("hidden");
+  document.getElementById("btn-start-host").classList.add("hidden");
+  matchStarting = true;
+  await beginMatch(selectedArenaId);
+  startBots();
+  showRoomCodeBanner(code);
+}
+
+function startBots() {
+  botManager?.dispose();
+  botManager = null;
+  if (!net.isHost || matchSettings.botCount <= 0) return;
+  botManager = new BotManager({
+    scene,
+    players,
+    getLocal: () => local,
+    getMyId: () => myId,
+    getArena: () => currentArena,
+    getSolids: () => arenaObjects,
+    getWallBoxes: () => wallBoxes,
+    addPlayer: (id, name) => addOrUpdatePlayer(id, name),
+    // A bot hit the host's own player.
+    damageLocal: (attackerId, amount) => applyDamageToLocal(attackerId, amount, false),
+    // A bot hit a remote human — they apply it on their end like any other hit.
+    sendHit: (targetId, attackerId, amount) =>
+      net.broadcast({ t: "hit", targetId, attackerId, damage: amount }),
+    // A bot died; credit whoever killed it (a remote human credits themselves).
+    onBotKilled: (attackerId) => {
+      if (attackerId === myId) {
+        myKills++;
+        updateScoreHud();
+      } else {
+        net.broadcast({ t: "died", attackerId });
+      }
+    },
+  });
+  botManager.spawnBots(matchSettings.botCount, matchSettings.botSkill);
+}
 
 /* ---- JOIN FLOW (shared by manual code entry and the lobby browser) ---- */
 async function doJoin(code, statusEl) {
@@ -846,6 +958,7 @@ let physicsAccumulator = 0;
 setInterval(() => {
   if (matchActive && local) {
     net.broadcast({ t: "state", id: myId, ...local.getNetState() });
+    if (botManager) net.broadcast({ t: "bots", bots: botManager.getStates() });
   }
 }, 50); // 20Hz
 
@@ -866,6 +979,7 @@ function loop() {
   let steps = 0;
   while (physicsAccumulator >= FIXED_DT && steps < MAX_PHYSICS_STEPS_PER_FRAME) {
     local.updatePhysics(FIXED_DT, wallBoxes, keys.Space);
+    if (botManager) botManager.update(FIXED_DT);
     physicsAccumulator -= FIXED_DT;
     steps++;
   }
@@ -908,7 +1022,11 @@ function loop() {
       const idx = targets.indexOf(hit.object);
       if (idx !== -1) {
         const targetId = targetIds[idx];
-        net.broadcast({ t: "hit", targetId, attackerId: myId, damage: 40 * dt });
+        if (botManager && botManager.has(targetId)) {
+          botManager.damage(targetId, myId, 40 * dt);
+        } else {
+          net.broadcast({ t: "hit", targetId, attackerId: myId, damage: 40 * dt });
+        }
         endScorchStroke(); // hit a player, not environment — don't connect scorch marks across this
       } else if (hit.face) {
         const worldNormal = hit.face.normal

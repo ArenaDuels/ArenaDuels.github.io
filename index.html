@@ -103,6 +103,22 @@
         <input id="respawn-delay-slider" type="range" min="0" max="10" step="0.5" value="2" class="slider">
       </div>
 
+      <div class="setting-row">
+        <div class="setting-label">
+          <span>Bots</span>
+          <span id="bot-count-value" class="setting-value">Off</span>
+        </div>
+        <input id="bot-count-slider" type="range" min="0" max="6" step="1" value="0" class="slider">
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-label">
+          <span>Bot Skill</span>
+          <span id="bot-skill-value" class="setting-value">Normal</span>
+        </div>
+        <input id="bot-skill-slider" type="range" min="1" max="3" step="1" value="2" class="slider">
+      </div>
+
       <button id="btn-match-settings-close" class="btn btn-primary">Start Match</button>
     </div>
   </div>
@@ -161,6 +177,7 @@
       <button id="btn-match-settings-open" class="btn btn-primary">Match Settings</button>
       <p id="host-status" class="status-text">Configure match settings and start...</p>
       <div class="menu-actions">
+        <button id="btn-start-host" class="btn btn-primary hidden">Start Match</button>
         <button id="btn-retry-host" class="btn btn-primary hidden">Retry</button>
         <button id="btn-cancel-host" class="btn btn-secondary">Cancel</button>
       </div>
