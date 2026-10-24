@@ -1,0 +1,37 @@
+// Forest Temple: custom tactical arena layout.
+export default {
+  id: "forest-temple", name: "Forest Temple", thumb: "./assets/thumbs/forest-temple.png",
+  floorSize: 48, wallHeight: 5, bgColor: 0x101b14,
+  textures: { floor: "./assets/textures/forest-floor.png", wall: "./assets/textures/forest-wall.png", pillar: "./assets/textures/forest-wall.png" },
+  fallbackColors: { floor: 0x273b28, wall: 0x4c6244, pillar: 0x4c6244 },
+  walls: [
+    [48, 5, 0.6, 0, 2.5, -24.0],
+    [48, 5, 0.6, 0, 2.5, 24.0],
+    [0.6, 5, 48, -24.0, 2.5, 0],
+    [0.6, 5, 48, 24.0, 2.5, 0],
+  ],
+  props: [
+    { type: "wall", w: 10, h: 3, d: 1, x: -10, y: 1.5, z: -8 },
+    { type: "wall", w: 1, h: 3, d: 10, x: -10, y: 1.5, z: -3 },
+    { type: "wall", w: 10, h: 3, d: 1, x: 10, y: 1.5, z: -8 },
+    { type: "wall", w: 1, h: 3, d: 10, x: 10, y: 1.5, z: -3 },
+    { type: "wall", w: 8, h: 2.5, d: 1, x: -10, y: 1.25, z: 10 },
+    { type: "wall", w: 1, h: 2.5, d: 8, x: -6, y: 1.25, z: 14 },
+    { type: "wall", w: 8, h: 2.5, d: 1, x: 10, y: 1.25, z: 10 },
+    { type: "wall", w: 1, h: 2.5, d: 8, x: 6, y: 1.25, z: 14 },
+    { type: "pillar", w: 2, h: 4, d: 2, x: -16, y: 2, z: -16 },
+    { type: "pillar", w: 2, h: 4, d: 2, x: 16, y: 2, z: -16 },
+    { type: "pillar", w: 2, h: 4, d: 2, x: -16, y: 2, z: 16 },
+    { type: "pillar", w: 2, h: 4, d: 2, x: 16, y: 2, z: 16 },
+    { type: "wall", w: 12, h: 2, d: 0.7, x: 0, y: 1, z: 0 },
+    { type: "wall", w: 0.7, h: 2, d: 12, x: 0, y: 1, z: 0 },
+    { type: "pillar", w: 2.5, h: 4, d: 2.5, x: -7, y: 2, z: 5 },
+    { type: "pillar", w: 2.5, h: 4, d: 2.5, x: 7, y: 2, z: -5 },
+  ],
+  spawns: [
+    { x: -19.0, y: 1.4, z: -19.0, yaw: 0 },
+    { x: 19.0, y: 1.4, z: 19.0, yaw: 3.141592653589793 },
+    { x: -19.0, y: 1.4, z: 19.0, yaw: 1.5707963267948966 },
+    { x: 19.0, y: 1.4, z: -19.0, yaw: -1.5707963267948966 },
+  ],
+};

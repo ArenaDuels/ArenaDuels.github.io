@@ -1,0 +1,37 @@
+// Space Station: custom tactical arena layout.
+export default {
+  id: "space-station", name: "Space Station", thumb: "./assets/thumbs/space-station.png",
+  floorSize: 44, wallHeight: 5, bgColor: 0x50d1b,
+  textures: { floor: "./assets/textures/space-floor.png", wall: "./assets/textures/space-wall.png", pillar: "./assets/textures/space-wall.png" },
+  fallbackColors: { floor: 0x24374a, wall: 0x34495d, pillar: 0x34495d },
+  walls: [
+    [44, 5, 0.6, 0, 2.5, -22.0],
+    [44, 5, 0.6, 0, 2.5, 22.0],
+    [0.6, 5, 44, -22.0, 2.5, 0],
+    [0.6, 5, 44, 22.0, 2.5, 0],
+  ],
+  props: [
+    { type: "wall", w: 10, h: 3, d: 1, x: -10, y: 1.5, z: -8 },
+    { type: "wall", w: 1, h: 3, d: 10, x: -10, y: 1.5, z: -3 },
+    { type: "wall", w: 10, h: 3, d: 1, x: 10, y: 1.5, z: 8 },
+    { type: "wall", w: 1, h: 3, d: 10, x: 10, y: 1.5, z: 3 },
+    { type: "wall", w: 1, h: 3, d: 12, x: -7, y: 1.5, z: 0 },
+    { type: "wall", w: 1, h: 3, d: 12, x: 7, y: 1.5, z: 0 },
+    { type: "wall", w: 12, h: 3, d: 1, x: 0, y: 1.5, z: -7 },
+    { type: "wall", w: 12, h: 3, d: 1, x: 0, y: 1.5, z: 7 },
+    { type: "pillar", w: 2, h: 4, d: 2, x: -15, y: 2, z: -15 },
+    { type: "pillar", w: 2, h: 4, d: 2, x: 15, y: 2, z: -15 },
+    { type: "pillar", w: 2, h: 4, d: 2, x: -15, y: 2, z: 15 },
+    { type: "pillar", w: 2, h: 4, d: 2, x: 15, y: 2, z: 15 },
+    { type: "wall", w: 6, h: 2, d: 1, x: -3, y: 1, z: -3 },
+    { type: "wall", w: 6, h: 2, d: 1, x: 3, y: 1, z: 3 },
+    { type: "pillar", w: 2, h: 3, d: 2, x: -3, y: 1.5, z: 3 },
+    { type: "pillar", w: 2, h: 3, d: 2, x: 3, y: 1.5, z: -3 },
+  ],
+  spawns: [
+    { x: -17.0, y: 1.4, z: -17.0, yaw: 0 },
+    { x: 17.0, y: 1.4, z: 17.0, yaw: 3.141592653589793 },
+    { x: -17.0, y: 1.4, z: 17.0, yaw: 1.5707963267948966 },
+    { x: 17.0, y: 1.4, z: -17.0, yaw: -1.5707963267948966 },
+  ],
+};

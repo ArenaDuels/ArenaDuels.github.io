@@ -1,0 +1,37 @@
+// Snow Fortress: custom tactical arena layout.
+export default {
+  id: "snow-fortress", name: "Snow Fortress", thumb: "./assets/thumbs/snow-fortress.png",
+  floorSize: 48, wallHeight: 6, bgColor: 0x142233,
+  textures: { floor: "./assets/textures/snow-floor.png", wall: "./assets/textures/snow-wall.png", pillar: "./assets/textures/snow-wall.png" },
+  fallbackColors: { floor: 0x849bb0, wall: 0x71879c, pillar: 0x71879c },
+  walls: [
+    [48, 6, 0.6, 0, 3.0, -24.0],
+    [48, 6, 0.6, 0, 3.0, 24.0],
+    [0.6, 6, 48, -24.0, 3.0, 0],
+    [0.6, 6, 48, 24.0, 3.0, 0],
+  ],
+  props: [
+    { type: "wall", w: 10, h: 4, d: 1, x: -10, y: 2, z: -10 },
+    { type: "wall", w: 1, h: 4, d: 10, x: -15, y: 2, z: -5 },
+    { type: "wall", w: 10, h: 4, d: 1, x: -10, y: 2, z: 0 },
+    { type: "wall", w: 1, h: 4, d: 10, x: -5, y: 2, z: -5 },
+    { type: "wall", w: 10, h: 4, d: 1, x: 10, y: 2, z: 10 },
+    { type: "wall", w: 1, h: 4, d: 10, x: 15, y: 2, z: 5 },
+    { type: "wall", w: 10, h: 4, d: 1, x: 10, y: 2, z: 0 },
+    { type: "wall", w: 1, h: 4, d: 10, x: 5, y: 2, z: 5 },
+    { type: "pillar", w: 2, h: 5, d: 2, x: -17, y: 2.5, z: -17 },
+    { type: "pillar", w: 2, h: 5, d: 2, x: 17, y: 2, z: -17 },
+    { type: "pillar", w: 2, h: 5, d: 2, x: -17, y: 2.5, z: 17 },
+    { type: "pillar", w: 2, h: 5, d: 2, x: 17, y: 2.5, z: 17 },
+    { type: "wall", w: 12, h: 3, d: 1, x: 0, y: 1.5, z: -8 },
+    { type: "wall", w: 1, h: 3, d: 12, x: 0, y: 1.5, z: 8 },
+    { type: "wall", w: 8, h: 2, d: 1, x: -8, y: 1, z: 8 },
+    { type: "wall", w: 8, h: 2, d: 1, x: 8, y: 1, z: -8 },
+  ],
+  spawns: [
+    { x: -19.0, y: 1.4, z: -19.0, yaw: 0 },
+    { x: 19.0, y: 1.4, z: 19.0, yaw: 3.141592653589793 },
+    { x: -19.0, y: 1.4, z: 19.0, yaw: 1.5707963267948966 },
+    { x: 19.0, y: 1.4, z: -19.0, yaw: -1.5707963267948966 },
+  ],
+};

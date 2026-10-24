@@ -1,5 +1,4 @@
 import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
-import { applyBodyLook, buildAccessory, disposeGroup } from "./customization.js";
 
 // ===== Movement tuning — Quake-style accelerate() model =====
 // Unlike a simple "add force, clamp to max speed" model, this doesn't hard
@@ -116,7 +115,6 @@ function makeGunModel(color) {
   muzzle.position.set(0, 0.015, -0.55);
   group.add(muzzle);
 
-  group.userData.accentMat = accentMat; // so setColor()/setLook() can recolor it later
   return { group, muzzle };
 }
 
@@ -230,8 +228,6 @@ export class PlayerController {
 
     const { group: gunGroup, muzzle } = makeFirstPersonGun(color);
     camera.add(gunGroup);
-    this.gunGroup = gunGroup;
-    this.gunAccent = gunGroup.userData.accentMat;
     this.gunMuzzle = muzzle;
 
     this.vel = new THREE.Vector3();
@@ -255,13 +251,6 @@ export class PlayerController {
     this.pitch = 0;
     this.vel.set(0, 0, 0);
     this.hp = 100;
-  }
-
-  // Recolors the first-person gun's glowing parts (your own body is never
-  // visible to you, so the gun is the only thing that shows your color).
-  setColor(color) {
-    this.gunAccent.color.set(color);
-    this.gunAccent.emissive.set(color);
   }
 
   applyInput(keys, mouseFiring) {
@@ -493,34 +482,6 @@ export class RemotePlayer {
     this.targetPitch = 0;
     this.firing = false;
     this.visible = true;
-
-    this.accessory = null;
-    this.accessoryKey = "";
-  }
-
-  // Apply a player's chosen look (color / body pattern / accessory).
-  // `look.color` of null means "Auto" — use the color they were assigned.
-  setLook(look, defaultColor) {
-    const color = look.color ?? defaultColor;
-
-    applyBodyLook(this.mesh.material, color, look.pattern);
-
-    const accent = this.heldGun.userData.accentMat;
-    accent.color.set(color);
-    accent.emissive.set(color);
-    this.laser.material.color.set(color);
-
-    const key = `${look.accessory}:${color}`;
-    if (key !== this.accessoryKey) {
-      if (this.accessory) {
-        this.mesh.remove(this.accessory);
-        disposeGroup(this.accessory);
-        this.accessory = null;
-      }
-      this.accessory = buildAccessory(look.accessory, color);
-      if (this.accessory) this.mesh.add(this.accessory);
-      this.accessoryKey = key;
-    }
   }
 
   setName(name) {
@@ -561,11 +522,6 @@ export class RemotePlayer {
 
   dispose() {
     this.scene.remove(this.mesh, this.hpBar, this.nameSprite, this.laser);
-    if (this.accessory) {
-      this.mesh.remove(this.accessory);
-      disposeGroup(this.accessory);
-      this.accessory = null;
-    }
   }
 
   update(dt, camera) {

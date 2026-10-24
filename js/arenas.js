@@ -1,12 +1,11 @@
 import classic from "./arenas/classic.js";
-import pillars from "./arenas/pillars.js";
-import towers from "./arenas/towers.js";
 import mansion from "./arenas/mansion.js";
-import megaTowers from "./arenas/mega-towers.js";
+import forestTemple from "./arenas/forest-temple.js";
+import desertRuins from "./arenas/desert-ruins.js";
+import spaceStation from "./arenas/space-station.js";
+import snowFortress from "./arenas/snow-fortress.js";
+import dockyard from "./arenas/dockyard.js";
 
-export const ARENAS = { classic, pillars, towers, mansion, "mega-towers": megaTowers };
-export const ARENA_LIST = [classic, pillars, towers, mansion, megaTowers];
-
-export function getArena(id) {
-  return ARENAS[id] || ARENAS.classic;
-}
+export const ARENAS = { classic, mansion, "forest-temple": forestTemple, "desert-ruins": desertRuins, "space-station": spaceStation, "snow-fortress": snowFortress, dockyard };
+export const ARENA_LIST = [classic, mansion, forestTemple, desertRuins, spaceStation, snowFortress, dockyard];
+export function getArena(id) { return ARENAS[id] || ARENAS.classic; }
