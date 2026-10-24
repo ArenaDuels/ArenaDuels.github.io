@@ -4,7 +4,7 @@
 // and west sides give a raised firing lane (reach them by the stairs at
 // either end). Point-symmetric, so no spawn has an edge.
 
-import { block, stairs, mirror4, mirrorX, perimeter, spawnAt } from "./_helpers.js";
+import { block, stairs, mirror4, mirrorX, perimeter, spawnAt } from "./helpers.js";
 
 const T = "./assets/textures/foundry/";
 

@@ -3,7 +3,7 @@
 // where everyone starts, 2.4 up. Drop down to fight over the floor, or
 // race the stairs for the core. Light pylons and walls cut the lanes.
 
-import { block, stairs, mirror4, perimeter, spawnAt } from "./_helpers.js";
+import { block, stairs, mirror4, perimeter, spawnAt } from "./helpers.js";
 
 const T = "./assets/textures/neon/";
 

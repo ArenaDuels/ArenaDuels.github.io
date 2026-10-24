@@ -4,7 +4,7 @@
 // yard from beneath a tall obelisk. Climb the temple for the centre high
 // ground — four altar pillars up there give you something to hide behind.
 
-import { block, stairs, mirror4, perimeter, spawnAt } from "./_helpers.js";
+import { block, stairs, mirror4, perimeter, spawnAt } from "./helpers.js";
 
 const T = "./assets/textures/ruins/";
 
