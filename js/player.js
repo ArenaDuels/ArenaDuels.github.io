@@ -1,24 +1,24 @@
 import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
 import { applyBodyLook, buildAccessory, disposeGroup } from "./customization.js";
 
-// ===== Movement tuning — Quake-style accelerate() model =====
-// Unlike a simple "add force, clamp to max speed" model, this doesn't hard
-// cap your speed after movement. Ground friction keeps normal running feeling
-// controlled, but air acceleration lets you gain extra speed by strafing
-// (holding A/D or diagonal movement) while turning the mouse in the air —
-// classic Quake/CPMA-style air strafing / bunny hopping.
+// ===== Call of Duty-style movement tuning =====
+// Fast, readable ground response; modest air steering; sprint and a short slide.
 export const MOVE = {
-  GROUND_ACCEL: 14,
-  WISH_SPEED: 16,     // target speed, both ground accelerate() and air instant-redirect chase this
-  MAX_SPEED_SANITY: 45, // hard safety cap only, not a normal gameplay limit
-  FRICTION: 8,
-  GRAVITY: 35,
-  JUMP_VEL: 12,
+  GROUND_ACCEL: 34,
+  WISH_SPEED: 15.5,
+  SPRINT_SPEED: 19,
+  AIR_ACCEL: 5.0,
+  AIR_WISH_SPEED: 12.5,
+  MAX_SPEED_SANITY: 23,
+  FRICTION: 9.5,
+  SLIDE_FRICTION: 2.0,
+  SLIDE_START_SPEED: 9.5,
+  SLIDE_BOOST: 1.12,
+  SLIDE_DURATION: 0.72,
+  SLIDE_COOLDOWN: 0.18,
+  GRAVITY: 32,
+  JUMP_VEL: 12.2,
   RADIUS: 0.5,
-  // The capsule (CapsuleGeometry(0.5, 1.2, ...)) is 2.2 units tall total
-  // and centered on its own position, so its "head" top is 1.1 above
-  // center. This puts the camera right around eye level on that head,
-  // not floating above it.
   EYE_HEIGHT: 1.0,
 };
 
@@ -243,6 +243,11 @@ export class PlayerController {
 
     this.hp = 100;
     this.firing = false;
+    this.sprinting = false;
+    this.slideHeld = false;
+    this.sliding = false;
+    this.slideTimer = 0;
+    this.slideCooldown = 0;
 
     this.prevPos = this.mesh.position.clone();
   }
@@ -255,6 +260,9 @@ export class PlayerController {
     this.pitch = 0;
     this.vel.set(0, 0, 0);
     this.hp = 100;
+    this.sliding = false;
+    this.slideTimer = 0;
+    this.slideCooldown = 0;
   }
 
   // Recolors the first-person gun's glowing parts (your own body is never
@@ -271,6 +279,8 @@ export class PlayerController {
     if (keys.KeyA) this.wish.x -= 1;
     if (keys.KeyD) this.wish.x += 1;
     this.firing = !!mouseFiring;
+    this.sprinting = !!keys.ShiftLeft || !!keys.ShiftRight;
+    this.slideHeld = !!keys.ControlLeft || !!keys.ControlRight || !!keys.KeyC;
   }
 
   #friction(dt) {
@@ -391,32 +401,52 @@ export class PlayerController {
       wishDir.normalize().applyAxisAngle(UP_AXIS, this.yaw);
     }
 
-    if (this.onGround) {
-      this.#friction(dt);
-      if (hasInput) this.#accelerate(wishDir, MOVE.WISH_SPEED, MOVE.GROUND_ACCEL, dt);
-    } else if (hasInput) {
-      // Full air control: snap horizontal velocity directly toward the
-      // wish direction rather than only adding speed along it. This is
-      // what makes direction changes feel instant instead of "sliding"
-      // in your old direction — the classic Quake air-accelerate formula
-      // only adds speed, it never removes your existing momentum, so
-      // reversing direction takes a while to fight through the old
-      // velocity. If you release all movement keys mid-air, your
-      // momentum still carries through untouched — this only kicks in
-      // while you're actively holding a direction.
-      this.vel.x = wishDir.x * MOVE.WISH_SPEED;
-      this.vel.z = wishDir.z * MOVE.WISH_SPEED;
+    this.slideCooldown = Math.max(0, this.slideCooldown - dt);
+    if (this.sliding) {
+      this.slideTimer -= dt;
+      if (!this.slideHeld || this.slideTimer <= 0 || !this.onGround) {
+        this.sliding = false;
+        this.slideCooldown = MOVE.SLIDE_COOLDOWN;
+      }
     }
 
-    // Safety cap only — not meant to be reachable in normal play, just
-    // guards against runaway numbers rather than limiting strafe-jump gain.
+    const horizontalSpeed = Math.hypot(this.vel.x, this.vel.z);
+    // A slide starts from a sprint or fast run, and carries the player's
+    // current direction rather than snapping toward the camera direction.
+    if (this.onGround && this.slideHeld && !this.sliding && this.slideCooldown <= 0 && horizontalSpeed >= MOVE.SLIDE_START_SPEED) {
+      this.sliding = true;
+      this.slideTimer = MOVE.SLIDE_DURATION;
+      this.vel.x *= MOVE.SLIDE_BOOST;
+      this.vel.z *= MOVE.SLIDE_BOOST;
+    }
+
+    if (this.onGround) {
+      if (this.sliding) {
+        // Preserve slide momentum, with only gentle steering while crouched.
+        this.vel.x *= Math.max(0, 1 - MOVE.SLIDE_FRICTION * dt);
+        this.vel.z *= Math.max(0, 1 - MOVE.SLIDE_FRICTION * dt);
+        if (hasInput) this.#accelerate(wishDir, MOVE.WISH_SPEED * 0.35, MOVE.GROUND_ACCEL * 0.22, dt);
+      } else {
+        this.#friction(dt);
+        const targetSpeed = this.sprinting ? MOVE.SPRINT_SPEED : MOVE.WISH_SPEED;
+        if (hasInput) this.#accelerate(wishDir, targetSpeed, MOVE.GROUND_ACCEL, dt);
+      }
+    } else if (hasInput) {
+      // Limited air steering: mid-air correction without Quake-style speed gain.
+      this.#accelerate(wishDir, MOVE.AIR_WISH_SPEED, MOVE.AIR_ACCEL, dt);
+    }
+
+    // Competitive movement should have a predictable top speed.
     const spd = Math.hypot(this.vel.x, this.vel.z);
-    if (spd > MOVE.MAX_SPEED_SANITY) {
-      this.vel.x *= MOVE.MAX_SPEED_SANITY / spd;
-      this.vel.z *= MOVE.MAX_SPEED_SANITY / spd;
+    const speedCap = this.sliding ? MOVE.MAX_SPEED_SANITY : (this.sprinting ? MOVE.SPRINT_SPEED : MOVE.WISH_SPEED);
+    if (spd > speedCap) {
+      this.vel.x *= speedCap / spd;
+      this.vel.z *= speedCap / spd;
     }
 
     if (this.onGround && jumpPressed) {
+      this.sliding = false;
+      this.slideCooldown = MOVE.SLIDE_COOLDOWN;
       this.vel.y = MOVE.JUMP_VEL;
       this.onGround = false;
     }
