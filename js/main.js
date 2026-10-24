@@ -760,7 +760,8 @@ addEventListener("resize", () => {
   renderer.setSize(innerWidth, innerHeight);
 });
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+scene.add(ambientLight);
 const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
 dirLight.position.set(5, 10, 5);
 dirLight.castShadow = true;
@@ -970,12 +971,155 @@ let matchActive = false;
 let mySpawn;
 let myKills = 0, myDeaths = 0;
 
+// Puts lights/fog back to the original look — classic and mansion rely on
+// it, and every newer map restyles from this baseline.
+function resetEnvironment() {
+  scene.fog = null;
+  ambientLight.color.set(0xffffff);
+  ambientLight.intensity = 0.4;
+  dirLight.color.set(0xffffff);
+  dirLight.intensity = 0.8;
+  dirLight.position.set(5, 10, 5);
+  const c = dirLight.shadow.camera;
+  c.left = -20; c.right = 20; c.top = 20; c.bottom = -20; c.near = 0.5; c.far = 40;
+  c.updateProjectionMatrix();
+  if (dirLight.shadow.mapSize.x !== 1024) {
+    dirLight.shadow.mapSize.set(1024, 1024);
+    dirLight.shadow.map?.dispose();
+    dirLight.shadow.map = null;
+  }
+}
+
+/* ---- "modern" arenas (arena.modern): textures tile by real-world size
+   instead of stretching per face, plus per-map lighting/fog, bump maps and
+   glowing surfaces. Classic and Mansion keep the original builder below. ---- */
+const modernTextureCache = new Map();
+
+function loadModernTexture(url, isColor) {
+  if (!url) return Promise.resolve(null);
+  const key = url + (isColor ? "#c" : "#d");
+  if (modernTextureCache.has(key)) return modernTextureCache.get(key);
+  const p = new Promise((resolve) => {
+    textureLoader.load(
+      url,
+      (tex) => {
+        tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+        tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+        if (isColor) tex.colorSpace = THREE.SRGBColorSpace;
+        resolve(tex);
+      },
+      undefined,
+      () => resolve(null)
+    );
+  });
+  modernTextureCache.set(key, p);
+  return p;
+}
+
+// A box whose UVs follow its real size, so a texture's scale is the same on
+// every face of every block (tileSize = world units per texture repeat).
+function makeBoxGeometry(w, h, d, tileSize) {
+  const g = new THREE.BoxGeometry(w, h, d);
+  const uv = g.attributes.uv;
+  // BoxGeometry face order: +x, -x, +y, -y, +z, -z (4 vertices each)
+  const faceSize = [[d, h], [d, h], [w, d], [w, d], [w, h], [w, h]];
+  for (let f = 0; f < 6; f++) {
+    for (let i = 0; i < 4; i++) {
+      const k = f * 4 + i;
+      uv.setXY(k, (uv.getX(k) * faceSize[f][0]) / tileSize, (uv.getY(k) * faceSize[f][1]) / tileSize);
+    }
+  }
+  uv.needsUpdate = true;
+  return g;
+}
+
+async function buildModernArena(arena) {
+  const tileFor = (type) => arena.tile?.[type] ?? arena.tile?.default ?? 4;
+
+  // lighting + fog
+  const env = arena.environment ?? {};
+  if (env.fog) scene.fog = new THREE.Fog(env.fog[0], env.fog[1], env.fog[2]);
+  if (env.ambient) {
+    ambientLight.color.set(env.ambient[0]);
+    ambientLight.intensity = env.ambient[1];
+  }
+  if (env.sun) {
+    dirLight.color.set(env.sun.color);
+    dirLight.intensity = env.sun.intensity;
+    dirLight.position.set(...env.sun.position);
+  }
+  // Fit the shadow box to the map (the default only covers a 40x40 area).
+  const half = arena.floorSize / 2 + 2;
+  const sc = dirLight.shadow.camera;
+  sc.left = -half; sc.right = half; sc.top = half; sc.bottom = -half; sc.near = 1; sc.far = 220;
+  sc.updateProjectionMatrix();
+  dirLight.shadow.mapSize.set(2048, 2048);
+  dirLight.shadow.map?.dispose();
+  dirLight.shadow.map = null;
+
+  // one material per surface type, shared by every block of that type
+  const types = new Set(["floor", "wall", ...(arena.props ?? []).map((p) => p.type)]);
+  const materials = {};
+  await Promise.all(
+    [...types].map(async (type) => {
+      const [albedo, bump] = await Promise.all([
+        loadModernTexture(arena.textures?.[type], true),
+        loadModernTexture(arena.bump?.[type], false),
+      ]);
+      const opts = arena.material?.[type] ?? {};
+      const mat = new THREE.MeshStandardMaterial({
+        map: albedo,
+        color: albedo ? 0xffffff : arena.fallbackColors?.[type] ?? 0x444444,
+        bumpMap: bump,
+        bumpScale: arena.bumpScale ?? 1,
+        roughness: opts.roughness ?? 0.85,
+        metalness: opts.metalness ?? 0.1,
+      });
+      const glow = arena.glow?.[type];
+      if (glow && albedo) {
+        mat.emissive = new THREE.Color(0xffffff);
+        mat.emissiveMap = albedo;
+        mat.emissiveIntensity = glow;
+      }
+      materials[type] = mat;
+    })
+  );
+
+  const addBox = (type, w, h, d, x, y, z) => {
+    const mesh = new THREE.Mesh(makeBoxGeometry(w, h, d, tileFor(type)), materials[type]);
+    mesh.position.set(x, y, z);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    scene.add(mesh);
+    arenaObjects.push(mesh);
+    wallBoxes.push(new THREE.Box3().setFromObject(mesh));
+  };
+
+  const floorGeo = new THREE.PlaneGeometry(arena.floorSize, arena.floorSize);
+  const floorUv = floorGeo.attributes.uv;
+  const floorTiles = arena.floorSize / tileFor("floor");
+  for (let i = 0; i < floorUv.count; i++) floorUv.setXY(i, floorUv.getX(i) * floorTiles, floorUv.getY(i) * floorTiles);
+  floorMesh = new THREE.Mesh(floorGeo, materials.floor);
+  floorMesh.rotation.x = -Math.PI / 2;
+  floorMesh.receiveShadow = true;
+  scene.add(floorMesh);
+  arenaObjects.push(floorMesh);
+
+  for (const [w, h, d, x, y, z] of arena.walls) addBox("wall", w, h, d, x, y, z);
+  for (const p of arena.props ?? []) addBox(p.type, p.w, p.h, p.d, p.x, p.y, p.z);
+}
+
 async function buildArena(arena) {
-  for (const obj of arenaObjects) scene.remove(obj);
+  for (const obj of arenaObjects) {
+    scene.remove(obj);
+    obj.geometry?.dispose(); // modern arenas build per-block geometry
+  }
   arenaObjects = [];
   wallBoxes = [];
 
+  resetEnvironment();
   scene.background = new THREE.Color(arena.bgColor ?? 0x0a0a0d);
+  if (arena.modern) return buildModernArena(arena);
 
   const [floorTex, wallTex] = await Promise.all([
     loadTextureSafe(arena.textures?.floor),

@@ -1,11 +1,11 @@
 import classic from "./arenas/classic.js";
-import pillars from "./arenas/pillars.js";
-import towers from "./arenas/towers.js";
+import foundry from "./arenas/foundry.js";
+import ruins from "./arenas/ruins.js";
+import neon from "./arenas/neon.js";
 import mansion from "./arenas/mansion.js";
-import megaTowers from "./arenas/mega-towers.js";
 
-export const ARENAS = { classic, pillars, towers, mansion, "mega-towers": megaTowers };
-export const ARENA_LIST = [classic, pillars, towers, mansion, megaTowers];
+export const ARENAS = { classic, foundry, ruins, neon, mansion };
+export const ARENA_LIST = [classic, foundry, ruins, neon, mansion];
 
 export function getArena(id) {
   return ARENAS[id] || ARENAS.classic;
