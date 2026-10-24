@@ -421,6 +421,16 @@ html, body {
   box-shadow: 0 0 12px rgba(57, 255, 136, 0.4);
 }
 
+.look-preview {
+  display: block;
+  width: 160px;
+  height: 160px;
+  margin: 0 auto 22px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(26, 26, 32, 0.6);
+}
+
 /* ===== Arena picker ===== */
 .arena-grid {
   display: grid;

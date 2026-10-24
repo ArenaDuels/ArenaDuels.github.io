@@ -4,6 +4,8 @@ import { PlayerController, RemotePlayer, makeLaserMesh, aimLaser } from "./playe
 import { Net } from "./net.js";
 import { randomName } from "./names.js";
 import { BotManager, BOT_SKILLS } from "./bots.js";
+import { COLORS, PATTERNS, ACCESSORIES, loadLook, saveLook, sanitizeLook } from "./customization.js";
+import { createLookPreview } from "./look-preview.js";
 
 /* =========================================================
    SETTINGS — persisted to localStorage. Sensitivity uses the same
@@ -50,6 +52,7 @@ function applyCrosshairSize() {
 }
 
 const settingsModal = document.getElementById("settings-modal");
+const customizationModal = document.getElementById("customization-modal");
 const sensSlider = document.getElementById("sens-slider");
 const sensValue = document.getElementById("sens-value");
 const controllerMode = document.getElementById("controller-mode");
@@ -107,6 +110,7 @@ function resumeMatch() {
   paused = false;
   pauseMenu.classList.add("hidden");
   settingsModal.classList.add("hidden");
+  hideCustomization();
   lockPointer();
 }
 function leaveMatch() {
@@ -114,6 +118,7 @@ function leaveMatch() {
   paused = false;
   pauseMenu.classList.add("hidden");
   settingsModal.classList.add("hidden");
+  hideCustomization();
   document.exitPointerLock();
   net.destroy();
   botManager?.dispose();
@@ -320,7 +325,7 @@ net.onPeerConnected = async (id) => {
     await beginMatch(selectedArenaId);
   }
   addOrUpdatePlayer(id, "Player");
-  net.broadcast({ t: "hello", name: myName });
+  net.broadcast({ t: "hello", name: myName, look: myLook });
   hideRoomCodeBanner();
 };
 
@@ -334,7 +339,8 @@ net.onPeerDisconnected = (id) => {
 
 function handleData(msg, fromId) {
   if (msg.t === "hello") {
-    addOrUpdatePlayer(fromId, msg.name);
+    // Older clients send no look — sanitizeLook turns that into the default.
+    addOrUpdatePlayer(fromId, msg.name).setLook(sanitizeLook(msg.look), colorForId(fromId));
   } else if (msg.t === "state") {
     addOrUpdatePlayer(fromId).applyNetState(msg);
   } else if (msg.t === "hit") {
@@ -452,6 +458,112 @@ document.getElementById("btn-cancel-host").addEventListener("click", () => {
   showScreen("menu");
 });
 
+/* ---- PLAYER CUSTOMIZATION ---- */
+let myLook = loadLook();
+let lookPreview = null;
+const colorPicker = document.getElementById("color-picker");
+const patternPicker = document.getElementById("pattern-picker");
+const accessoryPicker = document.getElementById("accessory-picker");
+const colorKey = (c) => (c === null ? "auto" : String(c));
+
+function buildLookPickers() {
+  const tile = (cls, text, title, onClick) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = cls;
+    b.textContent = text;
+    b.title = title;
+    b.addEventListener("click", onClick);
+    return b;
+  };
+
+  for (const c of COLORS) {
+    const b = tile("color-option", "", "", () => setMyLook({ color: c }));
+    b.dataset.key = colorKey(c);
+    b.style.background = "#" + c.toString(16).padStart(6, "0");
+    colorPicker.appendChild(b);
+  }
+  const auto = tile("color-option", "🎲", "Auto — the color you're given in a match", () => setMyLook({ color: null }));
+  auto.dataset.key = "auto";
+  colorPicker.appendChild(auto);
+
+  for (const p of PATTERNS) {
+    const b = tile("pattern-option", p.icon, p.label, () => setMyLook({ pattern: p.id }));
+    b.dataset.key = p.id;
+    patternPicker.appendChild(b);
+  }
+  for (const a of ACCESSORIES) {
+    const b = tile("accessory-option", a.icon, a.label, () => setMyLook({ accessory: a.id }));
+    b.dataset.key = a.id;
+    accessoryPicker.appendChild(b);
+  }
+  refreshLookPickers();
+}
+
+function refreshLookPickers() {
+  const mark = (picker, key) =>
+    picker.querySelectorAll("button").forEach((el) => el.classList.toggle("selected", el.dataset.key === key));
+  mark(colorPicker, colorKey(myLook.color));
+  mark(patternPicker, myLook.pattern);
+  mark(accessoryPicker, myLook.accessory);
+}
+
+// The color you actually show up as: your pick, or the assigned one for Auto.
+function myColor() {
+  return myLook.color ?? colorForId(myId);
+}
+
+// Your own body is never visible to you, so locally this only recolors the
+// gun and beam. Everyone else sees the full look (sent in "hello").
+function applyLocalLook() {
+  if (!local) return;
+  local.setColor(myColor());
+  if (laser) laser.material.color.set(myColor());
+}
+
+function updateLookPreview() {
+  lookPreview?.setLook(myLook, matchActive && myId ? colorForId(myId) : 0xffffff);
+}
+
+function setMyLook(patch) {
+  myLook = { ...myLook, ...patch };
+  saveLook(myLook);
+  refreshLookPickers();
+  updateLookPreview();
+  applyLocalLook();
+  if (matchActive) net.broadcast({ t: "hello", name: myName, look: myLook });
+}
+
+function openCustomization() {
+  settingsModal.classList.add("hidden");
+  customizationModal.classList.remove("hidden");
+  if (!lookPreview) {
+    try {
+      lookPreview = createLookPreview(document.getElementById("look-preview"));
+    } catch {
+      document.getElementById("look-preview").classList.add("hidden"); // no WebGL — skip the preview
+    }
+  }
+  updateLookPreview();
+  lookPreview?.start();
+}
+
+// Hides the menu without returning to Settings (used when a match starts/ends).
+function hideCustomization() {
+  customizationModal.classList.add("hidden");
+  lookPreview?.stop();
+}
+
+function closeCustomization() {
+  hideCustomization();
+  refreshSettingsUI();
+  settingsModal.classList.remove("hidden");
+}
+
+buildLookPickers();
+document.getElementById("btn-customization-open").addEventListener("click", openCustomization);
+document.getElementById("btn-customization-close").addEventListener("click", closeCustomization);
+
 /* ---- PRIVATE MATCH SETTINGS (bots) ---- */
 const matchSettings = { botCount: 0, botSkill: 2 };
 const matchSettingsModal = document.getElementById("match-settings-modal");
@@ -540,7 +652,7 @@ async function doJoin(code, statusEl) {
 
     await beginMatch(result.arenaId);
     for (const id of result.peers) addOrUpdatePlayer(id, "Player");
-    net.broadcast({ t: "hello", name: myName });
+    net.broadcast({ t: "hello", name: myName, look: myLook });
   } catch (err) {
     clearTimeout(wakeupTimer);
     if (statusEl) {
@@ -923,13 +1035,17 @@ async function beginMatch(arenaId) {
 
   mySpawn = spawnForId(myId, currentArena);
 
-  if (local) scene.remove(local.mesh, local.viewRoot);
+  if (local) {
+    scene.remove(local.mesh, local.viewRoot);
+    camera.remove(local.gunGroup); // otherwise every new match stacks another gun on the camera
+  }
   local = new PlayerController(scene, camera, colorForId(myId));
   local.spawn(mySpawn);
 
   if (laser) scene.remove(laser);
   laser = makeLaserMesh(colorForId(myId));
   scene.add(laser);
+  applyLocalLook();
 
   myKills = 0;
   myDeaths = 0;
@@ -1038,7 +1154,7 @@ function pollController(dt) {
   const rx = deadzone(pad.axes[2] || 0), ry = deadzone(pad.axes[3] || 0);
   const lookSpeed = settings.controllerSensitivity * 2.2 * dt;
   local.yaw -= rx * lookSpeed;
-  local.pitch += ry * lookSpeed;
+  local.pitch -= ry * lookSpeed; // stick up (negative) = look up, same as moving the mouse up
   local.pitch = Math.max(-1.4, Math.min(1.4, local.pitch));
   const startDown = !!(pad.buttons[9] && pad.buttons[9].pressed);
   if (startDown && !controllerStartWasDown) openPauseMenu();
