@@ -10,6 +10,9 @@ const T = "./assets/textures/neon/";
 export default {
   id: "neon",
   name: "Neon Grid",
+  tagline: "Night-time data arena",
+  description: "Everyone starts on a raised pad around a tall glowing core tower. Drop down to fight over the floor, or race the stairs for the high ground.",
+  tags: ["44×44", "Vertical", "Night"],
   thumb: "./assets/thumbs/neon.png",
   modern: true,
   floorSize: 44,

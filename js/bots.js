@@ -29,7 +29,7 @@ export const BOT_SKILLS = {
 };
 
 const EYE = MOVE.EYE_HEIGHT;
-const RESPAWN_DELAY = 2.5; // seconds
+const DEFAULT_RESPAWN_DELAY = 2.5; // seconds (the match setting overrides it)
 const TWO_PI = Math.PI * 2;
 
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -479,7 +479,12 @@ export class BotManager {
     const hit = this.ray.intersectObjects(objs, false)[0];
     if (!hit) return;
     const e = this.meshToEnemy.get(hit.object);
-    if (e) this.damage(e.id, bot.id, bot.s.dps * dt);
+    if (e) {
+      const dealt = bot.s.dps * dt;
+      this.damage(e.id, bot.id, dealt);
+      const steal = this.ctx.getHealthSteal?.() ?? 0;
+      if (steal > 0 && bot.alive) bot.hp = Math.min(this.ctx.getMaxHp?.() ?? 100, bot.hp + (dealt * steal) / 100);
+    }
   }
 
   // Single entry point for "something took damage" — routes to a bot, the
@@ -503,11 +508,11 @@ export class BotManager {
     bot.alive = false;
     bot.firing = false;
     bot.deaths++;
-    bot.respawnAt = this.clock + RESPAWN_DELAY;
+    bot.respawnAt = this.clock + (this.ctx.getRespawnDelay?.() ?? DEFAULT_RESPAWN_DELAY);
 
     const killer = this.bots.get(attackerId);
     if (killer) killer.kills++;
-    else this.ctx.onBotKilled(attackerId);
+    this.ctx.onBotKilled(attackerId, bot.id); // the match scoreboard hears about every kill
 
     this.syncVisual(bot);
   }
@@ -536,10 +541,21 @@ export class BotManager {
     bot.pitch = 0;
     bot.prevPos.copy(bot.pos);
     bot.prevYaw = bot.yaw;
-    bot.hp = 100;
+    bot.hp = this.ctx.getMaxHp?.() ?? 100;
     bot.alive = true;
     bot.onGround = true;
     bot.resetAI();
+  }
+
+  /** New round: everyone back to full health at a fresh spawn. */
+  reset() {
+    this.refreshEnemies();
+    for (const bot of this.bots.values()) {
+      bot.kills = 0;
+      bot.deaths = 0;
+      this.respawn(bot);
+      this.syncVisual(bot);
+    }
   }
 
   /* ---------- per-step update + network sync ---------- */

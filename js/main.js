@@ -1,10 +1,11 @@
 import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
 import { ARENA_LIST, getArena } from "./arenas.js";
-import { PlayerController, RemotePlayer, makeLaserMesh, aimLaser } from "./player.js";
+import { PlayerController, RemotePlayer, makeLaserMesh, aimLaser, GAME } from "./player.js";
 import { Net } from "./net.js";
 import { randomName } from "./names.js";
 import { BotManager, BOT_SKILLS } from "./bots.js";
 import { COLORS, PATTERNS, ACCESSORIES, loadLook, saveLook, sanitizeLook } from "./customization.js";
+import { MatchState, DEFAULT_SETTINGS as DEFAULT_MATCH_RULES, sanitizeSettings } from "./match.js";
 import { createLookPreview } from "./look-preview.js";
 
 /* =========================================================
@@ -98,7 +99,7 @@ function closeSettings() {
 }
 
 function openPauseMenu() {
-  if (!matchActive) return;
+  if (!matchActive || match.over) return;
   paused = true;
   document.exitPointerLock();
   for (const k in keys) keys[k] = false;
@@ -126,12 +127,15 @@ function leaveMatch() {
   pendingHostStart = null;
   players.forEach((rp) => rp.dispose());
   players.clear();
+  resetMatchUi();
   hideRoomCodeBanner();
   clearScorchMarks();
   showScreen("menu");
 }
 
 document.getElementById("btn-settings").addEventListener("click", openSettingsFromMenu);
+document.getElementById("btn-rematch").addEventListener("click", restartMatchAsHost);
+document.getElementById("btn-scoreboard-close").addEventListener("click", leaveMatch);
 document.getElementById("btn-settings-close").addEventListener("click", closeSettings);
 document.getElementById("btn-resume").addEventListener("click", resumeMatch);
 document.getElementById("btn-pause-settings").addEventListener("click", () => {
@@ -216,6 +220,7 @@ function showScreen(name) {
   hud.classList.add("hidden");
   hudHpCorner.classList.add("hidden");
   crosshair.classList.add("hidden");
+  killFeedEl.classList.add("hidden");
   stopLobbyPolling();
 }
 function showGame() {
@@ -224,6 +229,7 @@ function showGame() {
   hud.classList.remove("hidden");
   hudHpCorner.classList.remove("hidden");
   crosshair.classList.remove("hidden");
+  killFeedEl.classList.remove("hidden");
   stopLobbyPolling();
 }
 
@@ -248,6 +254,34 @@ function getPlayerName() {
 const arenaGrid = document.getElementById("arena-grid");
 let selectedArenaId = ARENA_LIST[0].id;
 
+const arenaDetail = document.getElementById("arena-detail");
+
+// The big preview above the card row — shows the highlighted arena.
+function renderArenaDetail(arena) {
+  arenaDetail.style.backgroundImage = `url('${arena.thumb}')`;
+  const badge = document.createElement("span");
+  badge.className = "feature-badge";
+  badge.textContent = "Selected";
+  const body = document.createElement("div");
+  body.className = "feature-body";
+  const name = document.createElement("h3");
+  name.className = "feature-name";
+  name.textContent = arena.name;
+  const desc = document.createElement("p");
+  desc.className = "feature-desc";
+  desc.textContent = arena.description ?? arena.tagline ?? "";
+  const tags = document.createElement("div");
+  tags.className = "feature-tags";
+  for (const t of arena.tags ?? []) {
+    const chip = document.createElement("span");
+    chip.className = "tag-chip";
+    chip.textContent = t;
+    tags.appendChild(chip);
+  }
+  body.append(name, desc, tags);
+  arenaDetail.replaceChildren(badge, body);
+}
+
 for (const arena of ARENA_LIST) {
   const card = document.createElement("button");
   card.className = "arena-card";
@@ -260,10 +294,12 @@ for (const arena of ARENA_LIST) {
     selectedArenaId = arena.id;
     document.querySelectorAll(".arena-card").forEach((c) => c.classList.remove("selected"));
     card.classList.add("selected");
+    renderArenaDetail(arena);
   });
   arenaGrid.appendChild(card);
 }
 arenaGrid.firstElementChild.classList.add("selected");
+renderArenaDetail(ARENA_LIST[0]);
 
 /* =========================================================
    PUBLIC / PRIVATE TOGGLE
@@ -326,6 +362,7 @@ net.onPeerConnected = async (id) => {
   }
   addOrUpdatePlayer(id, "Player");
   net.broadcast({ t: "hello", name: myName, look: myLook });
+  if (net.isHost) net.broadcast({ t: "sync", forId: id, settings: match.settings, snap: match.snapshot() });
   hideRoomCodeBanner();
 };
 
@@ -351,11 +388,32 @@ function handleData(msg, fromId) {
     }
     if (msg.targetId !== myId) return;
     applyDamageToLocal(msg.attackerId, msg.damage);
-  } else if (msg.t === "died") {
-    if (botManager) botManager.creditKill(msg.attackerId); // a bot killed a remote player
-    if (msg.attackerId !== myId) return;
-    myKills++;
-    updateScoreHud();
+  } else if (msg.t === "kill") {
+    // A player reports their own death; the host reports bot deaths.
+    const ok =
+      typeof msg.attackerId === "string" &&
+      typeof msg.victimId === "string" &&
+      (msg.victimId === fromId || (fromId === hostId && msg.victimId.startsWith("bot-")));
+    if (ok) applyKill(msg.attackerId, msg.victimId);
+  } else if (msg.t === "end") {
+    if (fromId !== hostId || match.over) return;
+    match.load(msg.snap);
+    match.finish(msg.reason);
+    showResults();
+  } else if (msg.t === "restart") {
+    if (fromId !== hostId) return;
+    applyMatchSettings(sanitizeSettings(msg.settings));
+    beginRound();
+  } else if (msg.t === "sync") {
+    // Host -> the player who just joined: rules, clock and the scores so far.
+    if (fromId !== hostId || msg.forId !== myId) return;
+    applyMatchSettings(sanitizeSettings(msg.settings));
+    match.load(msg.snap);
+    if (local && local.hp > 0) local.hp = GAME.maxHp;
+    refreshHud(true);
+    if (match.over) showResults();
+  } else if (msg.t === "clock") {
+    if (fromId === hostId && Number.isFinite(msg.remaining)) match.setRemaining(msg.remaining);
   } else if (msg.t === "bots") {
     // Host-simulated bots: show them like any other remote player.
     for (const b of msg.bots) {
@@ -366,15 +424,10 @@ function handleData(msg, fromId) {
 }
 
 function applyDamageToLocal(attackerId, damage, echoState = true) {
+  if (match.over || local.hp <= 0) return; // nothing to hurt: already down, or the match is over
   const died = local.takeDamage(damage);
-  if (died) {
-    myDeaths++;
-    updateScoreHud();
-    local.spawn(mySpawn);
-    net.broadcast({ t: "died", attackerId });
-    if (botManager) botManager.creditKill(attackerId);
-  }
   if (echoState || died) net.broadcast({ t: "state", id: myId, ...local.getNetState() });
+  if (died) onLocalDeath(attackerId);
 }
 
 function handleServerLost() {
@@ -386,6 +439,7 @@ function handleServerLost() {
   botManager?.dispose();
   botManager = null;
   pendingHostStart = null;
+  resetMatchUi();
   showScreen("menu");
 }
 
@@ -417,6 +471,8 @@ async function attemptHost() {
       // Public lobbies drop straight into the arena — the room code follows
       // as an in-game banner until someone joins.
       matchStarting = true;
+      match.scores.clear();
+      applyMatchSettings(DEFAULT_MATCH_RULES);
       await beginMatch(selectedArenaId);
       showRoomCodeBanner(code);
     } else {
@@ -565,7 +621,7 @@ document.getElementById("btn-customization-open").addEventListener("click", open
 document.getElementById("btn-customization-close").addEventListener("click", closeCustomization);
 
 /* ---- PRIVATE MATCH SETTINGS (bots) ---- */
-const matchSettings = { botCount: 0, botSkill: 2 };
+const matchSettings = { botCount: 0, botSkill: 2, ...DEFAULT_MATCH_RULES };
 const matchSettingsModal = document.getElementById("match-settings-modal");
 const botCountSlider = document.getElementById("bot-count-slider");
 const botCountValue = document.getElementById("bot-count-value");
@@ -580,6 +636,25 @@ botSkillSlider.addEventListener("input", () => {
   matchSettings.botSkill = parseInt(botSkillSlider.value, 10);
   botSkillValue.textContent = BOT_SKILLS[matchSettings.botSkill].label;
 });
+
+// Time/score limits, health, health steal and respawn delay (0 = "Off"/"Instant" where it makes sense).
+const RULE_SLIDERS = [
+  ["time-limit", "timeLimit", (v) => (v === 0 ? "Off" : v)],
+  ["score-limit", "scoreLimit", (v) => (v === 0 ? "Off" : v)],
+  ["starting-health", "startingHealth", (v) => v],
+  ["health-steal", "healthSteal", (v) => v],
+  ["respawn-delay", "respawnDelay", (v) => (v === 0 ? "Instant" : v)],
+];
+for (const [base, key, fmt] of RULE_SLIDERS) {
+  const slider = document.getElementById(`${base}-slider`);
+  const label = document.getElementById(`${base}-value`);
+  slider.value = matchSettings[key];
+  label.textContent = fmt(matchSettings[key]);
+  slider.addEventListener("input", () => {
+    matchSettings[key] = parseFloat(slider.value);
+    label.textContent = fmt(matchSettings[key]);
+  });
+}
 
 document.getElementById("btn-match-settings-open").addEventListener("click", () => {
   matchSettingsModal.classList.remove("hidden");
@@ -597,6 +672,8 @@ async function startPendingHost() {
   matchSettingsModal.classList.add("hidden");
   document.getElementById("btn-start-host").classList.add("hidden");
   matchStarting = true;
+  match.scores.clear();
+  applyMatchSettings(matchSettings);
   await beginMatch(selectedArenaId);
   startBots();
   showRoomCodeBanner(code);
@@ -620,15 +697,11 @@ function startBots() {
     // A bot hit a remote human — they apply it on their end like any other hit.
     sendHit: (targetId, attackerId, amount) =>
       net.broadcast({ t: "hit", targetId, attackerId, damage: amount }),
-    // A bot died; credit whoever killed it (a remote human credits themselves).
-    onBotKilled: (attackerId) => {
-      if (attackerId === myId) {
-        myKills++;
-        updateScoreHud();
-      } else {
-        net.broadcast({ t: "died", attackerId });
-      }
-    },
+    // A bot died — tell everyone so the scoreboard and kill feed stay in step.
+    onBotKilled: (attackerId, victimId) => announceKill(attackerId, victimId),
+    getMaxHp: () => GAME.maxHp,
+    getHealthSteal: () => match.settings.healthSteal,
+    getRespawnDelay: () => match.settings.respawnDelay,
   });
   botManager.spawnBots(matchSettings.botCount, matchSettings.botSkill);
 }
@@ -650,6 +723,8 @@ async function doJoin(code, statusEl) {
     myId = net.myId;
     myName = getPlayerName();
 
+    match.scores.clear();
+    applyMatchSettings(DEFAULT_MATCH_RULES); // replaced by the host's rules a moment later ("sync")
     await beginMatch(result.arenaId);
     for (const id of result.peers) addOrUpdatePlayer(id, "Player");
     net.broadcast({ t: "hello", name: myName, look: myLook });
@@ -969,7 +1044,6 @@ function clearScorchMarks() {
 }
 let matchActive = false;
 let mySpawn;
-let myKills = 0, myDeaths = 0;
 
 // Puts lights/fog back to the original look — classic and mansion rely on
 // it, and every newer map restyles from this baseline.
@@ -1058,7 +1132,11 @@ async function buildModernArena(arena) {
   dirLight.shadow.map = null;
 
   // one material per surface type, shared by every block of that type
-  const types = new Set(["floor", "wall", ...(arena.props ?? []).map((p) => p.type)]);
+  const types = new Set([
+    "floor", "wall",
+    ...(arena.props ?? []).map((p) => p.type),
+    ...(arena.floors ?? []).map((f) => f.type),
+  ]);
   const materials = {};
   await Promise.all(
     [...types].map(async (type) => {
@@ -1104,6 +1182,25 @@ async function buildModernArena(arena) {
   floorMesh.receiveShadow = true;
   scene.add(floorMesh);
   arenaObjects.push(floorMesh);
+
+  // Flat surface patches laid over the base floor (marble inside a house,
+  // lawns, carpet runners...). Purely visual — they have no collision.
+  for (const f of arena.floors ?? []) {
+    const tile = tileFor(f.type);
+    const geo = new THREE.PlaneGeometry(f.w, f.d);
+    const uv = geo.attributes.uv;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) * f.w) / tile, (uv.getY(i) * f.d) / tile);
+    const mat = materials[f.type];
+    mat.polygonOffset = true;
+    mat.polygonOffsetFactor = -1;
+    mat.polygonOffsetUnits = -1;
+    const patch = new THREE.Mesh(geo, mat);
+    patch.rotation.x = -Math.PI / 2;
+    patch.position.set(f.x, f.y ?? 0.02, f.z);
+    patch.receiveShadow = true;
+    scene.add(patch);
+    arenaObjects.push(patch);
+  }
 
   for (const [w, h, d, x, y, z] of arena.walls) addBox("wall", w, h, d, x, y, z);
   for (const p of arena.props ?? []) addBox(p.type, p.w, p.h, p.d, p.x, p.y, p.z);
@@ -1191,9 +1288,8 @@ async function beginMatch(arenaId) {
   scene.add(laser);
   applyLocalLook();
 
-  myKills = 0;
-  myDeaths = 0;
-  updateScoreHud();
+  match.ensurePlayer(myId, myName);
+  refreshHud(true);
 
   matchActive = true;
   matchStarting = false;
@@ -1202,6 +1298,7 @@ async function beginMatch(arenaId) {
 }
 
 function addOrUpdatePlayer(id, name) {
+  match.ensurePlayer(id, name);
   if (players.has(id)) {
     if (name) players.get(id).setName(name);
     return players.get(id);
@@ -1218,11 +1315,236 @@ function removePlayer(id) {
     rp.dispose();
     players.delete(id);
   }
+  match.removePlayer(id);
+  hudKey = "";
 }
 
-function updateScoreHud() {
-  document.getElementById("hud-score").textContent = `Kills ${myKills} · Deaths ${myDeaths}`;
+/* =========================================================
+   MATCH FLOW — rules, scoreboard, HUD, kill feed, respawns
+========================================================= */
+const match = new MatchState();
+const NO_KEYS = {};
+
+const hudTimerEl = document.getElementById("hud-timer");
+const hudLimitEl = document.getElementById("hud-limit");
+const hudPlayersEl = document.getElementById("hud-players");
+const hudScoreEl = document.getElementById("hud-score");
+const killFeedEl = document.getElementById("kill-feed");
+const respawnOverlay = document.getElementById("respawn-overlay");
+const respawnCountEl = document.getElementById("respawn-count");
+const tabBoard = document.getElementById("tab-scoreboard");
+const tabBoardContent = document.getElementById("tab-scoreboard-content");
+const resultsOverlay = document.getElementById("scoreboard-overlay");
+
+const cssColor = (n) => "#" + (n >>> 0).toString(16).padStart(6, "0");
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text; // textContent only — names come from other players
+  return e;
 }
+
+function playerColor(id) {
+  if (id === myId) return myColor();
+  return players.get(id)?.displayColor ?? colorForId(id);
+}
+
+// New settings take effect for everyone: rules, clock, and what "full health" means.
+function applyMatchSettings(raw) {
+  match.start(raw);
+  GAME.maxHp = match.settings.startingHealth;
+}
+
+function resetMatchUi() {
+  match.scores.clear();
+  applyMatchSettings(DEFAULT_MATCH_RULES);
+  deadUntil = 0;
+  respawnOverlay.classList.add("hidden");
+  tabBoard.classList.add("hidden");
+  resultsOverlay.classList.add("hidden");
+  killFeedEl.replaceChildren();
+  hudKey = "";
+}
+
+/* ---- HUD: timer + every player's name and kill count ---- */
+let hudKey = "";
+
+function playerChip(e, leader) {
+  const chip = el("div", "player-chip" + (e.id === myId ? " me" : "") + (leader ? " leader" : ""));
+  chip.style.setProperty("--chip-color", cssColor(playerColor(e.id)));
+  chip.append(el("span", "chip-dot"), el("span", "chip-name", e.name), el("span", "chip-kills", String(e.kills)));
+  return chip;
+}
+
+// Rows for the Tab board and the end-of-match results.
+function renderBoard(container, ranking, winnerId = null) {
+  const head = el("div", "scoreboard-head");
+  head.append(el("span", "", "Player"), el("span", "", "Kills · Deaths"));
+  const rows = ranking.map((e, i) => {
+    const row = el(
+      "div",
+      "scoreboard-row" + (e.id === myId ? " me" : "") + (e.id === winnerId ? " scoreboard-winner" : "")
+    );
+    const stats = el("div", "scoreboard-stats");
+    const k = el("span", "");
+    k.append(el("b", "", String(e.kills)), document.createTextNode(" K"));
+    const d = el("span", "");
+    d.append(el("b", "", String(e.deaths)), document.createTextNode(" D"));
+    stats.append(k, d);
+    row.append(el("span", "scoreboard-rank", `#${i + 1}`), el("span", "scoreboard-player-name", e.name), stats);
+    return row;
+  });
+  container.replaceChildren(head, ...rows);
+}
+
+function refreshHud(force = false) {
+  const clock = match.clockText();
+  if (hudTimerEl.textContent !== clock) hudTimerEl.textContent = clock;
+  hudTimerEl.classList.toggle("low", Number.isFinite(match.remaining) && match.remaining <= 30 && !match.over);
+  const limit = match.settings.scoreLimit;
+  const limitText = limit > 0 ? `First to ${limit}` : "No score limit";
+  if (hudLimitEl.textContent !== limitText) hudLimitEl.textContent = limitText;
+
+  const ranking = match.ranking();
+  const key = ranking.map((e) => `${e.id}:${e.name}:${e.kills}`).join("|") + "#" + myId;
+  if (force || key !== hudKey) {
+    hudKey = key;
+    hudPlayersEl.replaceChildren(...ranking.slice(0, 8).map((e, i) => playerChip(e, i === 0 && e.kills > 0)));
+    const me = match.scores.get(myId);
+    hudScoreEl.textContent = me ? `${me.kills} kills · ${me.deaths} deaths` : "";
+  }
+  if (!tabBoard.classList.contains("hidden")) renderBoard(tabBoardContent, ranking);
+}
+
+function showTabBoard(show) {
+  if (show && !matchActive) return;
+  tabBoard.classList.toggle("hidden", !show);
+  if (show) renderBoard(tabBoardContent, match.ranking());
+}
+
+/* ---- kill feed ---- */
+function addKillFeed(attackerId, victimId) {
+  const entry = el("div", "kill-feed-entry");
+  entry.append(
+    el("span", "kill-feed-killer", match.nameOf(attackerId)),
+    document.createTextNode(" ▸ "),
+    el("span", "kill-feed-eliminated", match.nameOf(victimId))
+  );
+  killFeedEl.append(entry);
+  while (killFeedEl.children.length > 5) killFeedEl.firstElementChild.remove();
+  setTimeout(() => {
+    entry.classList.add("fade-out");
+    setTimeout(() => entry.remove(), 500);
+  }, 4500);
+}
+
+/* ---- kills ----
+   Whoever notices a death announces it ("kill"); everyone, including the
+   announcer, applies it — so all scoreboards agree. Only the host decides
+   when that adds up to the end of the match. */
+function applyKill(attackerId, victimId) {
+  if (!match.addKill(attackerId, victimId)) return;
+  addKillFeed(attackerId, victimId);
+  refreshHud(true);
+  if (net.isHost) {
+    const reason = match.checkEnd();
+    if (reason) endMatchAsHost(reason);
+  }
+}
+function announceKill(attackerId, victimId) {
+  net.broadcast({ t: "kill", attackerId, victimId });
+  applyKill(attackerId, victimId);
+}
+
+/* ---- end of match ---- */
+function endMatchAsHost(reason) {
+  if (match.over) return;
+  match.finish(reason);
+  net.broadcast({ t: "end", reason, snap: match.snapshot() });
+  showResults();
+}
+
+function showResults() {
+  document.exitPointerLock();
+  for (const k in keys) keys[k] = false;
+  firing = false;
+  paused = false;
+  pauseMenu.classList.add("hidden");
+  settingsModal.classList.add("hidden");
+  respawnOverlay.classList.add("hidden");
+  tabBoard.classList.add("hidden");
+  refreshHud(true);
+
+  const winner = match.winner();
+  document.getElementById("results-winner").textContent = winner
+    ? winner.id === myId ? "🏆 You win!" : `🏆 ${winner.name} wins!`
+    : "It's a draw";
+  document.getElementById("results-reason").textContent =
+    match.reason === "score" ? "SCORE LIMIT REACHED" : match.reason === "time" ? "TIME'S UP" : "";
+  renderBoard(document.getElementById("scoreboard-content"), match.ranking(), winner?.id ?? null);
+  document.getElementById("btn-rematch").classList.toggle("hidden", !net.isHost);
+  document.getElementById("results-wait").classList.toggle("hidden", net.isHost);
+  resultsOverlay.classList.remove("hidden");
+}
+
+// A fresh round on the same map: everyone back to full health at a spawn.
+function beginRound() {
+  resultsOverlay.classList.add("hidden");
+  killFeedEl.replaceChildren();
+  clearScorchMarks();
+  respawnLocal();
+  botManager?.reset();
+  refreshHud(true);
+  lockPointer();
+}
+function restartMatchAsHost() {
+  applyMatchSettings(match.settings);
+  net.broadcast({ t: "restart", settings: match.settings });
+  beginRound();
+}
+
+/* ---- respawning ---- */
+let deadUntil = 0; // performance.now() ms when you come back; 0 = alive
+
+// The spawn point farthest from everyone else (a little random so it isn't predictable).
+function pickSpawn() {
+  let best = mySpawn;
+  let bestScore = -Infinity;
+  for (const sp of currentArena.spawns) {
+    let minD = Infinity;
+    for (const rp of players.values()) {
+      if (rp.visible && rp.hp > 0) minD = Math.min(minD, Math.hypot(rp.mesh.position.x - sp.x, rp.mesh.position.z - sp.z));
+    }
+    const score = (minD === Infinity ? 0 : minD) + Math.random() * 4;
+    if (score > bestScore) {
+      bestScore = score;
+      best = sp;
+    }
+  }
+  return best;
+}
+
+function respawnLocal() {
+  deadUntil = 0;
+  respawnOverlay.classList.add("hidden");
+  local.spawn(pickSpawn());
+  net.broadcast({ t: "state", id: myId, ...local.getNetState() });
+}
+
+function onLocalDeath(attackerId) {
+  announceKill(attackerId, myId);
+  if (match.over) return;
+  const delay = match.settings.respawnDelay;
+  if (delay <= 0) {
+    respawnLocal();
+    return;
+  }
+  deadUntil = performance.now() + delay * 1000;
+  document.getElementById("respawn-by").textContent = attackerId === myId ? "" : `by ${match.nameOf(attackerId)}`;
+  respawnCountEl.textContent = Math.ceil(delay);
+  respawnOverlay.classList.remove("hidden");
+}
+
 
 /* =========================================================
    INPUT
@@ -1232,12 +1554,20 @@ let firing = false;
 
 addEventListener("keydown", (e) => {
   keys[e.code] = true;
-  if (e.code === "Escape" && matchActive) {
+  if (e.code === "Tab" && matchActive) {
+    e.preventDefault(); // hold Tab for the live scoreboard instead of tabbing around the page
+    showTabBoard(true);
+  }
+  if (e.code === "Escape" && matchActive && !match.over) {
     if (paused) resumeMatch();
     else openPauseMenu();
   }
 });
-addEventListener("keyup", (e) => (keys[e.code] = false));
+addEventListener("keyup", (e) => {
+  keys[e.code] = false;
+  if (e.code === "Tab") showTabBoard(false);
+});
+addEventListener("blur", () => showTabBoard(false));
 addEventListener("mousedown", (e) => {
   if (e.button !== 0) return;
   firing = true;
@@ -1260,7 +1590,7 @@ function sanitizeDelta(v) {
 }
 
 addEventListener("mousemove", (e) => {
-  if (!matchActive || paused || document.pointerLockElement !== document.body) return;
+  if (!matchActive || paused || match.over || local.hp <= 0 || document.pointerLockElement !== document.body) return;
   const s = sensitivityMultiplier();
   local.yaw -= sanitizeDelta(e.movementX) * s;
   local.pitch -= sanitizeDelta(e.movementY) * s;
@@ -1280,7 +1610,7 @@ function deadzone(value, threshold = 0.16) {
 function pollController(dt) {
   for (const code of ["KeyW", "KeyA", "KeyS", "KeyD", "Space"]) controllerKeys[code] = false;
   controllerFiring = false;
-  if (!settings.controllerEnabled || !matchActive || paused) return;
+  if (!settings.controllerEnabled || !matchActive || paused || match.over) return;
   const pads = navigator.getGamepads ? navigator.getGamepads() : [];
   const pad = Array.from(pads).find(p => p && p.connected);
   if (!pad) {
@@ -1297,9 +1627,11 @@ function pollController(dt) {
   controllerFiring = !!((pad.buttons[7] && pad.buttons[7].value > 0.25) || (pad.buttons[5] && pad.buttons[5].pressed)); // RT or RB
   const rx = deadzone(pad.axes[2] || 0), ry = deadzone(pad.axes[3] || 0);
   const lookSpeed = settings.controllerSensitivity * 2.2 * dt;
-  local.yaw -= rx * lookSpeed;
-  local.pitch -= ry * lookSpeed; // stick up (negative) = look up, same as moving the mouse up
-  local.pitch = Math.max(-1.4, Math.min(1.4, local.pitch));
+  if (local.hp > 0) {
+    local.yaw -= rx * lookSpeed;
+    local.pitch -= ry * lookSpeed; // stick up (negative) = look up, same as moving the mouse up
+    local.pitch = Math.max(-1.4, Math.min(1.4, local.pitch));
+  }
   const startDown = !!(pad.buttons[9] && pad.buttons[9].pressed);
   if (startDown && !controllerStartWasDown) openPauseMenu();
   controllerStartWasDown = startDown;
@@ -1318,10 +1650,15 @@ const FIXED_DT = 1 / 60;
 const MAX_PHYSICS_STEPS_PER_FRAME = 8; // avoid a "spiral of death" after a big stall
 let physicsAccumulator = 0;
 
+let clockBeat = 0;
 setInterval(() => {
   if (matchActive && local) {
     net.broadcast({ t: "state", id: myId, ...local.getNetState() });
     if (botManager) net.broadcast({ t: "bots", bots: botManager.getStates() });
+    // once a second the host tells everyone the true time left
+    if (net.isHost && ++clockBeat % 20 === 0) {
+      net.broadcast({ t: "clock", remaining: Number.isFinite(match.remaining) ? match.remaining : -1 });
+    }
   }
 }, 50); // 20Hz
 
@@ -1331,14 +1668,38 @@ function loop() {
   const dt = Math.min((now - last) / 1000, 0.25);
   last = now;
 
+  // The match clock runs even while you're paused — the game goes on without you.
+  if (matchActive) {
+    match.tick(dt);
+    if (net.isHost && !match.over) {
+      const reason = match.checkEnd();
+      if (reason) endMatchAsHost(reason);
+    }
+    refreshHud();
+  }
+
   if (!matchActive || paused) {
     renderer.render(scene, camera);
     return;
   }
 
+  if (match.over) {
+    // Frozen after the final whistle; the arena keeps rendering behind the results.
+    for (const rp of players.values()) rp.update(dt, camera);
+    renderer.render(scene, camera);
+    return;
+  }
+
+  const dead = local.hp <= 0;
+  if (dead && deadUntil) {
+    const left = deadUntil - now;
+    if (left <= 0) respawnLocal();
+    else respawnCountEl.textContent = Math.ceil(left / 1000);
+  }
+
   pollController(dt);
-  const activeKeys = settings.controllerEnabled ? controllerKeys : keys;
-  const activeFiring = settings.controllerEnabled ? controllerFiring : firing;
+  const activeKeys = dead ? NO_KEYS : settings.controllerEnabled ? controllerKeys : keys;
+  const activeFiring = dead ? false : settings.controllerEnabled ? controllerFiring : firing;
   local.applyInput(activeKeys, activeFiring);
 
   physicsAccumulator += dt;
@@ -1400,6 +1761,8 @@ function loop() {
         } else {
           net.broadcast({ t: "hit", targetId, attackerId: myId, damage: 40 * dt });
         }
+        const steal = match.settings.healthSteal;
+        if (steal > 0) local.heal((40 * dt * steal) / 100);
         endScorchStroke(); // hit a player, not environment — don't connect scorch marks across this
       } else if (hit.face) {
         const worldNormal = hit.face.normal

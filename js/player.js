@@ -22,6 +22,10 @@ export const MOVE = {
   EYE_HEIGHT: 1.0,
 };
 
+// Match-wide values the host can change (Match Settings). Health bars and
+// respawns read maxHp from here so everyone agrees on what "full" means.
+export const GAME = { maxHp: 100 };
+
 // Builds a glossy "Tic Tac" capsule mesh in the given color.
 export function makeCapsuleMesh(color) {
   const mat = new THREE.MeshPhysicalMaterial({
@@ -241,7 +245,7 @@ export class PlayerController {
     this.yaw = 0;
     this.pitch = 0;
 
-    this.hp = 100;
+    this.hp = GAME.maxHp;
     this.firing = false;
 
     this.prevPos = this.mesh.position.clone();
@@ -254,7 +258,7 @@ export class PlayerController {
     this.yaw = spawnPoint.yaw || 0;
     this.pitch = 0;
     this.vel.set(0, 0, 0);
-    this.hp = 100;
+    this.hp = GAME.maxHp;
   }
 
   // Recolors the first-person gun's glowing parts (your own body is never
@@ -458,6 +462,10 @@ export class PlayerController {
     this.hp = Math.max(0, this.hp - amount);
     return wasAlive && this.hp <= 0;
   }
+
+  heal(amount) {
+    if (this.hp > 0) this.hp = Math.min(GAME.maxHp, this.hp + amount);
+  }
 }
 
 /**
@@ -478,7 +486,8 @@ export class RemotePlayer {
     this.heldGun = makeHeldGun(color);
     this.mesh.add(this.heldGun);
 
-    this.hp = 100;
+    this.name = name;
+    this.hp = GAME.maxHp;
     this.hpBar = makeHpBar();
     scene.add(this.hpBar);
 
@@ -496,12 +505,14 @@ export class RemotePlayer {
 
     this.accessory = null;
     this.accessoryKey = "";
+    this.displayColor = color;
   }
 
   // Apply a player's chosen look (color / body pattern / accessory).
   // `look.color` of null means "Auto" — use the color they were assigned.
   setLook(look, defaultColor) {
     const color = look.color ?? defaultColor;
+    this.displayColor = color;
 
     applyBodyLook(this.mesh.material, color, look.pattern);
 
@@ -524,6 +535,7 @@ export class RemotePlayer {
   }
 
   setName(name) {
+    this.name = name;
     this.nameSprite.userData.setText(name);
   }
 
@@ -531,7 +543,7 @@ export class RemotePlayer {
     this.mesh.position.set(spawnPoint.x, spawnPoint.y, spawnPoint.z);
     this.targetPos.copy(this.mesh.position);
     this.targetYaw = spawnPoint.yaw || 0;
-    this.hp = 100;
+    this.hp = GAME.maxHp;
     this.setVisible(true);
   }
 
@@ -576,7 +588,7 @@ export class RemotePlayer {
     if (this.visible && this.hp > 0) {
       this.hpBar.position.copy(this.mesh.position);
       this.hpBar.position.y += 1.5;
-      this.hpBar.scale.x = 1.2 * Math.max(this.hp / 100, 0);
+      this.hpBar.scale.x = 1.2 * Math.min(1, Math.max(this.hp / GAME.maxHp, 0));
 
       this.nameSprite.position.copy(this.mesh.position);
       this.nameSprite.position.y += 1.85;

@@ -19,6 +19,9 @@ const quadrant = [
 export default {
   id: "foundry",
   name: "Foundry",
+  tagline: "Abandoned steel works",
+  description: "A glowing furnace in the middle, smelter columns on the diagonals and long gantries on the east and west sides. Fight for the high ground or strafe the lanes below.",
+  tags: ["48×48", "Industrial", "Medium"],
   thumb: "./assets/thumbs/foundry.png",
   modern: true,
   floorSize: 48,

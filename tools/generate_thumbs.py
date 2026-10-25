@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Draws the map-picker thumbnails (assets/thumbs/<id>.png) for the newer maps
+Draws the map-picker thumbnails (assets/thumbs/<id>.png) for every map
 as isometric views built from the real map data and textures.
 
     pip install pillow      (and Node.js, to read the map definitions)
@@ -10,13 +10,13 @@ import json, math, os, subprocess
 from PIL import Image, ImageDraw, ImageFilter
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-MAPS = ["foundry", "ruins", "neon"]
+MAPS = ["classic", "foundry", "ruins", "neon", "mansion"]
 W, H, SS = 480, 300, 2          # output size, supersampling factor
 
 
 def load_arenas():
     js = ("import('./js/arenas.js').then(m=>{const o={};for(const a of m.ARENA_LIST)"
-          "if(a.modern)o[a.id]=a;console.log(JSON.stringify(o))})")
+          "o[a.id]=a;console.log(JSON.stringify(o))})")
     out = subprocess.check_output(["node", "-e", js], cwd=ROOT)
     return json.loads(out)
 
@@ -67,6 +67,11 @@ def render(a):
         d.line([P(g, 0, -half), P(g, 0, half)], fill=shade(fc, 0.8), width=SS)
         d.line([P(-half, 0, g), P(half, 0, g)], fill=shade(fc, 0.8), width=SS)
         g += step
+
+    for f in a.get("floors", []):                  # lawns, marble, carpet runners...
+        c = mean_color(a["textures"][f["type"]]) if f["type"] in a["textures"] else (120, 120, 120)
+        x0, x1, z0, z1 = f["x"] - f["w"] / 2, f["x"] + f["w"] / 2, f["z"] - f["d"] / 2, f["z"] + f["d"] / 2
+        d.polygon([P(x0, 0, z0), P(x1, 0, z0), P(x1, 0, z1), P(x0, 0, z1)], fill=c)
 
     boxes = []
     for w, h, dd, x, y, z in a["walls"]:

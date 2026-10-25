@@ -27,6 +27,9 @@ const quadrant = [
 export default {
   id: "ruins",
   name: "Ruins",
+  tagline: "Sun-bleached courtyard",
+  description: "A stepped temple, broken walls and pillar rows in open daylight. Terraces at either end look over the whole yard from beneath tall obelisks.",
+  tags: ["56×56", "Daylight", "Open"],
   thumb: "./assets/thumbs/ruins.png",
   modern: true,
   floorSize: 56,

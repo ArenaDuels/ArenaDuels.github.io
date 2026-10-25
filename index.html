@@ -8,29 +8,51 @@
 <body>
   
   <!-- ===================== MAIN MENU ===================== -->
-  <div id="screen-menu" class="screen">
-    <div class="menu-panel">
-      <button id="btn-settings" class="settings-btn" title="Settings" aria-label="Settings">⚙</button>
-      <h1 class="logo">ARENA<span>DUELS</span></h1>
-      <p class="tagline">Pick an arena. Host or drop in.</p>
+  <div id="screen-menu" class="screen menu-screen">
+    <button id="btn-settings" class="settings-btn" title="Settings" aria-label="Settings">⚙</button>
 
-      <div class="name-row">
-        <input id="player-name-input" class="name-input" maxlength="16" placeholder="Your name">
-        <button id="btn-random-name" class="dice-btn" title="Random name" aria-label="Random name">🎲</button>
-      </div>
+    <div class="menu-layout">
+      <!-- left: identity + actions -->
+      <section class="hero">
+        <p class="hero-kicker"><span class="live-dot"></span>Browser arena shooter</p>
+        <h1 class="logo">ARENA<span>DUELS</span></h1>
+        <p class="tagline">Strafe, aim and out-duel your friends. Pick an arena, then host a match or drop into one.</p>
 
-      <div id="arena-grid" class="arena-grid"></div>
+        <label class="field-label" for="player-name-input">Your name</label>
+        <div class="name-row">
+          <input id="player-name-input" class="name-input" maxlength="16" placeholder="Your name">
+          <button id="btn-random-name" class="dice-btn" title="Random name" aria-label="Random name">🎲</button>
+        </div>
 
-      <div class="visibility-toggle" id="visibility-toggle">
-        <button class="visibility-option selected" data-public="false">Private (code)</button>
-        <button class="visibility-option" data-public="true">Public (listed)</button>
-      </div>
+        <div class="visibility-toggle" id="visibility-toggle">
+          <button class="visibility-option selected" data-public="false">🔒 Private (code)</button>
+          <button class="visibility-option" data-public="true">🌐 Public (listed)</button>
+        </div>
 
-      <div class="menu-actions">
-        <button id="btn-host" class="btn btn-primary">Host Match</button>
-        <button id="btn-join" class="btn btn-secondary">Join Match</button>
-      </div>
-      <button id="btn-browse" class="btn btn-secondary browse-btn">Browse Public Lobbies</button>
+        <div class="menu-actions hero-actions">
+          <button id="btn-host" class="btn btn-primary btn-big">Host Match</button>
+          <button id="btn-join" class="btn btn-secondary btn-big">Join Match</button>
+        </div>
+        <button id="btn-browse" class="btn btn-secondary browse-btn">Browse Public Lobbies</button>
+
+        <ul class="controls-hint" aria-label="Controls">
+          <li><kbd>WASD</kbd> move</li>
+          <li><kbd>Space</kbd> jump</li>
+          <li><kbd>Mouse</kbd> aim &amp; fire</li>
+          <li><kbd>Tab</kbd> scores</li>
+          <li><kbd>Esc</kbd> pause</li>
+        </ul>
+      </section>
+
+      <!-- right: arena picker -->
+      <section class="arena-section">
+        <div class="section-head">
+          <h2>Choose your arena</h2>
+          <span class="section-sub">Private hosts can add bots and set time / score limits</span>
+        </div>
+        <div id="arena-detail" class="arena-feature"></div>
+        <div id="arena-grid" class="arena-grid"></div>
+      </section>
     </div>
   </div>
 
@@ -70,7 +92,7 @@
           <span>Time Limit (minutes)</span>
           <span id="time-limit-value" class="setting-value">10</span>
         </div>
-        <input id="time-limit-slider" type="range" min="1" max="30" step="1" value="10" class="slider">
+        <input id="time-limit-slider" type="range" min="0" max="30" step="1" value="10" class="slider">
       </div>
 
       <div class="setting-row">
@@ -78,7 +100,7 @@
           <span>Score Limit (kills)</span>
           <span id="score-limit-value" class="setting-value">20</span>
         </div>
-        <input id="score-limit-slider" type="range" min="5" max="100" step="5" value="20" class="slider">
+        <input id="score-limit-slider" type="range" min="0" max="100" step="5" value="20" class="slider">
       </div>
 
       <div class="setting-row">
@@ -244,12 +266,16 @@
   <canvas id="game-canvas" class="hidden"></canvas>
   <div id="crosshair" class="hidden"></div>
   <div id="hud" class="hidden">
-    <div id="hud-score">Kills 0 · Deaths 0</div>
-    <div id="hud-timer">10:00</div>
+    <div id="hud-clock">
+      <span id="hud-timer">10:00</span>
+      <span id="hud-limit">First to 20</span>
+    </div>
+    <div id="hud-players"></div>
   </div>
   <div id="hud-hp-corner" class="hidden">
     <span id="hud-hp-label">HP</span>
     <span id="hud-hp-value">100</span>
+    <span id="hud-score">0 kills · 0 deaths</span>
   </div>
   <div id="room-code-banner" class="hidden">
     <span class="room-code-label">Room Code</span>
@@ -260,12 +286,31 @@
   <!-- ===================== KILL FEED ===================== -->
   <div id="kill-feed" class="kill-feed hidden"></div>
 
-  <!-- ===================== SCOREBOARD ===================== -->
+  <!-- ===================== RESPAWN COUNTDOWN ===================== -->
+  <div id="respawn-overlay" class="hidden">
+    <p class="respawn-title">Eliminated</p>
+    <p id="respawn-by" class="respawn-by"></p>
+    <p class="respawn-count">Respawning in <span id="respawn-count">2</span></p>
+  </div>
+
+  <!-- ===================== LIVE SCOREBOARD (hold Tab) ===================== -->
+  <div id="tab-scoreboard" class="hidden">
+    <p class="eyebrow">Scoreboard</p>
+    <div id="tab-scoreboard-content" class="scoreboard-content"></div>
+  </div>
+
+  <!-- ===================== MATCH RESULTS ===================== -->
   <div id="scoreboard-overlay" class="modal-overlay hidden">
     <div class="modal-panel scoreboard-panel">
       <p class="eyebrow">Match Over</p>
+      <h2 id="results-winner" class="results-winner"></h2>
+      <p id="results-reason" class="results-reason"></p>
       <div id="scoreboard-content" class="scoreboard-content"></div>
-      <button id="btn-scoreboard-close" class="btn btn-primary">Back to Menu</button>
+      <p id="results-wait" class="status-text hidden">Waiting for the host to start the next round…</p>
+      <div class="menu-actions">
+        <button id="btn-rematch" class="btn btn-primary hidden">Play Again</button>
+        <button id="btn-scoreboard-close" class="btn btn-secondary">Back to Menu</button>
+      </div>
     </div>
   </div>
 

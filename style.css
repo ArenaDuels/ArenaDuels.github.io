@@ -34,34 +34,60 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
   background:
-    linear-gradient(135deg, rgba(155, 93, 229, 0.1) 0%, rgba(76, 201, 240, 0.05) 100%),
-    radial-gradient(circle at 50% 0%, #17171d 0%, var(--bg) 60%);
+    radial-gradient(1100px 650px at 12% -8%, rgba(155, 93, 229, 0.30), transparent 60%),
+    radial-gradient(900px 600px at 98% 8%, rgba(76, 201, 240, 0.22), transparent 58%),
+    radial-gradient(700px 500px at 50% 110%, rgba(57, 255, 136, 0.12), transparent 60%),
+    linear-gradient(180deg, #0c0c16 0%, #07070b 100%);
 }
+/* Animated perspective grid floor behind every menu screen. */
+.screen::before {
+  content: '';
+  position: absolute;
+  left: -40%;
+  right: -40%;
+  bottom: -6%;
+  height: 58%;
+  background-image:
+    linear-gradient(rgba(57, 255, 136, 0.22) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(57, 255, 136, 0.22) 1px, transparent 1px);
+  background-size: 64px 64px;
+  transform: perspective(520px) rotateX(64deg);
+  transform-origin: center top;
+  animation: grid-scroll 2.6s linear infinite;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 55%);
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 55%);
+  pointer-events: none;
+}
+@keyframes grid-scroll { to { background-position: 0 64px, 0 0; } }
+.screen > * { position: relative; z-index: 1; }
 
 .menu-panel {
-  width: min(520px, 90vw);
-  padding: 48px 40px;
-  background: rgba(19, 19, 24, 0.95);
-  backdrop-filter: blur(20px);
-  border: 1px solid var(--border);
-  border-radius: 24px;
+  width: min(520px, 92vw);
+  padding: 44px 40px;
+  background: rgba(16, 16, 24, 0.82);
+  backdrop-filter: blur(22px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 26px;
   text-align: center;
   position: relative;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8), 0 0 1px rgba(57, 255, 136, 0.1);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .settings-btn {
-  position: absolute;
-  top: 18px;
-  right: 18px;
-  width: 40px;
-  height: 40px;
+  position: fixed;
+  top: 22px;
+  right: 22px;
+  z-index: 5;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
-  border: 1px solid var(--border);
-  background: rgba(26, 26, 32, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(16, 16, 24, 0.7);
+  backdrop-filter: blur(10px);
   color: var(--mint);
-  font-size: 18px;
+  font-size: 19px;
   cursor: pointer;
   transition: border-color 0.15s, transform 0.2s, background 0.15s;
 }
@@ -175,16 +201,21 @@ html, body {
 .logo {
   font-family: 'Space Grotesk', sans-serif;
   font-weight: 700;
-  font-size: 42px;
-  letter-spacing: 1px;
-  margin: 0 0 6px;
+  font-size: clamp(46px, 6.4vw, 78px);
+  line-height: 0.95;
+  letter-spacing: -1px;
+  margin: 0 0 14px;
   color: var(--mint);
-  text-shadow: 0 0 30px rgba(57, 255, 136, 0.2);
+  text-shadow: 0 0 40px rgba(155, 93, 229, 0.35);
 }
-.logo span { 
-  color: var(--laser);
-  display: inline-block;
-  animation: pulse-glow 3s ease-in-out infinite;
+.logo span {
+  display: block;
+  background: linear-gradient(90deg, var(--laser) 0%, var(--accent-blue) 60%, var(--accent-purple) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 22px rgba(57, 255, 136, 0.35));
+  animation: pulse-glow 3.2s ease-in-out infinite;
 }
 
 @keyframes pulse-glow {
@@ -193,16 +224,17 @@ html, body {
 }
 
 .tagline {
-  color: var(--text-dim);
+  color: #a3a3b0;
   font-size: 14px;
-  margin: 0 0 28px;
-  letter-spacing: 0.5px;
+  line-height: 1.6;
+  margin: 0 0 26px;
+  max-width: 38ch;
 }
 
 .name-row {
   display: flex;
   gap: 8px;
-  margin-bottom: 24px;
+  margin-bottom: 18px;
 }
 .name-row .name-input { margin-bottom: 0; flex: 1; }
 
@@ -434,14 +466,13 @@ html, body {
 /* ===== Arena picker ===== */
 .arena-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 14px;
-  margin-bottom: 32px;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
 }
 
 .arena-card {
-  background: rgba(26, 26, 32, 0.6);
-  border: 1px solid var(--border);
+  background: rgba(16, 16, 24, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: 14px;
   padding: 0;
   cursor: pointer;
@@ -463,7 +494,7 @@ html, body {
 }
 
 .arena-thumb {
-  height: 80px;
+  height: 64px;
   background-color: #24242c;
   background-size: cover;
   background-position: center;
@@ -477,13 +508,13 @@ html, body {
 }
 
 .arena-name {
-  font-size: 12px;
-  padding: 10px 6px;
+  font-size: 11px;
+  padding: 9px 4px;
   color: var(--mint);
   font-family: 'Space Grotesk', sans-serif;
-  font-weight: 600;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.6px;
 }
 
 /* ===== Buttons ===== */
@@ -601,19 +632,17 @@ html, body {
 
 #hud {
   position: fixed;
-  top: 14px;
+  top: 12px;
   left: 50%;
   transform: translateX(-50%);
+  z-index: 12;
   display: flex;
-  gap: 20px;
+  flex-direction: column;
   align-items: center;
-  font-size: 12px;
-  color: var(--text-dim);
+  gap: 8px;
   pointer-events: none;
-  text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
 }
-#hud-score { color: var(--mint); }
-#hud-timer { color: var(--laser); }
 
 #hud-hp-corner {
   position: fixed;
@@ -640,7 +669,7 @@ html, body {
 /* ===== Room code banner ===== */
 #room-code-banner {
   position: fixed;
-  top: 56px;
+  top: 112px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -675,7 +704,7 @@ html, body {
 /* ===== Kill Feed ===== */
 #kill-feed {
   position: fixed;
-  top: 60px;
+  top: 70px;
   right: 22px;
   display: flex;
   flex-direction: column;
@@ -683,7 +712,7 @@ html, body {
   pointer-events: none;
   font-family: 'JetBrains Mono', monospace;
   z-index: 20;
-  max-width: 320px;
+  max-width: 340px;
 }
 .kill-feed-entry {
   padding: 8px 14px;
@@ -780,3 +809,335 @@ html, body {
   pointer-events: none;
   z-index: 10;
 }
+
+
+/* =====================================================================
+   START PAGE
+===================================================================== */
+.menu-screen { align-items: center; }
+
+.menu-layout {
+  width: min(1240px, 94vw);
+  max-height: 100%;
+  display: grid;
+  grid-template-columns: minmax(340px, 440px) minmax(0, 1fr);
+  gap: 44px;
+  align-items: center;
+  padding: 28px 0;
+}
+
+.hero {
+  padding: 8px 0;
+  text-align: left;
+}
+.hero-kicker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 16px;
+  font-size: 11px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--laser);
+  box-shadow: 0 0 10px var(--laser);
+  animation: live-blink 1.8s ease-in-out infinite;
+}
+@keyframes live-blink { 50% { opacity: 0.35; } }
+
+.field-label {
+  display: block;
+  margin: 0 0 8px 4px;
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.hero .name-input { text-align: left; padding-left: 20px; }
+.hero .visibility-toggle { margin-bottom: 18px; }
+.hero-actions { margin-bottom: 4px; }
+.btn-big { padding: 17px 0; font-size: 15px; }
+.hero .browse-btn { margin-top: 12px; }
+
+.controls-hint {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin: 26px 0 0;
+  padding: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.controls-hint kbd {
+  display: inline-block;
+  min-width: 22px;
+  padding: 3px 7px;
+  margin-right: 4px;
+  text-align: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--mint);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+}
+
+.arena-section { min-width: 0; }
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.section-head h2 {
+  margin: 0;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 13px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--mint);
+}
+.section-sub { font-size: 11px; color: var(--text-dim); text-align: right; }
+
+.arena-feature {
+  position: relative;
+  aspect-ratio: 16 / 8.2;
+  margin-bottom: 12px;
+  border-radius: 22px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background-color: #14141c;
+  background-size: cover;
+  background-position: center;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+  transition: background-image 0.2s;
+}
+.arena-feature::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(0deg, rgba(6, 6, 10, 0.92) 0%, rgba(6, 6, 10, 0.35) 45%, transparent 75%),
+    linear-gradient(90deg, rgba(6, 6, 10, 0.55) 0%, transparent 55%);
+}
+.feature-body {
+  position: absolute;
+  left: 26px;
+  right: 26px;
+  bottom: 22px;
+  z-index: 1;
+  text-align: left;
+}
+.feature-badge {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 1;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: #06210f;
+  background: var(--laser);
+  font-weight: 700;
+}
+.feature-name {
+  margin: 0 0 6px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: clamp(24px, 3vw, 38px);
+  font-weight: 700;
+  color: #fff;
+}
+.feature-desc {
+  margin: 0 0 12px;
+  max-width: 52ch;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #cfcfd8;
+}
+.feature-tags { display: flex; flex-wrap: wrap; gap: 8px; }
+.tag-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--mint);
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(6px);
+}
+
+.arena-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--accent-blue);
+  background: rgba(26, 26, 36, 0.95);
+  box-shadow: 0 8px 24px rgba(76, 201, 240, 0.12);
+}
+.arena-card.selected {
+  border-color: var(--laser);
+  box-shadow: 0 0 0 2px var(--laser), 0 8px 24px rgba(57, 255, 136, 0.18);
+}
+
+@media (max-width: 960px) {
+  .menu-screen { align-items: flex-start; overflow-y: auto; }
+  .menu-layout { grid-template-columns: 1fr; gap: 26px; padding: 70px 0 32px; }
+  .section-head { flex-direction: column; align-items: flex-start; }
+  .section-sub { text-align: left; }
+  .arena-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* =====================================================================
+   IN-GAME HUD: timer, player names + kills, personal stats
+===================================================================== */
+#hud-clock {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 6px 20px;
+  background: rgba(10, 10, 16, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 999px;
+  backdrop-filter: blur(8px);
+  font-family: 'Space Grotesk', sans-serif;
+}
+#hud-timer {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: var(--mint);
+  font-variant-numeric: tabular-nums;
+}
+#hud-timer.low { color: var(--red); animation: timer-pulse 1s ease-in-out infinite; }
+@keyframes timer-pulse { 50% { opacity: 0.55; } }
+#hud-limit {
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+#hud-players {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  max-width: 82vw;
+}
+.player-chip {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 14px 6px 11px;
+  background: rgba(10, 10, 16, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 999px;
+  backdrop-filter: blur(8px);
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mint);
+}
+.player-chip .chip-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--chip-color, #fff);
+  box-shadow: 0 0 8px var(--chip-color, #fff);
+}
+.player-chip .chip-name { max-width: 14ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.player-chip .chip-kills {
+  min-width: 18px;
+  text-align: right;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--laser);
+}
+.player-chip.me {
+  border-color: var(--laser);
+  box-shadow: 0 0 14px rgba(57, 255, 136, 0.28);
+}
+.player-chip.leader .chip-kills::before { content: '★ '; color: #ffd166; }
+
+#hud-score {
+  margin-left: 6px;
+  font-size: 12px;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+}
+
+/* ===== Respawn countdown ===== */
+#respawn-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 14;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, rgba(0, 0, 0, 0) 20%, rgba(130, 8, 28, 0.42) 100%);
+  font-family: 'Space Grotesk', sans-serif;
+  text-align: center;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.8);
+}
+.respawn-title {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 6px;
+  text-transform: uppercase;
+  color: var(--red);
+}
+.respawn-by { margin: 0 0 6px; font-size: 22px; font-weight: 700; color: #fff; min-height: 28px; }
+.respawn-count { margin: 0; font-size: 15px; color: var(--mint); }
+.respawn-count span { color: var(--laser); font-weight: 700; font-size: 20px; }
+
+/* ===== Live scoreboard (hold Tab) ===== */
+#tab-scoreboard {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 16;
+  width: min(480px, 90vw);
+  padding: 24px 28px;
+  background: rgba(10, 10, 16, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  backdrop-filter: blur(14px);
+  pointer-events: none;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+}
+#tab-scoreboard .eyebrow { text-align: center; margin-bottom: 8px; }
+.scoreboard-head {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 0 6px;
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.scoreboard-row.me .scoreboard-player-name { color: var(--laser); font-weight: 700; }
+.scoreboard-stats span { min-width: 54px; text-align: right; }
+.scoreboard-stats b { color: var(--mint); }
+
+/* ===== Match results ===== */
+.results-winner {
+  margin: 4px 0 4px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 30px;
+  color: var(--laser);
+  text-shadow: 0 0 24px rgba(57, 255, 136, 0.4);
+}
+.results-reason { margin: 0 0 8px; font-size: 12px; color: var(--text-dim); letter-spacing: 1px; }

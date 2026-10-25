@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generates the seamless textures for the Foundry, Ruins and Neon Grid maps.
+Generates the seamless textures for every map (Classic Box, Foundry, Ruins, Neon Grid, Mansion).
 
     pip install numpy scipy pillow
     python3 tools/generate_textures.py
@@ -444,6 +444,199 @@ def neon_pylon():
     return np.clip(col, 0, 1), None
 
 
+# ============================================================== CLASSIC BOX
+TEAL = rgb(0.05, 0.66, 0.58)
+
+
+def classic_floor():
+    tone = (0.88 + 0.22 * np.random.default_rng(300).random((4, 4)))[(Y // 128).astype(int), (X // 128).astype(int)]
+    grout = smooth(3.5, 1.0, np.minimum(wrapd(X, 128), wrapd(Y, 128)))
+    wear = fbm(2.4, 301)
+    col = rgb(0.60, 0.62, 0.64) * tone[..., None] * (0.78 + 0.4 * wear[..., None]) * (0.92 + 0.16 * fbm(0.6, 302)[..., None])
+    col *= (1 - 0.55 * grout[..., None])
+    col += scratches(303, 70, (20, 90))[..., None] * 0.07
+    return col, np.clip(0.8 - 0.5 * grout + 0.1 * fbm(0.7, 304), 0, 1)
+
+
+def classic_wall():
+    # row 0 of the image is the TOP of the wall: kick-plate and stripe sit at the bottom
+    seam = smooth(3.5, 1.0, wrapd(X, 256))
+    panel_tone = (0.9 + 0.15 * np.random.default_rng(310).random(2))[(X // 256).astype(int)]
+    col = rgb(0.82, 0.84, 0.86) * panel_tone[..., None] * (0.88 + 0.2 * fbm(2.4, 311)[..., None])
+    col *= (1 - 0.5 * seam[..., None])
+    stripe = smooth(396, 392, Y) * smooth(356, 360, Y) * 0 + ((Y > 348) & (Y < 392)).astype(np.float32)
+    col = mix(col, TEAL * (0.9 + 0.15 * fbm(1.2, 312)[..., None]), stripe)
+    kick = (Y > 440).astype(np.float32)
+    col = mix(col, rgb(0.20, 0.22, 0.25) * (0.8 + 0.4 * fbm(1.0, 313)[..., None]), kick)
+    col = mix(col, col * 0.7, ((Y > 392) & (Y <= 440)).astype(np.float32) * 0.0)
+    for bx in (16, 240, 272, 496):
+        for by in (16, 256, 496):
+            col = mix(col, rgb(0.55, 0.57, 0.6), 0.7 * circle(bx, by, 4))
+    col *= 0.9 + 0.2 * smooth(0.6, 0.85, fbm(2.6, 314))[..., None] * 0 + 0.0
+    return col, np.clip(0.8 - 0.4 * seam + 0.2 * stripe - 0.15 * kick, 0, 1)
+
+
+def classic_barrier():
+    diag = (((X + Y) // 40).astype(int) % 2).astype(np.float32)
+    top = (Y < 72).astype(np.float32)
+    bottom = (Y > S - 40).astype(np.float32)
+    concrete = rgb(0.56, 0.57, 0.58) * (0.78 + 0.4 * fbm(2.2, 320)[..., None]) * (0.9 + 0.2 * fbm(0.6, 321)[..., None])
+    col = mix(concrete, mix(TEAL, rgb(0.92, 0.94, 0.95), diag) * (0.85 + 0.2 * fbm(1.4, 322)[..., None]), top)
+    col = mix(col, TEAL * 0.8, bottom)
+    seam = smooth(3, 1, wrapd(X, 256)) * (1 - top)
+    col *= (1 - 0.4 * seam[..., None])
+    return col, None
+
+
+def classic_pillar():
+    band = (((Y // 128).astype(int)) % 2).astype(np.float32)
+    seam = smooth(3.5, 1.0, wrapd(Y, 128))
+    brushed = ndi.uniform_filter1d(fbm(0.8, 330), size=36, axis=1, mode="wrap")
+    brushed = (brushed - brushed.min()) / (brushed.max() - brushed.min())
+    col = mix(rgb(0.78, 0.80, 0.83), TEAL * 0.9, band) * (0.75 + 0.35 * brushed[..., None])
+    col *= (1 - 0.6 * seam[..., None])
+    riv = np.zeros((S, S), np.float32)
+    for yy in (10, 118, 138, 246, 266, 374, 394, 502):
+        riv = np.maximum(riv, smooth(5, 2.5, np.hypot(wrapd(X, 32) - 0, Y - yy) * 0 + np.hypot((X % 32) - 16, Y - yy)))
+    col = mix(col, rgb(0.55, 0.57, 0.6), 0.6 * riv)
+    return col, np.clip(0.5 - 0.3 * seam + 0.25 * riv + 0.12 * brushed, 0, 1)
+
+
+def classic_crate():
+    border = np.minimum(np.minimum(X, S - 1 - X), np.minimum(Y, S - 1 - Y))
+    frame = smooth(50, 42, border)
+    brace = np.maximum(smooth(22, 12, np.abs(X - Y) / 1.414), smooth(22, 12, np.abs(X + Y - S) / 1.414)) * (1 - frame)
+    wear = fbm(2.4, 340)
+    panel = rgb(0.84, 0.86, 0.88) * (0.82 + 0.3 * wear[..., None])
+    col = mix(panel, TEAL * (0.85 + 0.2 * fbm(1.2, 341)[..., None]), np.maximum(frame, brace * 0.85))
+    for cx_ in (26, S - 27):
+        for cy_ in (26, S - 27):
+            col = mix(col, rgb(0.85, 0.87, 0.9), 0.85 * circle(cx_, cy_, 8))
+    stencil = ((np.abs(X - S / 2) < 34) & (np.abs(Y - S / 2) < 34) & ~((np.abs(X - S / 2) < 22) & (np.abs(Y - S / 2) < 22))).astype(np.float32)
+    col = mix(col, rgb(0.9, 0.92, 0.94), stencil * 0.0)
+    col += scratches(342, 24)[..., None] * 0.1
+    return col, np.clip(0.3 + 0.35 * frame + 0.3 * brace, 0, 1)
+
+
+# ================================================================== MANSION
+def mansion_floor():
+    d1, d2, ident = voronoi(170, 400)
+    tone = (0.8 + 0.4 * np.random.default_rng(401).random(170))[ident]
+    gap = smooth(5, 1.5, d2 - d1)
+    col = rgb(0.52, 0.48, 0.42) * tone[..., None] * (0.8 + 0.35 * fbm(1.0, 402)[..., None])
+    col = mix(col, rgb(0.12, 0.11, 0.09), gap * 0.85)
+    col = mix(col, rgb(0.20, 0.30, 0.12), 0.35 * gap * smooth(0.55, 0.75, fbm(2.2, 403)))
+    return col, np.clip(0.85 - 0.7 * gap + 0.1 * fbm(0.8, 404), 0, 1)
+
+
+def mansion_marble():
+    check = (((X // 128).astype(int) + (Y // 128).astype(int)) % 2).astype(np.float32)
+    ridged = 1 - np.abs(2 * fbm(1.7, 410) - 1)
+    vein = smooth(0.86, 0.97, ridged)
+    white = rgb(0.92, 0.91, 0.88) * (0.92 + 0.1 * fbm(2.4, 411)[..., None])
+    black = rgb(0.07, 0.07, 0.09) * (0.85 + 0.4 * fbm(2.4, 412)[..., None])
+    col = mix(white, black, check)
+    col = mix(col, np.where(check[..., None] > 0.5, rgb(0.55, 0.55, 0.58), rgb(0.62, 0.62, 0.64)), vein * 0.55)
+    grout = smooth(2.2, 0.6, np.minimum(wrapd(X, 128), wrapd(Y, 128)))
+    col = mix(col, rgb(0.45, 0.40, 0.30), grout * 0.7)
+    return col, np.clip(0.9 - 0.6 * grout, 0, 1)
+
+
+def mansion_carpet():
+    fibre = 0.82 + 0.3 * fbm(0.5, 420)
+    weave = 0.94 + 0.06 * np.sin(X * 1.6) * np.sin(Y * 1.6)
+    red = rgb(0.42, 0.04, 0.08) * (fibre * weave)[..., None]
+    gold = rgb(0.80, 0.62, 0.22)
+    border = ((np.abs(X - 33) < 8) | (np.abs(X - (S - 33)) < 8)).astype(np.float32)
+    thin = ((np.abs(X - 56) < 2.5) | (np.abs(X - (S - 56)) < 2.5)).astype(np.float32)
+    col = mix(red, gold * (0.85 + 0.2 * fibre[..., None]), np.maximum(border, thin))
+    img = Image.new("L", (S, S), 0)
+    d = ImageDraw.Draw(img)
+    for cy in (128, 384):
+        d.polygon([(S // 2, cy - 92), (S // 2 + 70, cy), (S // 2, cy + 92), (S // 2 - 70, cy)], outline=255, width=7)
+        d.polygon([(S // 2, cy - 46), (S // 2 + 35, cy), (S // 2, cy + 46), (S // 2 - 35, cy)], fill=255)
+    motif = np.asarray(img.filter(ImageFilter.GaussianBlur(0.7)), np.float32) / 255.0
+    col = mix(col, gold * (0.85 + 0.2 * fibre[..., None]), motif * 0.9)
+    return col, None
+
+
+def mansion_grass():
+    base = rgb(0.13, 0.34, 0.10) * (0.7 + 0.6 * fbm(2.4, 430)[..., None])
+    dry = smooth(0.6, 0.8, fbm(2.8, 431))
+    base = mix(base, rgb(0.30, 0.38, 0.12), dry * 0.5)
+    blades = ndi.uniform_filter1d(fbm(0.4, 432), size=7, axis=0, mode="wrap")
+    blades = (blades - blades.min()) / (blades.max() - blades.min())
+    col = base * (0.7 + 0.6 * blades[..., None])
+    return col, np.clip(0.4 + 0.5 * blades, 0, 1)
+
+
+def mansion_wall():
+    # image row 0 = top of the wall; wainscot paneling is at the bottom
+    wood_grain = ndi.uniform_filter1d(fbm(0.9, 440), size=50, axis=1, mode="wrap")
+    wood_grain = (wood_grain - wood_grain.min()) / (wood_grain.max() - wood_grain.min())
+    plaster = rgb(0.90, 0.85, 0.74) * (0.88 + 0.16 * fbm(2.6, 441)[..., None])
+    # subtle damask lattice on the plaster
+    lattice = np.maximum(smooth(2.2, 0.6, wrapd(X + Y, 128)), smooth(2.2, 0.6, wrapd(X - Y, 128))) * 0.07
+    plaster = plaster * (1 - lattice[..., None])
+    wood = rgb(0.30, 0.18, 0.10) * (0.7 + 0.5 * wood_grain[..., None])
+    wain = (Y > 300).astype(np.float32)
+    px, py = wrapd(X, 256), Y - 300
+    panel = ((px > 28) & (px < 228 - 0) & (py > 26) & (Y < S - 26)).astype(np.float32)
+    panel_in = ((px > 48) & (px < 208) & (py > 46) & (Y < S - 46)).astype(np.float32)
+    wood = wood * (1 + 0.28 * panel_in[..., None] - 0.22 * (panel - panel_in)[..., None])
+    col = mix(plaster, wood, wain)
+    rail = ((Y > 286) & (Y <= 300)).astype(np.float32)
+    col = mix(col, rgb(0.72, 0.58, 0.25), rail)
+    cornice = (Y < 26).astype(np.float32)
+    col = mix(col, plaster * 0.82, cornice)
+    col = mix(col, rgb(0.72, 0.58, 0.25), ((Y > 22) & (Y < 28)).astype(np.float32))
+    h = np.clip(0.55 + 0.25 * panel_in - 0.2 * (panel - panel_in) + 0.2 * rail, 0, 1)
+    return col, h
+
+
+def mansion_hedge():
+    d1, d2, ident = voronoi(520, 450)
+    tone = np.random.default_rng(451).random(520)[ident]
+    leaf = rgb(0.08, 0.25, 0.07) + tone[..., None] * rgb(0.09, 0.28, 0.08)
+    shade = smooth(0, 9, d1)
+    col = leaf * (0.62 + 0.75 * (1 - shade)[..., None]) * (0.8 + 0.4 * fbm(2.4, 452)[..., None])
+    col = mix(col, rgb(0.02, 0.06, 0.03), smooth(1.5, 0, d2 - d1) * 0.7)
+    return col, np.clip(1 - shade * 0.8 + 0.1 * fbm(0.8, 453), 0, 1)
+
+
+def mansion_column():
+    flute = 0.5 + 0.5 * np.cos(2 * np.pi * X / 64)
+    ridged = 1 - np.abs(2 * fbm(1.8, 460) - 1)
+    vein = smooth(0.88, 0.98, ridged)
+    col = rgb(0.93, 0.92, 0.88) * (0.82 + 0.2 * flute[..., None]) * (0.9 + 0.12 * fbm(2.4, 461)[..., None])
+    col = mix(col, rgb(0.62, 0.62, 0.66), vein * 0.45)
+    band = smooth(5, 1.5, wrapd(Y, 256))
+    col = mix(col, rgb(0.76, 0.62, 0.28), band * 0.9)
+    return col, np.clip(0.4 + 0.5 * flute, 0, 1)
+
+
+def mansion_wood():
+    noise = fbm(1.4, 470)
+    rings = 0.5 + 0.5 * np.sin(2 * np.pi * (Y / 64 + 2.2 * noise))
+    streak = ndi.uniform_filter1d(fbm(0.7, 471), size=70, axis=1, mode="wrap")
+    streak = (streak - streak.min()) / (streak.max() - streak.min())
+    plank = smooth(3, 0.8, wrapd(Y, 128))
+    col = rgb(0.34, 0.20, 0.11) * (0.62 + 0.35 * rings[..., None]) * (0.8 + 0.4 * streak[..., None])
+    col *= (1 - 0.6 * plank[..., None])
+    return col, np.clip(0.5 + 0.3 * rings - 0.4 * plank, 0, 1)
+
+
+def mansion_stone():
+    bid, edge = block_rows(480, [128], 120, 210)
+    tone = (0.85 + 0.25 * np.random.default_rng(481).random(bid.max() + 1))[bid]
+    joint = smooth(4.5, 1.2, edge)
+    wear = fbm(2.6, 482)
+    col = rgb(0.70, 0.69, 0.65) * tone[..., None] * (0.78 + 0.4 * wear[..., None]) * (0.92 + 0.14 * fbm(0.7, 483)[..., None])
+    col = mix(col, rgb(0.26, 0.25, 0.22), joint * 0.85)
+    col = mix(col, rgb(0.28, 0.38, 0.18), 0.4 * smooth(0.66, 0.82, fbm(2.2, 484)) * (0.4 + 0.6 * joint))
+    return col, np.clip(0.8 - 0.55 * joint + 0.15 * wear, 0, 1)
+
+
 # ===================================================================== main
 JOBS = {
     "foundry": [("floor", foundry_floor), ("wall", foundry_wall), ("crate", foundry_crate),
@@ -453,6 +646,11 @@ JOBS = {
               ("temple", ruins_temple), ("obelisk", ruins_obelisk)],
     "neon": [("floor", neon_floor), ("wall", neon_wall), ("platform", neon_platform),
              ("core", neon_core), ("pylon", neon_pylon)],
+    "classic": [("floor", classic_floor), ("wall", classic_wall), ("barrier", classic_barrier),
+                ("pillar", classic_pillar), ("crate", classic_crate)],
+    "mansion": [("floor", mansion_floor), ("marble", mansion_marble), ("carpet", mansion_carpet),
+                ("grass", mansion_grass), ("wall", mansion_wall), ("hedge", mansion_hedge),
+                ("column", mansion_column), ("wood", mansion_wood), ("stone", mansion_stone)],
 }
 
 if __name__ == "__main__":
