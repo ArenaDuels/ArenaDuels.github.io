@@ -1,11 +1,12 @@
 import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
 import { ARENA_LIST, getArena } from "./arenas.js";
-import { PlayerController, RemotePlayer, makeLaserMesh, aimLaser, GAME } from "./player.js";
+import { PlayerController, RemotePlayer, makeLaserMesh, aimLaser, setLaserColor, GAME } from "./player.js";
 import { Net } from "./net.js";
 import { randomName } from "./names.js";
 import { BotManager, BOT_SKILLS } from "./bots.js";
 import { COLORS, PATTERNS, ACCESSORIES, loadLook, saveLook, sanitizeLook } from "./customization.js";
 import { MatchState, DEFAULT_SETTINGS as DEFAULT_MATCH_RULES, sanitizeSettings } from "./match.js";
+import { iconSvg } from "./icons.js";
 import { createLookPreview } from "./look-preview.js";
 
 /* =========================================================
@@ -539,17 +540,19 @@ function buildLookPickers() {
     b.style.background = "#" + c.toString(16).padStart(6, "0");
     colorPicker.appendChild(b);
   }
-  const auto = tile("color-option", "🎲", "Auto — the color you're given in a match", () => setMyLook({ color: null }));
+  const auto = tile("color-option auto-swatch", "", "Auto — the color you're given in a match", () => setMyLook({ color: null }));
   auto.dataset.key = "auto";
   colorPicker.appendChild(auto);
 
   for (const p of PATTERNS) {
-    const b = tile("pattern-option", p.icon, p.label, () => setMyLook({ pattern: p.id }));
+    const b = tile("pattern-option", "", p.label, () => setMyLook({ pattern: p.id }));
+    b.innerHTML = iconSvg(p.id); // static, trusted markup from icons.js
     b.dataset.key = p.id;
     patternPicker.appendChild(b);
   }
   for (const a of ACCESSORIES) {
-    const b = tile("accessory-option", a.icon, a.label, () => setMyLook({ accessory: a.id }));
+    const b = tile("accessory-option", "", a.label, () => setMyLook({ accessory: a.id }));
+    b.innerHTML = iconSvg(a.id);
     b.dataset.key = a.id;
     accessoryPicker.appendChild(b);
   }
@@ -574,7 +577,7 @@ function myColor() {
 function applyLocalLook() {
   if (!local) return;
   local.setColor(myColor());
-  if (laser) laser.material.color.set(myColor());
+  if (laser) setLaserColor(laser, myColor());
 }
 
 function updateLookPreview() {
@@ -1427,7 +1430,7 @@ function addKillFeed(attackerId, victimId) {
   const entry = el("div", "kill-feed-entry");
   entry.append(
     el("span", "kill-feed-killer", match.nameOf(attackerId)),
-    document.createTextNode(" ▸ "),
+    el("span", "kill-arrow"),
     el("span", "kill-feed-eliminated", match.nameOf(victimId))
   );
   killFeedEl.append(entry);
@@ -1477,7 +1480,7 @@ function showResults() {
 
   const winner = match.winner();
   document.getElementById("results-winner").textContent = winner
-    ? winner.id === myId ? "🏆 You win!" : `🏆 ${winner.name} wins!`
+    ? winner.id === myId ? "You win!" : `${winner.name} wins!`
     : "It's a draw";
   document.getElementById("results-reason").textContent =
     match.reason === "score" ? "SCORE LIMIT REACHED" : match.reason === "time" ? "TIME'S UP" : "";
@@ -1701,6 +1704,7 @@ function loop() {
   const activeKeys = dead ? NO_KEYS : settings.controllerEnabled ? controllerKeys : keys;
   const activeFiring = dead ? false : settings.controllerEnabled ? controllerFiring : firing;
   local.applyInput(activeKeys, activeFiring);
+  local.updateGunFx(activeFiring, now / 1000);
 
   physicsAccumulator += dt;
   let steps = 0;
@@ -1750,7 +1754,7 @@ function loop() {
     // the true eye position/direction regardless.
     const muzzlePos = new THREE.Vector3();
     local.gunMuzzle.getWorldPosition(muzzlePos);
-    aimLaser(laser, muzzlePos, end);
+    aimLaser(laser, muzzlePos, end, !!hit, now / 1000);
 
     if (hit) {
       const idx = targets.indexOf(hit.object);

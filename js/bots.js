@@ -168,21 +168,33 @@ class Bot {
       this.onGround = false;
     }
 
+    // Same rule as the player: a block is a wall while its top is more than
+    // a step above the FEET, and being inside one means leaving by the nearest side.
     const pushRadius = MOVE.RADIUS + 0.01;
-    for (const box of wallBoxes) {
-      if (p.y >= box.max.y - 0.05) continue;
-      const cx = Math.max(box.min.x, Math.min(p.x, box.max.x));
-      const cz = Math.max(box.min.z, Math.min(p.z, box.max.z));
-      let dx = p.x - cx;
-      let dz = p.z - cz;
-      const dist2 = dx * dx + dz * dz;
-      if (dist2 < pushRadius * pushRadius) {
-        const dist = Math.sqrt(dist2) || 0.0001;
-        const push = pushRadius - dist;
-        dx /= dist;
-        dz /= dist;
-        p.x += dx * push;
-        p.z += dz * push;
+    for (let pass = 0; pass < 2; pass++) {
+      const feet = p.y - REST_OFFSET;
+      for (const box of wallBoxes) {
+        if (box.max.y <= feet + STEP_TOLERANCE) continue;
+        const cx = Math.max(box.min.x, Math.min(p.x, box.max.x));
+        const cz = Math.max(box.min.z, Math.min(p.z, box.max.z));
+        const dx = p.x - cx;
+        const dz = p.z - cz;
+        const dist2 = dx * dx + dz * dz;
+        if (dist2 >= pushRadius * pushRadius) continue;
+        if (dist2 < 1e-8) {
+          const left = p.x - box.min.x, right = box.max.x - p.x;
+          const front = p.z - box.min.z, back = box.max.z - p.z;
+          const m = Math.min(left, right, front, back);
+          if (m === left) p.x = box.min.x - pushRadius;
+          else if (m === right) p.x = box.max.x + pushRadius;
+          else if (m === front) p.z = box.min.z - pushRadius;
+          else p.z = box.max.z + pushRadius;
+        } else {
+          const dist = Math.sqrt(dist2);
+          const push = pushRadius - dist;
+          p.x += (dx / dist) * push;
+          p.z += (dz / dist) * push;
+        }
       }
     }
   }

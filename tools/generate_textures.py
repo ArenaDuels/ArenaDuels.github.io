@@ -476,48 +476,6 @@ def classic_wall():
     return col, np.clip(0.8 - 0.4 * seam + 0.2 * stripe - 0.15 * kick, 0, 1)
 
 
-def classic_barrier():
-    diag = (((X + Y) // 40).astype(int) % 2).astype(np.float32)
-    top = (Y < 72).astype(np.float32)
-    bottom = (Y > S - 40).astype(np.float32)
-    concrete = rgb(0.56, 0.57, 0.58) * (0.78 + 0.4 * fbm(2.2, 320)[..., None]) * (0.9 + 0.2 * fbm(0.6, 321)[..., None])
-    col = mix(concrete, mix(TEAL, rgb(0.92, 0.94, 0.95), diag) * (0.85 + 0.2 * fbm(1.4, 322)[..., None]), top)
-    col = mix(col, TEAL * 0.8, bottom)
-    seam = smooth(3, 1, wrapd(X, 256)) * (1 - top)
-    col *= (1 - 0.4 * seam[..., None])
-    return col, None
-
-
-def classic_pillar():
-    band = (((Y // 128).astype(int)) % 2).astype(np.float32)
-    seam = smooth(3.5, 1.0, wrapd(Y, 128))
-    brushed = ndi.uniform_filter1d(fbm(0.8, 330), size=36, axis=1, mode="wrap")
-    brushed = (brushed - brushed.min()) / (brushed.max() - brushed.min())
-    col = mix(rgb(0.78, 0.80, 0.83), TEAL * 0.9, band) * (0.75 + 0.35 * brushed[..., None])
-    col *= (1 - 0.6 * seam[..., None])
-    riv = np.zeros((S, S), np.float32)
-    for yy in (10, 118, 138, 246, 266, 374, 394, 502):
-        riv = np.maximum(riv, smooth(5, 2.5, np.hypot(wrapd(X, 32) - 0, Y - yy) * 0 + np.hypot((X % 32) - 16, Y - yy)))
-    col = mix(col, rgb(0.55, 0.57, 0.6), 0.6 * riv)
-    return col, np.clip(0.5 - 0.3 * seam + 0.25 * riv + 0.12 * brushed, 0, 1)
-
-
-def classic_crate():
-    border = np.minimum(np.minimum(X, S - 1 - X), np.minimum(Y, S - 1 - Y))
-    frame = smooth(50, 42, border)
-    brace = np.maximum(smooth(22, 12, np.abs(X - Y) / 1.414), smooth(22, 12, np.abs(X + Y - S) / 1.414)) * (1 - frame)
-    wear = fbm(2.4, 340)
-    panel = rgb(0.84, 0.86, 0.88) * (0.82 + 0.3 * wear[..., None])
-    col = mix(panel, TEAL * (0.85 + 0.2 * fbm(1.2, 341)[..., None]), np.maximum(frame, brace * 0.85))
-    for cx_ in (26, S - 27):
-        for cy_ in (26, S - 27):
-            col = mix(col, rgb(0.85, 0.87, 0.9), 0.85 * circle(cx_, cy_, 8))
-    stencil = ((np.abs(X - S / 2) < 34) & (np.abs(Y - S / 2) < 34) & ~((np.abs(X - S / 2) < 22) & (np.abs(Y - S / 2) < 22))).astype(np.float32)
-    col = mix(col, rgb(0.9, 0.92, 0.94), stencil * 0.0)
-    col += scratches(342, 24)[..., None] * 0.1
-    return col, np.clip(0.3 + 0.35 * frame + 0.3 * brace, 0, 1)
-
-
 # ================================================================== MANSION
 def mansion_floor():
     d1, d2, ident = voronoi(170, 400)
@@ -646,8 +604,7 @@ JOBS = {
               ("temple", ruins_temple), ("obelisk", ruins_obelisk)],
     "neon": [("floor", neon_floor), ("wall", neon_wall), ("platform", neon_platform),
              ("core", neon_core), ("pylon", neon_pylon)],
-    "classic": [("floor", classic_floor), ("wall", classic_wall), ("barrier", classic_barrier),
-                ("pillar", classic_pillar), ("crate", classic_crate)],
+    "classic": [("floor", classic_floor), ("wall", classic_wall)],
     "mansion": [("floor", mansion_floor), ("marble", mansion_marble), ("carpet", mansion_carpet),
                 ("grass", mansion_grass), ("wall", mansion_wall), ("hedge", mansion_hedge),
                 ("column", mansion_column), ("wood", mansion_wood), ("stone", mansion_stone)],

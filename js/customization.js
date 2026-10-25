@@ -10,23 +10,24 @@ import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
 
 export const COLORS = [0xffffff, 0xff4d6a, 0x39ff88, 0xffd166, 0x9b5de5, 0x4cc9f0, 0xff8c42];
 
+// Each id doubles as the icon name in icons.js.
 export const PATTERNS = [
-  { id: "solid", icon: "■", label: "Solid" },
-  { id: "stripes", icon: "|||", label: "Stripes" },
-  { id: "bands", icon: "≡", label: "Bands" },
-  { id: "dots", icon: "∷", label: "Dots" },
-  { id: "checker", icon: "▦", label: "Checker" },
+  { id: "solid", label: "Solid" },
+  { id: "stripes", label: "Stripes" },
+  { id: "bands", label: "Bands" },
+  { id: "dots", label: "Dots" },
+  { id: "checker", label: "Checker" },
 ];
 
 export const ACCESSORIES = [
-  { id: "none", icon: "✕", label: "None" },
-  { id: "tophat", icon: "🎩", label: "Top hat" },
-  { id: "crown", icon: "👑", label: "Crown" },
-  { id: "halo", icon: "😇", label: "Halo" },
-  { id: "horns", icon: "😈", label: "Horns" },
-  { id: "antenna", icon: "📡", label: "Antenna" },
-  { id: "shades", icon: "🕶️", label: "Shades" },
-  { id: "party", icon: "🎉", label: "Party hat" },
+  { id: "none", label: "None" },
+  { id: "tophat", label: "Top hat" },
+  { id: "crown", label: "Crown" },
+  { id: "halo", label: "Halo" },
+  { id: "horns", label: "Horns" },
+  { id: "antenna", label: "Antenna" },
+  { id: "shades", label: "Shades" },
+  { id: "party", label: "Party hat" },
 ];
 
 export const DEFAULT_LOOK = { color: null, pattern: "solid", accessory: "none" };

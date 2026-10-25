@@ -3,30 +3,34 @@
 <head>
 <meta charset="UTF-8">
 <title>ArenaDuels</title>
+<meta name="theme-color" content="#0a0a0d">
+<link rel="icon" type="image/svg+xml" href="./favicon.svg">
+<link rel="icon" type="image/png" sizes="64x64" href="./favicon.png">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
 <link rel="stylesheet" href="./style.css">
 </head>
 <body>
   
   <!-- ===================== MAIN MENU ===================== -->
   <div id="screen-menu" class="screen menu-screen">
-    <button id="btn-settings" class="settings-btn" title="Settings" aria-label="Settings">⚙</button>
+    <button id="btn-settings" class="settings-btn" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/><circle cx="12" cy="12" r="6.6"/></svg></button>
 
     <div class="menu-layout">
       <!-- left: identity + actions -->
       <section class="hero">
-        <p class="hero-kicker"><span class="live-dot"></span>Browser arena shooter</p>
+        <p class="hero-kicker"><span class="hero-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.6"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><path d="M12 1.5v4M12 18.5v4M1.5 12h4M18.5 12h4"/></svg></span>Browser arena shooter</p>
         <h1 class="logo">ARENA<span>DUELS</span></h1>
         <p class="tagline">Strafe, aim and out-duel your friends. Pick an arena, then host a match or drop into one.</p>
 
         <label class="field-label" for="player-name-input">Your name</label>
         <div class="name-row">
           <input id="player-name-input" class="name-input" maxlength="16" placeholder="Your name">
-          <button id="btn-random-name" class="dice-btn" title="Random name" aria-label="Random name">🎲</button>
+          <button id="btn-random-name" class="dice-btn" title="Random name" aria-label="Random name"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3.5"/><circle cx="8.5" cy="8.5" r="1.1" fill="currentColor"/><circle cx="15.5" cy="8.5" r="1.1" fill="currentColor"/><circle cx="12" cy="12" r="1.1" fill="currentColor"/><circle cx="8.5" cy="15.5" r="1.1" fill="currentColor"/><circle cx="15.5" cy="15.5" r="1.1" fill="currentColor"/></svg></button>
         </div>
 
         <div class="visibility-toggle" id="visibility-toggle">
-          <button class="visibility-option selected" data-public="false">🔒 Private (code)</button>
-          <button class="visibility-option" data-public="true">🌐 Public (listed)</button>
+          <button class="visibility-option selected" data-public="false"><span class="vis-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9.5" rx="2.2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></span>Private (code)</button>
+          <button class="visibility-option" data-public="true"><span class="vis-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c3.2 3.2 3.2 14.8 0 18M12 3c-3.2 3.2-3.2 14.8 0 18"/></svg></span>Public (listed)</button>
         </div>
 
         <div class="menu-actions hero-actions">
@@ -303,6 +307,7 @@
   <div id="scoreboard-overlay" class="modal-overlay hidden">
     <div class="modal-panel scoreboard-panel">
       <p class="eyebrow">Match Over</p>
+      <div class="results-trophy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4h8v6a4 4 0 0 1-8 0z"/><path d="M8 6H5a3 3 0 0 0 3 4.2M16 6h3a3 3 0 0 1-3 4.2"/><path d="M12 14.2V18M8.5 20.5h7"/></svg></div>
       <h2 id="results-winner" class="results-winner"></h2>
       <p id="results-reason" class="results-reason"></p>
       <div id="scoreboard-content" class="scoreboard-content"></div>

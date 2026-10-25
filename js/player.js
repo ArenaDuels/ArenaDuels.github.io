@@ -95,33 +95,162 @@ function makeNameSprite(name) {
 // position/rotation applied, so callers can place it differently depending
 // on context: as a first-person viewmodel (child of the camera) or as a
 // third-person "held gun" visible to other players (child of the capsule).
+// ---------------------------------------------------------------------------
+// The ARC RIFLE. One model, used first-person (child of the camera) and
+// third-person (held by other players' capsules). Forward is -Z.
+//
+//   receiver + rail + battery pack, a shrouded barrel with three glowing
+//   energy coils, an emitter nozzle with a glowing lens, power strips on
+//   the sides, a grip, foregrip and sights.
+//
+// Everything that glows shares the player's colour (so it recolours with
+// setGunColor), and animateGun() makes the coils chase along the barrel and
+// the lens flare when firing.
+// ---------------------------------------------------------------------------
+let glowTexture = null;
+function getGlowTexture() {
+  if (glowTexture) return glowTexture;
+  const c = document.createElement("canvas");
+  c.width = c.height = 128;
+  const g = c.getContext("2d");
+  const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grad.addColorStop(0, "rgba(255,255,255,1)");
+  grad.addColorStop(0.25, "rgba(255,255,255,0.55)");
+  grad.addColorStop(0.6, "rgba(255,255,255,0.12)");
+  grad.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 128, 128);
+  glowTexture = new THREE.CanvasTexture(c);
+  glowTexture.colorSpace = THREE.SRGBColorSpace;
+  return glowTexture;
+}
+
 function makeGunModel(color) {
   const group = new THREE.Group();
 
-  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x1c1c22, roughness: 0.4, metalness: 0.4 });
-  const accentMat = new THREE.MeshStandardMaterial({
-    color, emissive: color, emissiveIntensity: 0.7, roughness: 0.3,
-  });
+  // (Metalness is kept modest on purpose: there's no environment map to
+  // reflect, so high-metal parts would render nearly black.)
+  const gunmetal = new THREE.MeshStandardMaterial({ color: 0x5d6676, roughness: 0.48, metalness: 0.3 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x2b2f3a, roughness: 0.6, metalness: 0.25 });
+  const steel = new THREE.MeshStandardMaterial({ color: 0xc2c9d6, roughness: 0.35, metalness: 0.45 });
+  const glow = () =>
+    new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.8, roughness: 0.3, metalness: 0.1 });
 
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.14, 0.42), bodyMat);
-  group.add(body);
+  const mats = []; // every glowing material, for recolouring/animation
+  const accentMat = glow();
+  mats.push(accentMat);
 
-  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.045, 0.34, 8), accentMat);
-  barrel.rotation.x = Math.PI / 2;
-  barrel.position.set(0, 0.015, -0.36);
-  group.add(barrel);
+  const add = (geo, mat, x, y, z, rx = 0, ry = 0, rz = 0) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y, z);
+    m.rotation.set(rx, ry, rz);
+    group.add(m);
+    return m;
+  };
+  const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
 
-  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.2, 0.11), bodyMat);
-  grip.position.set(0, -0.14, 0.1);
-  grip.rotation.x = 0.35;
-  group.add(grip);
+  // receiver, top rail, battery pack, rear cap
+  add(box(0.11, 0.13, 0.36), gunmetal, 0, 0, -0.02);
+  add(box(0.075, 0.03, 0.3), dark, 0, 0.08, -0.02);
+  add(box(0.1, 0.115, 0.15), gunmetal, 0, -0.005, 0.2);
+  add(box(0.085, 0.09, 0.02), dark, 0, -0.005, 0.285);
+  // charge window on top of the receiver
+  add(box(0.04, 0.012, 0.13), accentMat, 0, 0.099, -0.03);
+  // glowing power strips down both sides
+  add(box(0.006, 0.026, 0.2), accentMat, 0.058, 0.012, 0.0);
+  add(box(0.006, 0.026, 0.2), accentMat, -0.058, 0.012, 0.0);
+  add(box(0.006, 0.05, 0.07), accentMat, 0.052, -0.005, 0.2);
+  add(box(0.006, 0.05, 0.07), accentMat, -0.052, -0.005, 0.2);
+  // vents
+  for (let i = 0; i < 3; i++) {
+    add(box(0.114, 0.012, 0.022), dark, 0, 0.02 - i * 0.026, 0.115 - 0.0 + i * 0.0);
+  }
 
+  // shrouded barrel
+  add(new THREE.CylinderGeometry(0.02, 0.02, 0.46, 12), steel, 0, 0.012, -0.43, Math.PI / 2, 0, 0);
+  // open frame (a top and bottom rail) so the coils stay visible
+  add(box(0.03, 0.012, 0.3), gunmetal, 0, 0.064, -0.4);
+  add(box(0.03, 0.012, 0.3), gunmetal, 0, -0.04, -0.4);
+  for (let i = 0; i < 3; i++) {
+    add(box(0.016, 0.11, 0.014), dark, 0, 0.012, -0.29 - i * 0.1);
+  }
+
+  // three energy coils that light up one after another when firing
+  const coils = [];
+  for (let i = 0; i < 3; i++) {
+    const mat = glow();
+    mats.push(mat);
+    const coil = add(new THREE.TorusGeometry(0.036, 0.011, 8, 18), mat, 0, 0.012, -0.34 - i * 0.1);
+    coil.userData.mat = mat;
+    coils.push(coil);
+  }
+
+  // emitter nozzle + lens
+  add(new THREE.CylinderGeometry(0.015, 0.032, 0.07, 14), steel, 0, 0.012, -0.665, Math.PI / 2, 0, 0);
+  const lensMat = glow();
+  lensMat.emissiveIntensity = 1.6;
+  mats.push(lensMat);
+  add(new THREE.SphereGeometry(0.019, 12, 10), lensMat, 0, 0.012, -0.705);
+
+  // grip, trigger guard, foregrip, sights
+  add(box(0.07, 0.17, 0.09), dark, 0, -0.135, 0.09, 0.32, 0, 0);
+  add(box(0.014, 0.02, 0.07), gunmetal, 0, -0.08, -0.04);
+  add(box(0.014, 0.05, 0.014), gunmetal, 0, -0.1, -0.075);
+  add(box(0.06, 0.085, 0.11), dark, 0, -0.09, -0.22, -0.12, 0, 0);
+  add(box(0.012, 0.03, 0.014), steel, 0, 0.11, -0.2);
+  add(box(0.03, 0.026, 0.012), steel, 0, 0.105, 0.1);
+
+  // muzzle point (beam origin) and a flash sprite on it
   const muzzle = new THREE.Object3D();
-  muzzle.position.set(0, 0.015, -0.55);
+  muzzle.position.set(0, 0.012, -0.74);
   group.add(muzzle);
 
-  group.userData.accentMat = accentMat; // so setColor()/setLook() can recolor it later
+  const flash = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: getGlowTexture(), color, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, fog: false,
+    })
+  );
+  flash.renderOrder = 1001;
+  flash.visible = false;
+  muzzle.add(flash);
+
+  group.userData.accentMat = accentMat;
+  group.userData.fx = { mats, coils, lensMat, accentMat, flash, baseZ: 0, baseRotX: 0, baseY: 0 };
   return { group, muzzle };
+}
+
+/** Recolour everything on the gun that glows (and the muzzle flash). */
+export function setGunColor(group, color) {
+  const fx = group.userData.fx;
+  for (const m of fx.mats) {
+    m.color.set(color);
+    m.emissive.set(color);
+  }
+  fx.flash.material.color.set(color);
+}
+
+/** Per-frame gun animation: idle shimmer, firing pulse, flash and recoil. */
+export function animateGun(group, firing, t, viewmodel = false) {
+  const fx = group.userData.fx;
+  fx.accentMat.emissiveIntensity = firing ? 1.5 + 0.5 * Math.sin(t * 55) : 0.6 + 0.12 * Math.sin(t * 2.2);
+  for (let i = 0; i < fx.coils.length; i++) {
+    const m = fx.coils[i].userData.mat;
+    m.emissiveIntensity = firing
+      ? 1.2 + 1.6 * Math.max(0, Math.sin(t * 38 - i * 1.5))
+      : 0.3 + 0.12 * Math.sin(t * 2.2 - i * 0.8);
+  }
+  fx.lensMat.emissiveIntensity = firing ? 2.4 + 0.8 * Math.sin(t * 70) : 1.2;
+  fx.flash.visible = firing;
+  if (firing) {
+    fx.flash.material.opacity = 0.55 + 0.4 * Math.abs(Math.sin(t * 83));
+    fx.flash.scale.setScalar(viewmodel ? 0.2 + 0.08 * Math.abs(Math.sin(t * 61)) : 0.35 + 0.12 * Math.abs(Math.sin(t * 61)));
+  }
+  if (viewmodel) {
+    group.position.z = fx.baseZ + (firing ? 0.016 + 0.008 * Math.sin(t * 72) : 0);
+    group.position.y = fx.baseY + (firing ? 0.004 * Math.sin(t * 91) : 0);
+    group.rotation.x = fx.baseRotX + (firing ? 0.012 + 0.008 * Math.sin(t * 66) : 0);
+  }
 }
 
 // First-person viewmodel: fixed in the bottom-right of the screen, no
@@ -130,10 +259,15 @@ function makeGunModel(color) {
 function makeFirstPersonGun(color) {
   const { group, muzzle } = makeGunModel(color);
   group.renderOrder = 1000;
-  group.position.set(0.3, -0.26, -0.5);
+  group.scale.setScalar(0.74);
+  group.position.set(0.23, -0.2, -0.4);
   group.rotation.y = -0.05;
+  group.rotation.x = 0.01;
+  group.userData.fx.baseZ = group.position.z;
+  group.userData.fx.baseY = group.position.y;
+  group.userData.fx.baseRotX = group.rotation.x;
   group.traverse((o) => {
-    if (o.isMesh) {
+    if (o.isMesh || o.isSprite) {
       o.castShadow = false;
       o.receiveShadow = false;
       o.frustumCulled = false;
@@ -147,12 +281,11 @@ function makeFirstPersonGun(color) {
 // whichever way the capsule is facing since it's a child of that mesh.
 function makeHeldGun(color) {
   const { group } = makeGunModel(color);
-  // Capsule radius is 0.5 — the previous 0.28 offset put the gun's
-  // attachment point *inside* that radius, so it rendered embedded in
-  // the body instead of held beside it. 0.6 clears it.
-  group.position.set(0.6, 0.05, -0.2);
-  group.rotation.y = -0.2;
-  group.scale.setScalar(1.15); // slightly bigger — reads better at typical view distance
+  // Capsule radius is 0.5 — the attachment point has to clear that or the
+  // gun renders embedded in the body instead of held beside it.
+  group.position.set(0.62, 0.05, -0.15);
+  group.rotation.y = -0.12;
+  group.scale.setScalar(1.25); // reads better at typical view distance
   group.traverse((o) => {
     if (o.isMesh) {
       o.castShadow = true;
@@ -162,34 +295,107 @@ function makeHeldGun(color) {
   return group;
 }
 
-// ===== LG beam — a thin glowing cylinder mesh (not a THREE.Line, which
-// is capped at ~1px on most GPUs regardless of width settings). Shared by
-// both the local player's own beam and every RemotePlayer's beam. =====
-export function makeLaserMesh(color) {
-  const geo = new THREE.CylinderGeometry(0.035, 0.035, 1, 6, 1, true);
-  const mat = new THREE.MeshBasicMaterial({
-    color,
-    transparent: false,
-    opacity: 1,
+// ===== The beam. A hot white core, a coloured glow around it, a soft outer
+// haze, a crackling arc that jitters every frame, and a flare where it hits.
+// (Built from cylinders because THREE.Line is capped at ~1px on most GPUs.)
+// Shared by the local player's beam and every RemotePlayer's beam. =====
+const BEAM_SEGMENTS = 18;
+const beamGeometry = new THREE.CylinderGeometry(1, 0.18, 1, 10, 1, true); // tapers to a point at the muzzle
+
+function additive(color, opacity) {
+  return new THREE.MeshBasicMaterial({
+    color, transparent: true, opacity, blending: THREE.AdditiveBlending,
+    depthWrite: false, fog: false, side: THREE.DoubleSide,
   });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.visible = false;
-  return mesh;
+}
+
+export function makeLaserMesh(color) {
+  const beam = new THREE.Group();
+  beam.visible = false;
+
+  const part = (material, radius) => {
+    const m = new THREE.Mesh(beamGeometry, material);
+    m.userData.radius = radius;
+    m.frustumCulled = false;
+    beam.add(m);
+    return m;
+  };
+  const core = part(additive(0xffffff, 0.95), 0.02);
+  const glow = part(additive(color, 0.5), 0.065);
+  const haze = part(additive(color, 0.16), 0.13);
+
+  const arcGeo = new THREE.BufferGeometry();
+  arcGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array((BEAM_SEGMENTS + 1) * 3), 3));
+  const arc = new THREE.Line(
+    arcGeo,
+    new THREE.LineBasicMaterial({ color: 0xdff6ff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false, fog: false })
+  );
+  arc.frustumCulled = false;
+  beam.add(arc);
+
+  const flare = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: getGlowTexture(), color, transparent: true, opacity: 0.9,
+      blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+    })
+  );
+  flare.frustumCulled = false;
+  beam.add(flare);
+
+  beam.userData = { core, glow, haze, arc, flare, color };
+  return beam;
+}
+
+export function setLaserColor(beam, color) {
+  const u = beam.userData;
+  u.glow.material.color.set(color);
+  u.haze.material.color.set(color);
+  u.flare.material.color.set(color);
+  u.color = color;
 }
 
 const UP_AXIS = new THREE.Vector3(0, 1, 0);
-export function aimLaser(mesh, origin, end) {
-  const dir = new THREE.Vector3().subVectors(end, origin);
-  const len = dir.length();
+const _dir = new THREE.Vector3();
+/**
+ * Stretch the beam from `origin` to `end`. `hit` = it ends on something
+ * solid (so draw the impact flare); `t` is the time in seconds for the
+ * flicker.
+ */
+export function aimLaser(beam, origin, end, hit = true, t = performance.now() / 1000) {
+  _dir.subVectors(end, origin);
+  const len = _dir.length();
   if (len < 0.001) {
-    mesh.visible = false;
+    beam.visible = false;
     return;
   }
-  dir.normalize();
-  mesh.position.copy(origin).addScaledVector(dir, len / 2);
-  mesh.scale.set(1, len, 1);
-  mesh.quaternion.setFromUnitVectors(UP_AXIS, dir);
-  mesh.visible = true;
+  _dir.divideScalar(len);
+  beam.position.copy(origin);
+  beam.quaternion.setFromUnitVectors(UP_AXIS, _dir);
+
+  const u = beam.userData;
+  const pulse = 1 + 0.16 * Math.sin(t * 70) + 0.09 * Math.sin(t * 113.7);
+  for (const m of [u.core, u.glow, u.haze]) {
+    const r = m.userData.radius * pulse;
+    m.scale.set(r, len, r);
+    m.position.set(0, len / 2, 0);
+  }
+
+  // jittering arc: pinned at both ends, wobbling in between
+  const pos = u.arc.geometry.attributes.position;
+  const amp = Math.min(0.14, 0.03 + len * 0.004);
+  for (let i = 0; i <= BEAM_SEGMENTS; i++) {
+    const s = i / BEAM_SEGMENTS;
+    const edge = Math.sin(Math.PI * s);
+    pos.setXYZ(i, (Math.random() - 0.5) * amp * edge, s * len, (Math.random() - 0.5) * amp * edge);
+  }
+  pos.needsUpdate = true;
+
+  u.flare.visible = hit;
+  if (hit) {
+    u.flare.position.set(0, Math.max(0, len - 0.1), 0);
+    u.flare.scale.setScalar(0.55 + 0.25 * Math.abs(Math.sin(t * 57)));
+  }
+  beam.visible = true;
 }
 
 // Reconstructs a look direction from yaw/pitch alone — used to draw a
@@ -264,8 +470,12 @@ export class PlayerController {
   // Recolors the first-person gun's glowing parts (your own body is never
   // visible to you, so the gun is the only thing that shows your color).
   setColor(color) {
-    this.gunAccent.color.set(color);
-    this.gunAccent.emissive.set(color);
+    setGunColor(this.gunGroup, color);
+  }
+
+  // Idle shimmer / firing pulse / muzzle flash / recoil on the viewmodel.
+  updateGunFx(firing, seconds) {
+    animateGun(this.gunGroup, firing, seconds, true);
   }
 
   applyInput(keys, mouseFiring) {
@@ -341,21 +551,38 @@ export class PlayerController {
     // exactly tangent to a wall is a floating-point-unstable boundary that
     // can flicker between "colliding" and "not colliding" frame to frame,
     // which reads as camera stutter since the camera is attached to it.
+    // A block stops you sideways whenever its top is more than a step above
+    // your FEET. (This used to compare against the capsule centre, which sits
+    // 1.4 higher — so jumping at the side or corner of a block let the lower
+    // half of your body pass straight through it.) Run twice so being pushed
+    // out of one block can't leave you inside the neighbouring one.
     const pushRadius = MOVE.RADIUS + 0.01;
-    for (const box of wallBoxes) {
-      if (this.mesh.position.y >= box.max.y - 0.05) continue; // standing on/above its top — don't wall-block against it
-      const cx = Math.max(box.min.x, Math.min(this.mesh.position.x, box.max.x));
-      const cz = Math.max(box.min.z, Math.min(this.mesh.position.z, box.max.z));
-      let dx = this.mesh.position.x - cx;
-      let dz = this.mesh.position.z - cz;
-      const dist2 = dx * dx + dz * dz;
-      if (dist2 < pushRadius * pushRadius) {
-        const dist = Math.sqrt(dist2) || 0.0001;
-        const push = pushRadius - dist;
-        dx /= dist;
-        dz /= dist;
-        this.mesh.position.x += dx * push;
-        this.mesh.position.z += dz * push;
+    const p = this.mesh.position;
+    for (let pass = 0; pass < 2; pass++) {
+      const feet = p.y - REST_OFFSET;
+      for (const box of wallBoxes) {
+        if (box.max.y <= feet + STEP_TOLERANCE) continue; // low enough to step/land on — not a wall right now
+        const cx = Math.max(box.min.x, Math.min(p.x, box.max.x));
+        const cz = Math.max(box.min.z, Math.min(p.z, box.max.z));
+        let dx = p.x - cx;
+        let dz = p.z - cz;
+        const dist2 = dx * dx + dz * dz;
+        if (dist2 >= pushRadius * pushRadius) continue;
+        if (dist2 < 1e-8) {
+          // The centre is inside the block (no direction to push along) — leave through the nearest side.
+          const left = p.x - box.min.x, right = box.max.x - p.x;
+          const front = p.z - box.min.z, back = box.max.z - p.z;
+          const m = Math.min(left, right, front, back);
+          if (m === left) p.x = box.min.x - pushRadius;
+          else if (m === right) p.x = box.max.x + pushRadius;
+          else if (m === front) p.z = box.min.z - pushRadius;
+          else p.z = box.max.z + pushRadius;
+        } else {
+          const dist = Math.sqrt(dist2);
+          const push = pushRadius - dist;
+          p.x += (dx / dist) * push;
+          p.z += (dz / dist) * push;
+        }
       }
     }
   }
@@ -516,10 +743,8 @@ export class RemotePlayer {
 
     applyBodyLook(this.mesh.material, color, look.pattern);
 
-    const accent = this.heldGun.userData.accentMat;
-    accent.color.set(color);
-    accent.emissive.set(color);
-    this.laser.material.color.set(color);
+    setGunColor(this.heldGun, color);
+    setLaserColor(this.laser, color);
 
     const key = `${look.accessory}:${color}`;
     if (key !== this.accessoryKey) {
@@ -598,10 +823,11 @@ export class RemotePlayer {
         origin.y += MOVE.EYE_HEIGHT - 1.4; // mesh position is feet-ish; eye is higher
         const dir = dirFromYawPitch(this.targetYaw, this.targetPitch);
         const end = origin.clone().addScaledVector(dir, 50);
-        aimLaser(this.laser, origin, end);
+        aimLaser(this.laser, origin, end, false);
       } else {
         this.laser.visible = false;
       }
+      animateGun(this.heldGun, this.firing, performance.now() / 1000);
     }
   }
 }
