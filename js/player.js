@@ -716,7 +716,9 @@ export class RemotePlayer {
 
     // Visible to everyone else, unlike the local player's own first-person
     // viewmodel — attached to the capsule body so it turns with them.
-    this.heldGun = makeHeldGun(color);
+    const heldGun = makeHeldGun(color);
+    this.heldGun = heldGun.group;
+    this.heldGunMuzzle = heldGun.muzzle;
     this.mesh.add(this.heldGun);
 
     this.name = name;
@@ -815,6 +817,9 @@ export class RemotePlayer {
     const t = Math.min(1, dt * 12);
     this.mesh.position.lerp(this.targetPos, t);
     this.mesh.rotation.y += (this.targetYaw - this.mesh.rotation.y) * t;
+    // Pitch the third-person weapon with the remote player's replicated aim.
+    // The body remains upright; only the held weapon tilts up/down.
+    this.heldGun.rotation.x += (this.targetPitch - this.heldGun.rotation.x) * t;
 
     if (this.visible && this.hp > 0) {
       this.hpBar.position.copy(this.mesh.position);
@@ -825,8 +830,9 @@ export class RemotePlayer {
       this.nameSprite.position.y += 1.85;
 
       if (this.firing) {
-        const origin = this.mesh.position.clone();
-        origin.y += MOVE.EYE_HEIGHT - 1.4; // mesh position is feet-ish; eye is higher
+        // Use the actual world-space muzzle of the replicated third-person gun,
+        // not an approximate point inside the player's torso.
+        const origin = this.heldGunMuzzle.getWorldPosition(new THREE.Vector3());
         const dir = dirFromYawPitch(this.targetYaw, this.targetPitch);
         const end = origin.clone().addScaledVector(dir, 50);
         aimLaser(this.laser, origin, end, false);
