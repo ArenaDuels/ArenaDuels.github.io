@@ -87,6 +87,26 @@ function validAccountUsername(name) {
 async function passwordHash(password, salt) {
   return (await scrypt(password, salt, 64)).toString("hex");
 }
+async function verifyTurnstile(token, ip) {
+  const secret = process.env.TURNSTILE_SECRET_KEY;
+  if (!secret) throw Object.assign(new Error("Account verification is not configured on the server."), { statusCode: 503 });
+  if (typeof token !== "string" || !token || token.length > 2048) {
+    throw Object.assign(new Error("Please complete the human verification first."), { statusCode: 400 });
+  }
+  const form = new URLSearchParams({ secret, response: token });
+  if (ip && ip !== "unknown") form.set("remoteip", ip);
+  const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: form,
+    signal: AbortSignal.timeout(8000)
+  });
+  if (!response.ok) throw new Error("Cloudflare verification service returned HTTP " + response.status);
+  const result = await response.json();
+  if (!result.success || result.hostname !== "arenaduels.github.io") {
+    throw Object.assign(new Error("Human verification failed. Please try again."), { statusCode: 400 });
+  }
+}
 async function handleAuthHttp(req, res, url) {
   const origin = String(req.headers.origin || "").replace(/\/+$/, "").toLowerCase();
   if (origin && !ALLOWED_ORIGINS.includes(origin)) return authJson(res, 403, { error: "Origin not allowed." });
@@ -120,6 +140,7 @@ async function handleAuthHttp(req, res, url) {
   catch { return authJson(res, 400, { error: "Invalid request body." }); }
   const username = typeof body.username === "string" ? body.username : "";
   const password = typeof body.password === "string" ? body.password : "";
+  const turnstileToken = typeof body.turnstileToken === "string" ? body.turnstileToken : "";
   if (!validAccountUsername(username)) return authJson(res, 400, { error: "Choose a generated username using the dice button." });
   if (password.length < 8 || password.length > 128) return authJson(res, 400, { error: "Password must be 8–128 characters." });
 
@@ -127,6 +148,7 @@ async function handleAuthHttp(req, res, url) {
     const key = usernameKey(username);
     const usernameRef = firestore.collection("arenaUsernames").doc(key);
     if (url.pathname === "/api/auth/register") {
+      await verifyTurnstile(turnstileToken, ip);
       const uid = crypto.randomUUID().replace(/-/g, "");
       const salt = crypto.randomBytes(16).toString("hex");
       const hash = await passwordHash(password, salt);

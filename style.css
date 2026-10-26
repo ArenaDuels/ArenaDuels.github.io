@@ -1237,6 +1237,8 @@ html, body {
 .account-panel .name-row { margin-bottom: 16px; }
 .account-panel .name-row .name-input { min-width: 0; }
 .account-submit { width: 100%; margin-top: 8px; }
+.turnstile-wrap { display: flex; justify-content: center; margin: 2px 0 12px; min-height: 65px; }
+.turnstile-wrap iframe { max-width: 100%; }
 .account-message {
   min-height: 18px;
   margin: 12px 0 4px;

@@ -39,6 +39,21 @@ export function initializeAccountUi(nameInput, randomName) {
   const title = document.getElementById("account-modal-title");
   let accountUsername = localStorage.getItem(ACCOUNT_NAME_KEY) || "";
   let signedIn = false;
+  let turnstileWidgetId = null;
+  async function ensureTurnstileRendered() {
+    for (let i = 0; i < 50 && !window.turnstile; i++) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    if (!window.turnstile) throw new Error("Human verification could not load. Please refresh and try again.");
+    if (turnstileWidgetId === null) {
+      turnstileWidgetId = window.turnstile.render("#account-turnstile", {
+        sitekey: "0x4AAAAAAFnRKww-UlVDpSQT",
+        theme: "dark"
+      });
+    } else {
+      window.turnstile.reset(turnstileWidgetId);
+    }
+  }
 
   function showMessage(text, isError = false) {
     message.textContent = text;
@@ -95,12 +110,12 @@ export function initializeAccountUi(nameInput, randomName) {
     showMessage(`Signed in as ${username}.`);
     setTimeout(() => modal.classList.add("hidden"), 700);
   }
-  async function postAuth(path, username, password) {
+  async function postAuth(path, username, password, turnstileToken = "") {
     const response = await fetch(`${API_BASE}/api/auth/${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       cache: "no-store",
-      body: JSON.stringify({ username, password })
+      body: JSON.stringify({ username, password, ...(path === "register" ? { turnstileToken } : {}) })
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || "Account request failed.");
@@ -111,6 +126,8 @@ export function initializeAccountUi(nameInput, randomName) {
     modal.classList.remove("hidden");
     setMode("register");
     await refreshGeneratedName();
+    try { await ensureTurnstileRendered(); }
+    catch (err) { showMessage(err.message, true); }
   });
   document.getElementById("btn-account-close").addEventListener("click", () => modal.classList.add("hidden"));
   modal.addEventListener("click", (event) => {
@@ -131,11 +148,15 @@ export function initializeAccountUi(nameInput, randomName) {
     showMessage("Creating account…");
     try {
       if (!username || username === "Generating…") throw new Error("Generate a username first.");
-      const data = await postAuth("register", username, password);
+      const turnstileInput = document.querySelector('[name="cf-turnstile-response"]');
+      const turnstileToken = turnstileInput?.value || "";
+      if (!turnstileToken) throw new Error("Please complete the human verification first.");
+      const data = await postAuth("register", username, password, turnstileToken);
       await finishSignIn(data.token, data.username);
       registerPassword.value = "";
     } catch (err) {
       showMessage(err.message, true);
+      if (window.turnstile && turnstileWidgetId !== null) window.turnstile.reset(turnstileWidgetId);
       if (/taken|available|generate/i.test(err.message)) await refreshGeneratedName();
     } finally {
       submit.disabled = false;

@@ -108,6 +108,9 @@
         </div>
         <label class="field-label" for="account-register-password">Password (8–128 characters)</label>
         <input id="account-register-password" class="name-input account-input" type="password" minlength="8" maxlength="128" autocomplete="new-password" required>
+        <div class="turnstile-wrap">
+          <div id="account-turnstile"></div>
+        </div>
         <button id="account-register-submit" class="btn btn-primary account-submit" type="submit">Create account</button>
       </form>
       <form id="account-login-form" class="hidden" autocomplete="on">
@@ -381,6 +384,7 @@
     </div>
   </div>
 
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
   <script type="module" src="./js/main.js"></script>
 </body>
 </html>

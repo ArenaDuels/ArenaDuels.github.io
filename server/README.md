@@ -129,3 +129,11 @@ Render setup:
 - Account creation and login are served from `/api/auth/register` and `/api/auth/login`; `/api/auth/random-name` returns an available generated name.
 
 There is no email-based password recovery in this version. If a password is lost, the account cannot currently be recovered.
+
+
+### Cloudflare Turnstile for account registration
+
+- The registration form uses the public Turnstile site key configured in `index.html`.
+- Add a Render environment variable named `TURNSTILE_SECRET_KEY` with the widget's **secret key**. Never commit the secret key to GitHub or put it in browser code.
+- The server validates every registration token against Cloudflare Siteverify and checks that the returned hostname is `arenaduels.github.io`. Login and guest play do not require a challenge.
+- If you recreate the Turnstile widget or change hostnames, update the site key and server-side hostname check accordingly.
