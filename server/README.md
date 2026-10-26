@@ -76,3 +76,39 @@ Optional environment variables:
 
 `server/validate.js` is an identical copy of `js/validate.js`. If you change
 the message rules, copy the file to both places.
+
+## Hit and kill checking (anticheat.js)
+
+The browsers still run the game, so the server can't see a shot happen — instead
+it keeps its own record of where everyone was, who is alive and how much damage
+each player has taken, and refuses messages that don't fit:
+
+- **Hits** need an attacker who is alive and firing, a real living opponent as the
+  target, and the target inside the shooter's aim (with some lag allowance),
+  within range, with no wall in between. Damage is clamped to the beam's real
+  rate (40/s), so nobody can send huge or rapid-fire damage.
+- **Kills** are only accepted for a player who has actually taken lethal damage
+  from hits the server accepted. The server decides who gets the kill; whatever
+  the client claimed is ignored. Dead players can't be hit or shoot until they
+  respawn.
+
+What this does *not* stop: a modified client that sends honest-looking positions
+and aims perfectly (aimbot), or one that ignores damage on its own screen
+(god mode). That needs the server to run movement and health itself.
+
+Environment variable `ANTICHEAT`:
+
+- `enforce` (default) — bad hits/kills are dropped.
+- `log` — nothing is dropped; what *would* have been rejected is printed once a
+  minute. Use this to check for false positives before enforcing.
+- `off` — no checking.
+
+Once a minute the server prints a line like
+`[anticheat:enforce] last minute: hit:off-target=12 kill:not-enough-damage=1`
+(nothing is printed when nothing was rejected).
+
+`server/arenas.js` and `server/arenas/` are identical copies of `js/arenas.js`
+and `js/arenas/`. **If you change an arena's walls or props, copy the files to
+both places** — otherwise the server checks line of sight against old walls.
+
+Run the tests with `cd server && npm test`.

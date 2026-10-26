@@ -10,11 +10,14 @@
 //   - relayed messages are rebuilt from validated fields (nothing is forwarded verbatim)
 //   - clients can't impersonate each other or send host-only messages
 //   - one bad packet can never throw out of a handler and take the process down
+//   - hits and kills are checked against the server's own record of positions, health and
+//     line of sight (anticheat.js); damage is clamped and kill credit is decided server-side
 
 import { WebSocketServer } from "ws";
 import http from "http";
 import crypto from "crypto";
 import { cleanRelay, HOST_ONLY, isBotId, isValidArenaId, isValidCode, MAX_MESSAGE_BYTES } from "./validate.js";
+import { RoomGuard } from "./anticheat.js";
 
 const PORT = process.env.PORT || 8080;
 const MAX_PLAYERS = 4;
@@ -36,6 +39,14 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
   .split(",").map((s) => s.trim().replace(/\/+$/, "").toLowerCase()).filter(Boolean);
 if (ALLOWED_ORIGINS.length === 0) ALLOWED_ORIGINS.push(...DEFAULT_ORIGINS);
 const TRUST_PROXY = process.env.TRUST_PROXY !== "0"; // Render/Railway/Fly sit behind a proxy
+
+// Hit/kill validation (see anticheat.js):
+//   "enforce" (default) — invalid hits and kills are dropped, damage is clamped
+//   "log"               — nothing is dropped, rejections are only logged (use this
+//                         to check for false positives on real matches)
+//   "off"               — no validation
+const ANTICHEAT = ["enforce", "log", "off"].includes(process.env.ANTICHEAT) ? process.env.ANTICHEAT : "enforce";
+const rejectCounts = new Map(); // reason -> count since the last report
 
 // A tiny HTTP server so hosts like Render have something to health-check.
 const httpServer = http.createServer((req, res) => {
@@ -135,6 +146,7 @@ wss.on("connection", (ws, req) => {
     const room = ws.room && rooms.get(ws.room);
     if (!room) return;
     room.members.delete(ws.id);
+    room.guard.removeMember(ws.id);
     for (const peer of room.members.values()) send(peer, { t: "peer_left", id: ws.id });
     if (room.members.size === 0) rooms.delete(ws.room);
     // If the host left, the match is over for everyone; clients already treat that via peer_left.
@@ -169,7 +181,9 @@ function handleMessage(ws, raw, isBinary) {
         arenaId: msg.arenaId,
         isPublic: msg.isPublic === true,
         members: new Map([[ws.id, ws]]),
+        guard: new RoomGuard({ arenaId: msg.arenaId, hostId: ws.id }),
       });
+      rooms.get(code).guard.addMember(ws.id);
       ws.room = code;
       send(ws, { t: "room_created", code, id: ws.id });
       return;
@@ -206,6 +220,7 @@ function handleMessage(ws, raw, isBinary) {
       }
       const peerIds = [...room.members.keys()];
       room.members.set(ws.id, ws);
+      room.guard.addMember(ws.id);
       ws.room = msg.code;
       send(ws, {
         t: "room_joined",
@@ -242,6 +257,9 @@ function handleMessage(ws, raw, isBinary) {
         if (clean.victimId !== ws.id && !asBot) return;
       }
 
+      // Plausibility checks against the server's own picture of the match.
+      if (!screen(room.guard, ws, isHost, clean)) return;
+
       // "from" is stamped by the server and always wins; clients can't set it.
       const out = JSON.stringify({ ...clean, from: ws.id });
       for (const [id, peer] of room.members) {
@@ -250,6 +268,51 @@ function handleMessage(ws, raw, isBinary) {
     }
   }
 }
+
+// Feeds the room's guard and decides whether a gameplay message may be relayed.
+// May rewrite `clean` in place (hit damage is clamped, kill credit is the server's).
+function screen(guard, ws, isHost, clean) {
+  if (ANTICHEAT === "off") return true;
+  const now = Date.now();
+  switch (clean.t) {
+    case "state": guard.onState(ws.id, clean, now); return true;
+    case "bots": guard.onBots(clean.bots, now); return true;
+    case "restart": guard.onRestart(clean.settings); return true;
+    case "sync": guard.onSync(clean.forId, clean.settings); return true;
+    case "end": guard.onEnd(); return true;
+    case "hit": {
+      const v = guard.checkHit(ws.id, isHost, clean, now);
+      if (v.ok) {
+        if (ANTICHEAT === "enforce") clean.damage = v.damage;
+        return true;
+      }
+      noteReject("hit:" + v.reason);
+      return ANTICHEAT !== "enforce";
+    }
+    case "kill": {
+      const v = guard.checkKill(ws.id, isHost, clean, now);
+      if (v.ok) {
+        if (ANTICHEAT === "enforce") clean.attackerId = v.attackerId;
+        return true;
+      }
+      noteReject("kill:" + v.reason);
+      return ANTICHEAT !== "enforce";
+    }
+    default: return true;
+  }
+}
+
+function noteReject(key) {
+  rejectCounts.set(key, (rejectCounts.get(key) || 0) + 1);
+}
+
+// Once a minute, say what the validation turned away (silent when nothing happened).
+setInterval(() => {
+  if (rejectCounts.size === 0) return;
+  const parts = [...rejectCounts].map(([k, n]) => `${k}=${n}`).join(" ");
+  console.log(`[anticheat:${ANTICHEAT}] last minute: ${parts}`);
+  rejectCounts.clear();
+}, 60_000).unref();
 
 // Drop connections that stopped answering pings (half-open sockets pile up otherwise).
 setInterval(() => {
