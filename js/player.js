@@ -1,16 +1,17 @@
 import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
 import { applyBodyLook, buildAccessory, disposeGroup } from "./customization.js";
 
-// ===== Movement tuning — Quake-style accelerate() model =====
-// Unlike a simple "add force, clamp to max speed" model, this doesn't hard
-// cap your speed after movement. Ground friction keeps normal running feeling
-// controlled, but air acceleration lets you gain extra speed by strafing
-// (holding A/D or diagonal movement) while turning the mouse in the air —
-// classic Quake/CPMA-style air strafing / bunny hopping.
+// ===== Movement tuning =====
+// Ground movement stays responsive, while jumping preserves the same vertical
+// impulse and gravity but reduces horizontal launch speed and air steering.
 export const MOVE = {
   GROUND_ACCEL: 14,
-  WISH_SPEED: 16,     // target speed, both ground accelerate() and air instant-redirect chase this
-  MAX_SPEED_SANITY: 45, // hard safety cap only, not a normal gameplay limit
+  WISH_SPEED: 16,
+  AIR_WISH_SPEED: 7.5,
+  AIR_ACCEL: 3.0,
+  AIR_LAUNCH_MULTIPLIER: 0.72,
+  AIR_MAX_SPEED: 10.5,
+  MAX_SPEED_SANITY: 45,
   FRICTION: 8,
   GRAVITY: 35,
   JUMP_VEL: 12,
@@ -626,21 +627,22 @@ export class PlayerController {
       this.#friction(dt);
       if (hasInput) this.#accelerate(wishDir, MOVE.WISH_SPEED, MOVE.GROUND_ACCEL, dt);
     } else if (hasInput) {
-      // Full air control: snap horizontal velocity directly toward the
-      // wish direction rather than only adding speed along it. This is
-      // what makes direction changes feel instant instead of "sliding"
-      // in your old direction — the classic Quake air-accelerate formula
-      // only adds speed, it never removes your existing momentum, so
-      // reversing direction takes a while to fight through the old
-      // velocity. If you release all movement keys mid-air, your
-      // momentum still carries through untouched — this only kicks in
-      // while you're actively holding a direction.
-      this.vel.x = wishDir.x * MOVE.WISH_SPEED;
-      this.vel.z = wishDir.z * MOVE.WISH_SPEED;
+      // Limited air acceleration: steering changes momentum gradually rather
+      // than snapping the player to a new direction every frame.
+      this.#accelerate(wishDir, MOVE.AIR_WISH_SPEED, MOVE.AIR_ACCEL, dt);
     }
 
-    // Safety cap only — not meant to be reachable in normal play, just
-    // guards against runaway numbers rather than limiting strafe-jump gain.
+    // Keep the airborne horizontal speed below normal running speed. This
+    // reduces jump distance and prevents repeated air-strafing speed gain.
+    if (!this.onGround) {
+      const airSpeed = Math.hypot(this.vel.x, this.vel.z);
+      if (airSpeed > MOVE.AIR_MAX_SPEED) {
+        this.vel.x *= MOVE.AIR_MAX_SPEED / airSpeed;
+        this.vel.z *= MOVE.AIR_MAX_SPEED / airSpeed;
+      }
+    }
+
+    // Safety cap for invalid/extreme values.
     const spd = Math.hypot(this.vel.x, this.vel.z);
     if (spd > MOVE.MAX_SPEED_SANITY) {
       this.vel.x *= MOVE.MAX_SPEED_SANITY / spd;
@@ -648,6 +650,10 @@ export class PlayerController {
     }
 
     if (this.onGround && jumpPressed) {
+      // Reduce horizontal launch speed only. JUMP_VEL and GRAVITY stay
+      // unchanged, so the jump reaches the same height as before.
+      this.vel.x *= MOVE.AIR_LAUNCH_MULTIPLIER;
+      this.vel.z *= MOVE.AIR_LAUNCH_MULTIPLIER;
       this.vel.y = MOVE.JUMP_VEL;
       this.onGround = false;
     }
