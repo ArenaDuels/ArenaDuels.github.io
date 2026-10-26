@@ -67,8 +67,10 @@ no impersonation of other players, brute-force limiting on room codes.
 
 Optional environment variables:
 
-- `ALLOWED_ORIGINS` — comma-separated list of sites allowed to connect,
-  e.g. `https://arenaduels.github.io`. Leave unset to allow any site.
+- `ALLOWED_ORIGINS` — comma-separated list of sites allowed to connect.
+  Defaults to `https://arenaduels.github.io` only. Connections from any other
+  website (or with no Origin header) are refused. Add extra entries here if you
+  need local testing, e.g. `https://arenaduels.github.io,http://localhost:5500`.
 - `TRUST_PROXY` — set to `0` if the server is NOT behind a proxy
   (Render/Railway/Fly are; leave it alone there).
 

@@ -27,11 +27,14 @@ const RATE_STRIKES_TO_KICK = 300; // dropped messages before the connection is c
 const NO_ROOM_TIMEOUT_MS = 60_000;
 const MAX_JOIN_FAILS_PER_MIN = 20;
 
-// Optional: ALLOWED_ORIGINS="https://arenaduels.github.io,https://example.com"
-// When set, browsers on other sites can't use your relay. (Non-browser clients
-// can fake the header, so this limits casual abuse, it isn't authentication.)
+// Only this site may connect from a browser. To allow more (e.g. local testing),
+// set ALLOWED_ORIGINS="https://arenaduels.github.io,http://localhost:5500" on the host.
+// Note: non-browser clients can fake the Origin header, so this stops other
+// websites from using your server, it isn't authentication.
+const DEFAULT_ORIGINS = ["https://arenaduels.github.io"];
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
-  .split(",").map((s) => s.trim()).filter(Boolean);
+  .split(",").map((s) => s.trim().replace(/\/+$/, "").toLowerCase()).filter(Boolean);
+if (ALLOWED_ORIGINS.length === 0) ALLOWED_ORIGINS.push(...DEFAULT_ORIGINS);
 const TRUST_PROXY = process.env.TRUST_PROXY !== "0"; // Render/Railway/Fly sit behind a proxy
 
 // A tiny HTTP server so hosts like Render have something to health-check.
@@ -44,7 +47,7 @@ const wss = new WebSocketServer({
   server: httpServer,
   maxPayload: MAX_MESSAGE_BYTES, // oversized frames are rejected before being buffered
   perMessageDeflate: false,      // no compression => no decompression bombs
-  verifyClient: ({ origin }) => ALLOWED_ORIGINS.length === 0 || ALLOWED_ORIGINS.includes(origin),
+  verifyClient: ({ origin }) => typeof origin === "string" && ALLOWED_ORIGINS.includes(origin.toLowerCase()),
 });
 wss.on("error", (err) => console.error("wss error:", err.message));
 
