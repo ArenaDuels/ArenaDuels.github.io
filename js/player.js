@@ -1,5 +1,6 @@
 import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
 import { applyBodyLook, buildAccessory, disposeGroup } from "./customization.js";
+import { cleanBody, cleanName } from "./validate.js";
 
 // ===== Movement tuning =====
 // Ground movement stays responsive, while jumping preserves the same vertical
@@ -716,9 +717,7 @@ export class RemotePlayer {
 
     // Visible to everyone else, unlike the local player's own first-person
     // viewmodel — attached to the capsule body so it turns with them.
-    const heldGun = makeHeldGun(color);
-    this.heldGun = heldGun.group;
-    this.heldGunMuzzle = heldGun.muzzle;
+    this.heldGun = makeHeldGun(color);
     this.mesh.add(this.heldGun);
 
     this.name = name;
@@ -768,8 +767,8 @@ export class RemotePlayer {
   }
 
   setName(name) {
-    this.name = name;
-    this.nameSprite.userData.setText(name);
+    this.name = cleanName(name);
+    this.nameSprite.userData.setText(this.name); // drawn on a canvas — never parsed as HTML
   }
 
   spawn(spawnPoint) {
@@ -781,12 +780,14 @@ export class RemotePlayer {
   }
 
   // Call this whenever a network snapshot arrives.
-  applyNetState(state) {
+  applyNetState(raw) {
+    const state = cleanBody(raw); // finite, range-checked numbers only
+    if (!state) return;
     this.targetPos.set(state.x, state.y, state.z);
     this.targetYaw = state.yaw;
-    this.targetPitch = state.pitch || 0;
+    this.targetPitch = state.pitch;
     this.hp = state.hp;
-    this.firing = !!state.firing;
+    this.firing = state.firing;
     if (state.hp <= 0) {
       this.setVisible(false);
     } else if (!this.visible) {
@@ -817,9 +818,6 @@ export class RemotePlayer {
     const t = Math.min(1, dt * 12);
     this.mesh.position.lerp(this.targetPos, t);
     this.mesh.rotation.y += (this.targetYaw - this.mesh.rotation.y) * t;
-    // Pitch the third-person weapon with the remote player's replicated aim.
-    // The body remains upright; only the held weapon tilts up/down.
-    this.heldGun.rotation.x += (this.targetPitch - this.heldGun.rotation.x) * t;
 
     if (this.visible && this.hp > 0) {
       this.hpBar.position.copy(this.mesh.position);
@@ -830,9 +828,8 @@ export class RemotePlayer {
       this.nameSprite.position.y += 1.85;
 
       if (this.firing) {
-        // Use the actual world-space muzzle of the replicated third-person gun,
-        // not an approximate point inside the player's torso.
-        const origin = this.heldGunMuzzle.getWorldPosition(new THREE.Vector3());
+        const origin = this.mesh.position.clone();
+        origin.y += MOVE.EYE_HEIGHT - 1.4; // mesh position is feet-ish; eye is higher
         const dir = dirFromYawPitch(this.targetYaw, this.targetPitch);
         const end = origin.clone().addScaledVector(dir, 50);
         aimLaser(this.laser, origin, end, false);

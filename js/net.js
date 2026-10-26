@@ -7,6 +7,8 @@
 // Set this to your deployed relay server's URL — see server/README.md.
 const SERVER_URL = "wss://arenaduels-relay.onrender.com";
 
+import { cleanLobbies, isValidArenaId, isValidCode, isValidId, MAX_MESSAGE_BYTES } from "./validate.js";
+
 const CONNECT_TIMEOUT_MS = 12000;
 
 export class Net {
@@ -31,6 +33,7 @@ export class Net {
         const msg = this._parse(ev);
         if (!msg) return;
         if (msg.t === "room_created") {
+          if (!isValidCode(msg.code) || !isValidId(msg.id)) return;
           this._settled = true;
           clearTimeout(this._timeout);
           this.ws = ws;
@@ -58,7 +61,7 @@ export class Net {
         if (msg && msg.t === "lobby_list") {
           clearTimeout(timeout);
           ws.close();
-          resolve(msg.lobbies);
+          resolve(cleanLobbies(msg.lobbies));
         }
       };
       ws.onerror = () => {
@@ -71,12 +74,27 @@ export class Net {
   /** Join an existing room by its 6-digit code. */
   join(code) {
     return new Promise((resolve, reject) => {
+      if (!isValidCode(code)) {
+        reject(new Error("Enter the 6-digit code."));
+        return;
+      }
       const ws = this._connect(reject);
       ws.onopen = () => ws.send(JSON.stringify({ t: "join_room", code }));
       ws.onmessage = (ev) => {
         const msg = this._parse(ev);
         if (!msg) return;
         if (msg.t === "room_joined") {
+          const peers = Array.isArray(msg.peers) ? msg.peers : null;
+          if (
+            !isValidId(msg.id) || !isValidId(msg.hostId) || !isValidArenaId(msg.arenaId) ||
+            !peers || peers.length > 8 || !peers.every(isValidId)
+          ) {
+            this._settled = true;
+            clearTimeout(this._timeout);
+            ws.close();
+            reject(new Error("Unexpected reply from the server."));
+            return;
+          }
           this._settled = true;
           clearTimeout(this._timeout);
           this.ws = ws;
@@ -118,9 +136,14 @@ export class Net {
     return ws;
   }
 
+  // Parse one incoming frame. Anything oversized, non-text, malformed or not a
+  // plain JSON object with a string "t" is dropped (returns null).
   _parse(ev) {
     try {
-      return JSON.parse(ev.data);
+      if (typeof ev.data !== "string" || ev.data.length > MAX_MESSAGE_BYTES) return null;
+      const msg = JSON.parse(ev.data);
+      if (msg === null || typeof msg !== "object" || Array.isArray(msg) || typeof msg.t !== "string") return null;
+      return msg;
     } catch {
       return null;
     }
@@ -132,12 +155,22 @@ export class Net {
       const msg = this._parse(ev);
       if (!msg) return;
 
-      if (msg.t === "peer_joined") {
-        if (this.onPeerConnected) this.onPeerConnected(msg.id);
-      } else if (msg.t === "peer_left") {
-        if (this.onPeerDisconnected) this.onPeerDisconnected(msg.id);
-      } else {
-        if (this.onData) this.onData(msg, msg.from);
+      try {
+        if (msg.t === "peer_joined" || msg.t === "peer_left") {
+          // Genuine join/leave notices come from the server itself and carry no
+          // "from". Anything else with these types is a player pretending.
+          if (msg.from !== undefined || !isValidId(msg.id)) return;
+          if (msg.t === "peer_joined") {
+            if (this.onPeerConnected) this.onPeerConnected(msg.id);
+          } else if (this.onPeerDisconnected) {
+            this.onPeerDisconnected(msg.id);
+          }
+        } else if (isValidId(msg.from)) {
+          if (this.onData) this.onData(msg, msg.from);
+        }
+      } catch (err) {
+        // One bad packet must never take the game down.
+        console.warn("Ignored a message that failed to process:", err);
       }
     };
 

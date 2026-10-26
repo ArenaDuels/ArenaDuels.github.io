@@ -8,6 +8,7 @@ import { COLORS, PATTERNS, ACCESSORIES, loadLook, saveLook, sanitizeLook } from 
 import { MatchState, DEFAULT_SETTINGS as DEFAULT_MATCH_RULES, sanitizeSettings } from "./match.js";
 import { iconSvg } from "./icons.js";
 import { createLookPreview } from "./look-preview.js";
+import { cleanName, cleanRelay, isBotId, isValidArenaId, isValidId } from "./validate.js";
 
 /* =========================================================
    SETTINGS — persisted to localStorage. Sensitivity uses the same
@@ -245,8 +246,7 @@ document.getElementById("btn-random-name").addEventListener("click", () => {
 });
 
 function getPlayerName() {
-  const raw = nameInput.value.trim();
-  return raw || randomName();
+  return cleanName(nameInput.value, "") || randomName();
 }
 
 /* =========================================================
@@ -375,13 +375,27 @@ net.onPeerDisconnected = (id) => {
   }
 };
 
-function handleData(msg, fromId) {
+const MAX_REMOTE_PLAYERS = 16; // 4 humans + bots, with headroom — stops a flood of fake ids
+
+// Everything that arrives from the network goes through here. cleanRelay()
+// rebuilds the message from range-checked fields (or drops it), so the code
+// below only ever sees well-formed data.
+function handleData(rawMsg, fromId) {
+  if (!isValidId(fromId)) return;
+  const msg = cleanRelay(rawMsg);
+  if (!msg) return;
+  const fromHost = fromId === hostId;
+  if ((msg.t === "end" || msg.t === "restart" || msg.t === "sync" || msg.t === "clock" || msg.t === "bots") && !fromHost) return;
+  if (!players.has(fromId) && players.size >= MAX_REMOTE_PLAYERS) return;
+
   if (msg.t === "hello") {
     // Older clients send no look — sanitizeLook turns that into the default.
     addOrUpdatePlayer(fromId, msg.name).setLook(sanitizeLook(msg.look), colorForId(fromId));
   } else if (msg.t === "state") {
     addOrUpdatePlayer(fromId).applyNetState(msg);
   } else if (msg.t === "hit") {
+    // Players may only report their own shots; only the host may attack as a bot.
+    if (msg.attackerId !== fromId && !(fromHost && isBotId(msg.attackerId))) return;
     // Host only: a remote player shot one of the bots.
     if (botManager && botManager.has(msg.targetId)) {
       botManager.damage(msg.targetId, msg.attackerId, msg.damage);
@@ -394,7 +408,7 @@ function handleData(msg, fromId) {
     const ok =
       typeof msg.attackerId === "string" &&
       typeof msg.victimId === "string" &&
-      (msg.victimId === fromId || (fromId === hostId && msg.victimId.startsWith("bot-")));
+      (msg.victimId === fromId || (fromHost && isBotId(msg.victimId)));
     if (ok) applyKill(msg.attackerId, msg.victimId);
   } else if (msg.t === "end") {
     if (fromId !== hostId || match.over) return;
@@ -418,6 +432,7 @@ function handleData(msg, fromId) {
   } else if (msg.t === "bots") {
     // Host-simulated bots: show them like any other remote player.
     for (const b of msg.bots) {
+      if (!players.has(b.id) && players.size >= MAX_REMOTE_PLAYERS) break;
       const rp = players.get(b.id) || addOrUpdatePlayer(b.id, b.name);
       rp.applyNetState(b);
     }
@@ -728,6 +743,7 @@ async function doJoin(code, statusEl) {
 
     match.scores.clear();
     applyMatchSettings(DEFAULT_MATCH_RULES); // replaced by the host's rules a moment later ("sync")
+    if (!isValidArenaId(result.arenaId)) throw new Error("Bad arena");
     await beginMatch(result.arenaId);
     for (const id of result.peers) addOrUpdatePlayer(id, "Player");
     net.broadcast({ t: "hello", name: myName, look: myLook });

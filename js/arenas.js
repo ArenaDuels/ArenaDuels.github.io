@@ -8,5 +8,5 @@ export const ARENAS = { classic, foundry, ruins, neon, mansion };
 export const ARENA_LIST = [classic, foundry, ruins, neon, mansion];
 
 export function getArena(id) {
-  return ARENAS[id] || ARENAS.classic;
+  return Object.hasOwn(ARENAS, id) ? ARENAS[id] : ARENAS.classic;
 }

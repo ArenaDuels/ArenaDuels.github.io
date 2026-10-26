@@ -8,6 +8,8 @@
 //   - The HOST owns the clock and decides when the match ends; clients just
 //     tick a local copy for a smooth display and obey the host's "end".
 
+import { cleanName, MAX_SNAP_ENTRIES } from "./validate.js";
+
 export const DEFAULT_SETTINGS = Object.freeze({
   timeLimit: 10,      // minutes, 0 = no time limit
   scoreLimit: 20,     // kills to win, 0 = no score limit
@@ -50,10 +52,10 @@ export class MatchState {
   ensurePlayer(id, name) {
     let e = this.scores.get(id);
     if (!e) {
-      e = { id, name: name || "Player", kills: 0, deaths: 0 };
+      e = { id, name: cleanName(name), kills: 0, deaths: 0 };
       this.scores.set(id, e);
     } else if (name) {
-      e.name = name;
+      e.name = cleanName(name, e.name);
     }
     return e;
   }
@@ -138,14 +140,15 @@ export class MatchState {
   /** Adopt the host's view (late joiners, match end). Unknown ids are added. */
   load(snap) {
     if (!snap || !Array.isArray(snap.entries)) return;
-    for (const e of snap.entries) {
-      if (typeof e?.id !== "string") continue;
-      const entry = this.ensurePlayer(e.id, typeof e.name === "string" ? e.name.slice(0, 24) : undefined);
-      entry.kills = Number.isFinite(e.kills) ? e.kills : 0;
-      entry.deaths = Number.isFinite(e.deaths) ? e.deaths : 0;
+    const count = (v) => (Number.isFinite(v) ? Math.min(100000, Math.max(0, Math.round(v))) : 0);
+    for (const e of snap.entries.slice(0, MAX_SNAP_ENTRIES)) {
+      if (typeof e?.id !== "string" || e.id.length > 16) continue;
+      const entry = this.ensurePlayer(e.id, typeof e.name === "string" ? e.name : undefined);
+      entry.kills = count(e.kills);
+      entry.deaths = count(e.deaths);
     }
-    if (Number.isFinite(snap.remaining)) this.remaining = snap.remaining < 0 ? Infinity : snap.remaining;
+    if (Number.isFinite(snap.remaining)) this.remaining = snap.remaining < 0 ? Infinity : Math.min(86400, snap.remaining);
     this.over = !!snap.over;
-    this.reason = snap.reason ?? null;
+    this.reason = snap.reason === "score" || snap.reason === "time" ? snap.reason : null;
   }
 }

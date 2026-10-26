@@ -57,3 +57,20 @@ const SERVER_URL = "ws://localhost:8080";
 ```
 (No `s` in `ws://` for local plain HTTP — switch back to `wss://` once
 you point at your real deployed HTTPS server.)
+
+## Security settings
+
+The relay treats every client as untrusted. Built in (no setup needed):
+message size cap (8 KB), per-connection rate limit, 8 connections per IP,
+strict validation of every gameplay message, host-only messages enforced,
+no impersonation of other players, brute-force limiting on room codes.
+
+Optional environment variables:
+
+- `ALLOWED_ORIGINS` — comma-separated list of sites allowed to connect,
+  e.g. `https://arenaduels.github.io`. Leave unset to allow any site.
+- `TRUST_PROXY` — set to `0` if the server is NOT behind a proxy
+  (Render/Railway/Fly are; leave it alone there).
+
+`server/validate.js` is an identical copy of `js/validate.js`. If you change
+the message rules, copy the file to both places.

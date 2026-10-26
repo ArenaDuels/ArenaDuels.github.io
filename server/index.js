@@ -1,88 +1,199 @@
 // ArenaDuels relay server.
 // Plain WebSocket relay — no WebRTC, no STUN/TURN, no NAT traversal needed.
 // Every client just makes one normal outbound WebSocket connection to this
-// server (identical to any HTTPS request as far as routers/firewalls are
-// concerned), and the server relays game messages between everyone in the
-// same room. Deploy this somewhere that stays running (Render, Railway,
-// Fly.io, a small VPS) — see server/README.md for step-by-step instructions.
+// server, and the server relays game messages between everyone in the same
+// room. Deploy this somewhere that stays running — see server/README.md.
+//
+// Hardening (the server never trusts a client):
+//   - hard cap on message size, per-connection rate limit, per-IP connection cap
+//   - every message must be a JSON object with a known type; anything else is dropped
+//   - relayed messages are rebuilt from validated fields (nothing is forwarded verbatim)
+//   - clients can't impersonate each other or send host-only messages
+//   - one bad packet can never throw out of a handler and take the process down
 
 import { WebSocketServer } from "ws";
 import http from "http";
+import crypto from "crypto";
+import { cleanRelay, HOST_ONLY, isBotId, isValidArenaId, isValidCode, MAX_MESSAGE_BYTES } from "./validate.js";
 
 const PORT = process.env.PORT || 8080;
 const MAX_PLAYERS = 4;
+const MAX_ROOMS = 500;
+const MAX_CONNECTIONS = 1000;
+const MAX_CONNECTIONS_PER_IP = 8;
+const RATE_CAPACITY = 200;       // burst allowance (messages)
+const RATE_PER_SEC = 150;        // sustained allowance (a busy player sends ~100/s)
+const RATE_STRIKES_TO_KICK = 300; // dropped messages before the connection is closed
+const NO_ROOM_TIMEOUT_MS = 60_000;
+const MAX_JOIN_FAILS_PER_MIN = 20;
+
+// Optional: ALLOWED_ORIGINS="https://arenaduels.github.io,https://example.com"
+// When set, browsers on other sites can't use your relay. (Non-browser clients
+// can fake the header, so this limits casual abuse, it isn't authentication.)
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
+  .split(",").map((s) => s.trim()).filter(Boolean);
+const TRUST_PROXY = process.env.TRUST_PROXY !== "0"; // Render/Railway/Fly sit behind a proxy
 
 // A tiny HTTP server so hosts like Render have something to health-check.
 const httpServer = http.createServer((req, res) => {
-  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.writeHead(200, { "Content-Type": "text/plain", "X-Content-Type-Options": "nosniff" });
   res.end("ArenaDuels relay server is running.\n");
 });
 
-const wss = new WebSocketServer({ server: httpServer });
+const wss = new WebSocketServer({
+  server: httpServer,
+  maxPayload: MAX_MESSAGE_BYTES, // oversized frames are rejected before being buffered
+  perMessageDeflate: false,      // no compression => no decompression bombs
+  verifyClient: ({ origin }) => ALLOWED_ORIGINS.length === 0 || ALLOWED_ORIGINS.includes(origin),
+});
+wss.on("error", (err) => console.error("wss error:", err.message));
 
-// code -> { hostId, arenaId, members: Map<id, ws> }
+// code -> { hostId, arenaId, isPublic, members: Map<id, ws> }
 const rooms = new Map();
+const connectionsByIp = new Map();
+const joinFailsByIp = new Map(); // ip -> { count, resetAt }
 
-function randomCode() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+const randomCode = () => String(crypto.randomInt(100000, 1000000));
+const randomId = () => crypto.randomBytes(6).toString("hex"); // 12 chars, unguessable
+
+function clientIp(req) {
+  if (TRUST_PROXY) {
+    const fwd = req.headers["x-forwarded-for"];
+    if (typeof fwd === "string" && fwd) return fwd.split(",").pop().trim().slice(0, 64);
+  }
+  return req.socket.remoteAddress || "unknown";
 }
-function randomId() {
-  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
-}
+
 function send(ws, obj) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
 }
 
-wss.on("connection", (ws) => {
+function takeToken(ws) {
+  const now = Date.now();
+  ws.tokens = Math.min(RATE_CAPACITY, ws.tokens + ((now - ws.lastRefill) / 1000) * RATE_PER_SEC);
+  ws.lastRefill = now;
+  if (ws.tokens < 1) return false;
+  ws.tokens -= 1;
+  return true;
+}
+
+function joinAllowed(ip) {
+  const now = Date.now();
+  const e = joinFailsByIp.get(ip);
+  if (!e || e.resetAt < now) return true;
+  return e.count < MAX_JOIN_FAILS_PER_MIN;
+}
+function noteJoinFail(ip) {
+  const now = Date.now();
+  const e = joinFailsByIp.get(ip);
+  if (!e || e.resetAt < now) joinFailsByIp.set(ip, { count: 1, resetAt: now + 60_000 });
+  else e.count++;
+}
+
+wss.on("connection", (ws, req) => {
+  const ip = clientIp(req);
+  const open = connectionsByIp.get(ip) || 0;
+  if (wss.clients.size > MAX_CONNECTIONS || open >= MAX_CONNECTIONS_PER_IP) {
+    ws.close(1013, "Too many connections");
+    return;
+  }
+  connectionsByIp.set(ip, open + 1);
+
   ws.id = randomId();
   ws.room = null;
+  ws.ip = ip;
+  ws.tokens = RATE_CAPACITY;
+  ws.lastRefill = Date.now();
+  ws.strikes = 0;
+  ws.alive = true;
 
-  ws.on("message", (raw) => {
-    let msg;
+  // Someone who connects and never joins/creates a room doesn't get to sit here forever.
+  const idleTimer = setTimeout(() => {
+    if (!ws.room && ws.listing !== true) ws.close(1008, "Idle");
+  }, NO_ROOM_TIMEOUT_MS);
+
+  ws.on("error", () => {}); // e.g. oversized frame — the socket is closed for us; just don't crash
+  ws.on("pong", () => { ws.alive = true; });
+
+  ws.on("message", (raw, isBinary) => {
     try {
-      msg = JSON.parse(raw.toString());
-    } catch {
-      return;
+      handleMessage(ws, raw, isBinary);
+    } catch (err) {
+      console.error("message handler error:", err.message); // a bad packet must never kill the server
     }
+  });
 
-    if (msg.t === "create_room") {
+  ws.on("close", () => {
+    clearTimeout(idleTimer);
+    const n = (connectionsByIp.get(ip) || 1) - 1;
+    if (n <= 0) connectionsByIp.delete(ip);
+    else connectionsByIp.set(ip, n);
+
+    const room = ws.room && rooms.get(ws.room);
+    if (!room) return;
+    room.members.delete(ws.id);
+    for (const peer of room.members.values()) send(peer, { t: "peer_left", id: ws.id });
+    if (room.members.size === 0) rooms.delete(ws.room);
+    // If the host left, the match is over for everyone; clients already treat that via peer_left.
+  });
+});
+
+function handleMessage(ws, raw, isBinary) {
+  if (isBinary) return;
+
+  if (!takeToken(ws)) {
+    if (++ws.strikes >= RATE_STRIKES_TO_KICK) ws.close(1008, "Rate limit");
+    return;
+  }
+
+  let msg;
+  try {
+    msg = JSON.parse(raw.toString());
+  } catch {
+    return;
+  }
+  // JSON.parse("null") / "5" / "[]" are valid JSON — they must not reach msg.t below.
+  if (msg === null || typeof msg !== "object" || Array.isArray(msg) || typeof msg.t !== "string") return;
+
+  switch (msg.t) {
+    case "create_room": {
+      if (ws.room || rooms.size >= MAX_ROOMS || !isValidArenaId(msg.arenaId)) return;
       let code = randomCode();
-      let tries = 0;
-      while (rooms.has(code) && tries < 10) {
-        code = randomCode();
-        tries++;
-      }
-      const members = new Map([[ws.id, ws]]);
+      for (let tries = 0; rooms.has(code) && tries < 10; tries++) code = randomCode();
+      if (rooms.has(code)) return;
       rooms.set(code, {
         hostId: ws.id,
         arenaId: msg.arenaId,
-        isPublic: !!msg.isPublic,
-        members,
+        isPublic: msg.isPublic === true,
+        members: new Map([[ws.id, ws]]),
       });
       ws.room = code;
       send(ws, { t: "room_created", code, id: ws.id });
       return;
     }
 
-    if (msg.t === "list_lobbies") {
+    case "list_lobbies": {
+      ws.listing = true;
       const lobbies = [];
       for (const [code, room] of rooms) {
         if (room.isPublic && room.members.size < MAX_PLAYERS) {
-          lobbies.push({
-            code,
-            arenaId: room.arenaId,
-            playerCount: room.members.size,
-            maxPlayers: MAX_PLAYERS,
-          });
+          lobbies.push({ code, arenaId: room.arenaId, playerCount: room.members.size, maxPlayers: MAX_PLAYERS });
+          if (lobbies.length >= 50) break;
         }
       }
       send(ws, { t: "lobby_list", lobbies });
       return;
     }
 
-    if (msg.t === "join_room") {
-      const room = rooms.get(msg.code);
+    case "join_room": {
+      if (ws.room) return;
+      if (!joinAllowed(ws.ip)) {
+        send(ws, { t: "join_error", error: "Too many attempts. Wait a minute and try again." });
+        return;
+      }
+      const room = isValidCode(msg.code) ? rooms.get(msg.code) : undefined;
       if (!room) {
+        noteJoinFail(ws.ip);
         send(ws, { t: "join_error", error: "Room not found." });
         return;
       }
@@ -101,33 +212,52 @@ wss.on("connection", (ws) => {
         hostId: room.hostId,
         peers: peerIds,
       });
-      // Tell everyone already in the room that a new player showed up.
       for (const [id, peer] of room.members) {
         if (id !== ws.id) send(peer, { t: "peer_joined", id: ws.id });
       }
       return;
     }
 
-    // Anything else is a gameplay message — relay it to everyone else
-    // currently in the same room, tagging it with the sender's id.
-    const room = rooms.get(ws.room);
-    if (!room) return;
-    const out = { ...msg, from: ws.id };
-    for (const [id, peer] of room.members) {
-      if (id !== ws.id) send(peer, out);
-    }
-  });
+    default: {
+      // Gameplay message — only relayed for someone who is in a room.
+      const room = ws.room && rooms.get(ws.room);
+      if (!room) return;
 
-  ws.on("close", () => {
-    const room = rooms.get(ws.room);
-    if (!room) return;
-    room.members.delete(ws.id);
-    for (const peer of room.members.values()) {
-      send(peer, { t: "peer_left", id: ws.id });
+      // Rebuild the message from validated fields; unknown types come back null.
+      const clean = cleanRelay(msg);
+      if (!clean) return;
+
+      const isHost = ws.id === room.hostId;
+      if (HOST_ONLY.has(clean.t) && !isHost) return;
+
+      // Nobody gets to claim to be someone else.
+      if (clean.t === "hit") {
+        const asBot = isHost && isBotId(clean.attackerId);
+        if (clean.attackerId !== ws.id && !asBot) return;
+      } else if (clean.t === "kill") {
+        const asBot = isHost && isBotId(clean.victimId) ;
+        if (clean.victimId !== ws.id && !asBot) return;
+      }
+
+      // "from" is stamped by the server and always wins; clients can't set it.
+      const out = JSON.stringify({ ...clean, from: ws.id });
+      for (const [id, peer] of room.members) {
+        if (id !== ws.id && peer.readyState === peer.OPEN) peer.send(out);
+      }
     }
-    if (room.members.size === 0) rooms.delete(ws.room);
-  });
-});
+  }
+}
+
+// Drop connections that stopped answering pings (half-open sockets pile up otherwise).
+setInterval(() => {
+  for (const ws of wss.clients) {
+    if (!ws.alive) { ws.terminate(); continue; }
+    ws.alive = false;
+    ws.ping();
+  }
+  const now = Date.now();
+  for (const [ip, e] of joinFailsByIp) if (e.resetAt < now) joinFailsByIp.delete(ip);
+}, 30_000).unref();
 
 httpServer.listen(PORT, () => {
   console.log(`ArenaDuels relay server listening on port ${PORT}`);
