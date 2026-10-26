@@ -46,10 +46,16 @@
         <h1 class="logo">ARENA<span>DUELS</span></h1>
         <p class="tagline">Strafe, aim and out-duel your friends. Pick an arena, then host a match or drop into one.</p>
 
-        <label class="field-label" for="player-name-input">Your name</label>
+        <label class="field-label" for="player-name-input">Your name (generated)</label>
         <div class="name-row">
-          <input id="player-name-input" class="name-input" maxlength="16" placeholder="Your name">
-          <button id="btn-random-name" class="dice-btn" title="Random name" aria-label="Random name"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3.5"/><circle cx="8.5" cy="8.5" r="1.1" fill="currentColor"/><circle cx="15.5" cy="8.5" r="1.1" fill="currentColor"/><circle cx="12" cy="12" r="1.1" fill="currentColor"/><circle cx="8.5" cy="15.5" r="1.1" fill="currentColor"/><circle cx="15.5" cy="15.5" r="1.1" fill="currentColor"/></svg></button>
+          <input id="player-name-input" class="name-input" maxlength="16" placeholder="Random name" readonly aria-readonly="true">
+          <button id="btn-random-name" class="dice-btn" title="Random guest name" aria-label="Random guest name"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3.5"/><circle cx="8.5" cy="8.5" r="1.1" fill="currentColor"/><circle cx="15.5" cy="8.5" r="1.1" fill="currentColor"/><circle cx="12" cy="12" r="1.1" fill="currentColor"/><circle cx="8.5" cy="15.5" r="1.1" fill="currentColor"/><circle cx="15.5" cy="15.5" r="1.1" fill="currentColor"/></svg></button>
+        </div>
+
+        <div class="account-strip">
+          <span id="account-status" class="account-status">Playing as guest</span>
+          <button id="btn-account" class="btn btn-secondary account-btn">Sign in / Create account</button>
+          <button id="btn-account-signout" class="btn btn-secondary account-btn hidden">Sign out</button>
         </div>
 
         <div class="visibility-toggle" id="visibility-toggle">
@@ -81,6 +87,38 @@
         <div id="arena-detail" class="arena-feature"></div>
         <div id="arena-grid" class="arena-grid"></div>
       </section>
+    </div>
+  </div>
+
+  <!-- ===================== OPTIONAL ACCOUNT MODAL ===================== -->
+  <div id="account-modal" class="modal-overlay hidden">
+    <div class="modal-panel account-panel">
+      <p class="eyebrow">Optional account</p>
+      <h2 id="account-modal-title">Save your name</h2>
+      <p class="account-explainer">You can play without an account. Accounts let you sign in with a generated username and password. No email is required.</p>
+      <div class="account-tabs">
+        <button id="account-tab-register" class="btn btn-primary">Create account</button>
+        <button id="account-tab-login" class="btn btn-secondary">Sign in</button>
+      </div>
+      <form id="account-register-form" autocomplete="on">
+        <label class="field-label" for="account-register-username">Generated username</label>
+        <div class="name-row">
+          <input id="account-register-username" class="name-input" maxlength="16" readonly aria-readonly="true">
+          <button id="account-reroll-name" type="button" class="dice-btn" title="Generate another username" aria-label="Generate another username">🎲</button>
+        </div>
+        <label class="field-label" for="account-register-password">Password (8–128 characters)</label>
+        <input id="account-register-password" class="name-input account-input" type="password" minlength="8" maxlength="128" autocomplete="new-password" required>
+        <button id="account-register-submit" class="btn btn-primary account-submit" type="submit">Create account</button>
+      </form>
+      <form id="account-login-form" class="hidden" autocomplete="on">
+        <label class="field-label" for="account-login-username">Username</label>
+        <input id="account-login-username" class="name-input account-input" maxlength="16" autocomplete="username" required>
+        <label class="field-label" for="account-login-password">Password</label>
+        <input id="account-login-password" class="name-input account-input" type="password" maxlength="128" autocomplete="current-password" required>
+        <button id="account-login-submit" class="btn btn-primary account-submit" type="submit">Sign in</button>
+      </form>
+      <p id="account-message" class="account-message" role="status" aria-live="polite"></p>
+      <button id="btn-account-close" class="btn btn-secondary account-submit" type="button">Close</button>
     </div>
   </div>
 

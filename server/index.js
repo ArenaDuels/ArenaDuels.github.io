@@ -16,10 +16,149 @@
 import { WebSocketServer } from "ws";
 import http from "http";
 import crypto from "crypto";
+import { promisify } from "node:util";
+import { initializeApp, applicationDefault } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
+import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { cleanRelay, HOST_ONLY, isBotId, isValidArenaId, isValidCode, MAX_MESSAGE_BYTES } from "./validate.js";
 import { RoomGuard } from "./anticheat.js";
 
 const PORT = process.env.PORT || 8080;
+const scrypt = promisify(crypto.scrypt);
+const ACCOUNT_NAME_WORDS = [
+  "Blaze", "Nova", "Vortex", "Cipher", "Nomad", "Rogue", "Havoc", "Ember",
+  "Frost", "Glitch", "Raptor", "Viper", "Comet", "Shadow", "Quartz", "Onyx",
+  "Zenith", "Drift", "Static", "Volt", "Surge", "Nebula", "Vector", "Pulse",
+  "Falcon", "Talon", "Wraith", "Specter", "Cinder", "Blitz", "Storm", "Tempest",
+  "Rift", "Echo", "Vertex", "Prism", "Flux", "Turbo", "Rocket", "Meteor",
+  "Aurora", "Eclipse", "Lunar", "Solar", "Photon", "Quantum", "Cobalt", "Chrome",
+  "Crimson", "Scarlet", "Amber", "Jade", "Obsidian", "Ivory", "Rebel", "Maverick",
+  "Outlaw", "Ranger", "Hunter", "Phantom", "Titan", "Bolt", "Spark", "Fury",
+  "Venom", "Reaper", "Rocketeer"
+];
+let firebaseAuth = null;
+let firestore = null;
+try {
+  initializeApp({ credential: applicationDefault(), projectId: process.env.FIREBASE_PROJECT_ID || "arenaduels-7dc31" });
+  firebaseAuth = getAuth();
+  firestore = getFirestore();
+  console.log("[auth] Firebase Admin SDK initialized");
+} catch (err) {
+  console.error("[auth] Firebase Admin SDK unavailable; account endpoints will return 503:", err.message);
+}
+const authAttempts = new Map();
+const authRandomName = () => ACCOUNT_NAME_WORDS[crypto.randomInt(ACCOUNT_NAME_WORDS.length)] + crypto.randomInt(10, 100);
+const usernameKey = (name) => name.toLowerCase();
+function authRateAllowed(ip) {
+  const now = Date.now();
+  const entry = authAttempts.get(ip);
+  if (!entry || entry.resetAt <= now) {
+    authAttempts.set(ip, { count: 1, resetAt: now + 60_000 });
+    return true;
+  }
+  if (entry.count >= 12) return false;
+  entry.count++;
+  return true;
+}
+function authJson(res, status, payload) {
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    "Access-Control-Allow-Origin": "https://arenaduels.github.io",
+    "Vary": "Origin"
+  });
+  res.end(JSON.stringify(payload));
+}
+async function readJsonBody(req, maxBytes = 4096) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > maxBytes) throw new Error("Request too large");
+    chunks.push(chunk);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+function validAccountUsername(name) {
+  return typeof name === "string" && name.length <= 16 &&
+    new RegExp("^(?:" + ACCOUNT_NAME_WORDS.join("|") + ")\\d{2}$", "i").test(name);
+}
+async function passwordHash(password, salt) {
+  return (await scrypt(password, salt, 64)).toString("hex");
+}
+async function handleAuthHttp(req, res, url) {
+  const origin = String(req.headers.origin || "").replace(/\/+$/, "").toLowerCase();
+  if (origin && !ALLOWED_ORIGINS.includes(origin)) return authJson(res, 403, { error: "Origin not allowed." });
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, {
+      "Access-Control-Allow-Origin": "https://arenaduels.github.io",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Max-Age": "600",
+      "Vary": "Origin"
+    });
+    return res.end();
+  }
+  if (!url.pathname.startsWith("/api/auth/")) return false;
+  if (!firebaseAuth || !firestore) return authJson(res, 503, { error: "Account services are not configured yet." });
+  const ip = clientIp(req);
+  if (!authRateAllowed(ip)) return authJson(res, 429, { error: "Too many account requests. Try again in a minute." });
+
+  if (req.method === "GET" && url.pathname === "/api/auth/random-name") {
+    for (let i = 0; i < 30; i++) {
+      const username = authRandomName();
+      const doc = await firestore.collection("arenaUsernames").doc(usernameKey(username)).get();
+      if (!doc.exists) return authJson(res, 200, { username });
+    }
+    return authJson(res, 503, { error: "Could not find an available name. Try again." });
+  }
+  if (req.method !== "POST") return authJson(res, 405, { error: "Method not allowed." });
+
+  let body;
+  try { body = await readJsonBody(req); }
+  catch { return authJson(res, 400, { error: "Invalid request body." }); }
+  const username = typeof body.username === "string" ? body.username : "";
+  const password = typeof body.password === "string" ? body.password : "";
+  if (!validAccountUsername(username)) return authJson(res, 400, { error: "Choose a generated username using the dice button." });
+  if (password.length < 8 || password.length > 128) return authJson(res, 400, { error: "Password must be 8–128 characters." });
+
+  try {
+    const key = usernameKey(username);
+    const usernameRef = firestore.collection("arenaUsernames").doc(key);
+    if (url.pathname === "/api/auth/register") {
+      const uid = crypto.randomUUID().replace(/-/g, "");
+      const salt = crypto.randomBytes(16).toString("hex");
+      const hash = await passwordHash(password, salt);
+      await firestore.runTransaction(async (tx) => {
+        const existing = await tx.get(usernameRef);
+        if (existing.exists) throw Object.assign(new Error("That generated username is taken. Roll a new one."), { statusCode: 409 });
+        const accountRef = firestore.collection("arenaAccounts").doc(uid);
+        tx.create(usernameRef, { uid, username, salt, passwordHash: hash, createdAt: FieldValue.serverTimestamp() });
+        tx.create(accountRef, { uid, username, createdAt: FieldValue.serverTimestamp(), wins: 0, losses: 0, matches: 0 });
+      });
+      const token = await firebaseAuth.createCustomToken(uid, { username });
+      return authJson(res, 201, { token, username });
+    }
+    if (url.pathname === "/api/auth/login") {
+      const snap = await usernameRef.get();
+      if (!snap.exists) return authJson(res, 401, { error: "Username or password is incorrect." });
+      const record = snap.data();
+      const candidate = Buffer.from(await passwordHash(password, record.salt), "hex");
+      const actual = Buffer.from(record.passwordHash, "hex");
+      if (candidate.length !== actual.length || !crypto.timingSafeEqual(candidate, actual)) {
+        return authJson(res, 401, { error: "Username or password is incorrect." });
+      }
+      const token = await firebaseAuth.createCustomToken(record.uid, { username: record.username });
+      return authJson(res, 200, { token, username: record.username });
+    }
+    return authJson(res, 404, { error: "Unknown account endpoint." });
+  } catch (err) {
+    if (err.statusCode) return authJson(res, err.statusCode, { error: err.message });
+    console.error("[auth] request failed:", err.message);
+    return authJson(res, 500, { error: "Account request failed. Try again later." });
+  }
+}
 const MAX_PLAYERS = 4;
 const MAX_ROOMS = 500;
 const MAX_CONNECTIONS = 1000;
@@ -49,9 +188,19 @@ const ANTICHEAT = ["enforce", "log", "off"].includes(process.env.ANTICHEAT) ? pr
 const rejectCounts = new Map(); // reason -> count since the last report
 
 // A tiny HTTP server so hosts like Render have something to health-check.
-const httpServer = http.createServer((req, res) => {
+const httpServer = http.createServer(async (req, res) => {
+  const url = new URL(req.url || "/", "http://localhost");
+  if (url.pathname.startsWith("/api/auth/") || req.method === "OPTIONS") {
+    try {
+      await handleAuthHttp(req, res, url);
+    } catch (err) {
+      console.error("[http] request failed:", err.message);
+      if (!res.writableEnded) authJson(res, 500, { error: "Server error." });
+    }
+    return;
+  }
   res.writeHead(200, { "Content-Type": "text/plain", "X-Content-Type-Options": "nosniff" });
-  res.end("ArenaDuels relay server is running.\n");
+  res.end("ArenaDuels relay server is running.\\n");
 });
 
 const wss = new WebSocketServer({
@@ -323,6 +472,7 @@ setInterval(() => {
   }
   const now = Date.now();
   for (const [ip, e] of joinFailsByIp) if (e.resetAt < now) joinFailsByIp.delete(ip);
+  for (const [ip, e] of authAttempts) if (e.resetAt < now) authAttempts.delete(ip);
 }, 30_000).unref();
 
 httpServer.listen(PORT, () => {

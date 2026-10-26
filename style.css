@@ -1193,3 +1193,60 @@ html, body {
   transform: rotate(45deg);
   opacity: 0.7;
 }
+
+
+/* ===== Optional account controls ===== */
+.account-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: -6px 0 18px;
+}
+.account-status {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.account-btn {
+  padding: 9px 12px;
+  font-size: 11px;
+}
+.account-panel h2 {
+  margin: 0 0 10px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 24px;
+}
+.account-explainer {
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 0 0 18px;
+}
+.account-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+.account-tabs .btn { flex: 1; padding: 11px 8px; font-size: 12px; }
+.account-input {
+  display: block;
+  width: 100%;
+  margin-bottom: 16px;
+}
+.account-panel .name-row { margin-bottom: 16px; }
+.account-panel .name-row .name-input { min-width: 0; }
+.account-submit { width: 100%; margin-top: 8px; }
+.account-message {
+  min-height: 18px;
+  margin: 12px 0 4px;
+  color: var(--mint);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.account-message.error { color: #ff8585; }
+.account-panel input[readonly] { opacity: 0.9; cursor: default; }
+.account-strip .account-btn:disabled, .account-panel button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}

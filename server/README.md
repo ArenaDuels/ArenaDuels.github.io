@@ -112,3 +112,20 @@ and `js/arenas/`. **If you change an arena's walls or props, copy the files to
 both places** — otherwise the server checks line of sight against old walls.
 
 Run the tests with `cd server && npm test`.
+
+
+## Optional username/password accounts
+
+The game remains playable as a guest. The account system is optional and uses randomly generated names (the register UI allows rerolling); it does not ask for email.
+
+Render setup:
+- Secret File: `/etc/secrets/firebase-service-account.json`
+- Environment variable: `GOOGLE_APPLICATION_CREDENTIALS=/etc/secrets/firebase-service-account.json`
+- Environment variable: `FIREBASE_PROJECT_ID=arenaduels-7dc31`
+- Keep the service-account JSON out of Git and never put it in the browser bundle.
+- Firebase Authentication must be enabled for the project; the client signs in with server-created Firebase custom tokens.
+- Firestore client rules should remain deny-all. The server uses Admin SDK access.
+- The server stores password hashes made with scrypt plus per-account random salts, never plaintext passwords.
+- Account creation and login are served from `/api/auth/register` and `/api/auth/login`; `/api/auth/random-name` returns an available generated name.
+
+There is no email-based password recovery in this version. If a password is lost, the account cannot currently be recovered.
