@@ -851,6 +851,9 @@ scene.background = new THREE.Color(0x0a0a0d);
 
 const camera = new THREE.PerspectiveCamera(settings.fov, innerWidth / innerHeight, 0.1, 1000);
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+// Keep GPU work predictable when the browser is maximized. Rendering below native
+// pixel resolution reduces fill-rate pressure without changing game/physics timing.
+renderer.setPixelRatio(0.85);
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -866,7 +869,7 @@ scene.add(ambientLight);
 const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
 dirLight.position.set(5, 10, 5);
 dirLight.castShadow = true;
-dirLight.shadow.mapSize.set(1024, 1024);
+dirLight.shadow.mapSize.set(512, 512); // Lower shadow cost helps prevent frame stalls at large viewport sizes.
 dirLight.shadow.camera.left = -20;
 dirLight.shadow.camera.right = 20;
 dirLight.shadow.camera.top = 20;
