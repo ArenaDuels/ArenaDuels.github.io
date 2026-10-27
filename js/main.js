@@ -1693,11 +1693,25 @@ setInterval(() => {
   }
 }, 50); // 20Hz
 
+const HEALTH_DIAGNOSTICS = new URLSearchParams(window.location.search).get("healthdiag") === "1";
+let healthDiagLastFrameWarning = 0;
+
 function loop() {
   requestAnimationFrame(loop);
   const now = performance.now();
-  const dt = Math.min((now - last) / 1000, 0.25);
+  const rawFrameMs = now - last;
+  const dt = Math.min(rawFrameMs / 1000, 0.25);
   last = now;
+  if (HEALTH_DIAGNOSTICS && rawFrameMs >= 50 && now - healthDiagLastFrameWarning >= 250) {
+    console.warn("[healthdiag] main render-loop frame gap", {
+      frameGapMs: Math.round(rawFrameMs),
+      dtUsedMs: Math.round(dt * 1000),
+      viewport: `${innerWidth}x${innerHeight}`,
+      devicePixelRatio: window.devicePixelRatio,
+      timestamp: Math.round(now)
+    });
+    healthDiagLastFrameWarning = now;
+  }
 
   // The match clock runs even while you're paused — the game goes on without you.
   if (matchActive) {
