@@ -2,10 +2,6 @@ import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
 import { applyBodyLook, buildAccessory, disposeGroup } from "./customization.js";
 import { cleanBody, cleanName } from "./validate.js";
 
-// Opt-in diagnostics for investigating intermittent remote health-bar stalls.
-// Enable by adding ?healthdiag=1 to the game URL; logs are local to this browser.
-const HEALTH_DIAGNOSTICS = new URLSearchParams(window.location.search).get("healthdiag") === "1";
-
 // ===== Movement tuning =====
 // Ground movement stays responsive, while jumping preserves the same vertical
 // impulse and gravity but reduces horizontal launch speed and air steering.
@@ -736,8 +732,6 @@ export class RemotePlayer {
     this.name = name;
     this.hp = GAME.maxHp;
     this.displayHp = GAME.maxHp; // visual-only health value, eased toward authoritative health
-    this._healthDiagLastStateAt = performance.now();
-    this._healthDiagLastFrameAt = performance.now();
     this.hpBar = makeHpBar();
     scene.add(this.hpBar);
 
@@ -802,18 +796,11 @@ export class RemotePlayer {
     this.targetPos.set(state.x, state.y, state.z);
     this.targetYaw = state.yaw;
     this.targetPitch = state.pitch;
-    const previousHp = this.hp;
-    this.hp = state.hp; // authoritative health; never use displayHp for gameplay
-    if (HEALTH_DIAGNOSTICS && previousHp !== state.hp) {
-      const now = performance.now();
-      console.debug("[healthdiag] remote health state", {
-        player: this.name, previousHp, hp: state.hp, displayHp: this.displayHp,
-        msSincePreviousHealthState: Math.round(now - this._healthDiagLastStateAt),
-        timestamp: Math.round(now)
-      });
-      this._healthDiagLastStateAt = now;
-    }
-    if (previousHp <= 0 && state.hp > 0) this.displayHp = state.hp; // respawn without animating from zero
+    this.hp = state.hp; // authoritative health; never use a visual value for gameplay
+    // Apply each network health snapshot immediately. This avoids a separate
+    // client-side easing value lagging behind or appearing to freeze/catch up.
+    this.displayHp = state.hp;
+    this.hpBar.scale.x = 1.2 * Math.min(1, Math.max(state.hp / GAME.maxHp, 0));
     this.firing = state.firing;
     if (state.hp <= 0) {
       this.setVisible(false);
@@ -842,19 +829,6 @@ export class RemotePlayer {
   }
 
   update(dt, camera) {
-    if (HEALTH_DIAGNOSTICS) {
-      const now = performance.now();
-      const frameGap = now - this._healthDiagLastFrameAt;
-      if (frameGap >= 50) {
-        console.warn("[healthdiag] remote-player update gap", {
-          player: this.name, frameGapMs: Math.round(frameGap), dtMs: Math.round(dt * 1000),
-          hp: this.hp, displayHp: Number(this.displayHp.toFixed(2)),
-          hpDifference: Number((this.hp - this.displayHp).toFixed(2)),
-          timestamp: Math.round(now)
-        });
-      }
-      this._healthDiagLastFrameAt = now;
-    }
     const t = Math.min(1, dt * 12);
     this.mesh.position.lerp(this.targetPos, t);
     this.mesh.rotation.y += (this.targetYaw - this.mesh.rotation.y) * t;
@@ -862,11 +836,8 @@ export class RemotePlayer {
     if (this.visible && this.hp > 0) {
       this.hpBar.position.copy(this.mesh.position);
       this.hpBar.position.y += 1.5;
-      // Smooth only the visual bar. Server-reported this.hp remains authoritative.
-      const hpBlend = 1 - Math.exp(-Math.max(0, dt) * 14);
-      this.displayHp += (this.hp - this.displayHp) * hpBlend;
-      if (Math.abs(this.hp - this.displayHp) < 0.05) this.displayHp = this.hp;
-      this.hpBar.scale.x = 1.2 * Math.min(1, Math.max(this.displayHp / GAME.maxHp, 0));
+      // Keep the bar tied directly to the latest authoritative snapshot.
+      this.hpBar.scale.x = 1.2 * Math.min(1, Math.max(this.hp / GAME.maxHp, 0));
 
       this.nameSprite.position.copy(this.mesh.position);
       this.nameSprite.position.y += 1.85;
