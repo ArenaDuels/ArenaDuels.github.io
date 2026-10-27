@@ -20,7 +20,7 @@ import { promisify } from "node:util";
 import { initializeApp, applicationDefault } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
-import { cleanRelay, HOST_ONLY, isBotId, isValidArenaId, isValidCode, MAX_MESSAGE_BYTES } from "./validate.js";
+import { cleanRelay, HOST_ONLY, isBotId, isValidArenaId, isValidCode, MAX_MESSAGE_BYTES, SERVER_ID, SERVER_ONLY } from "./validate.js";
 import { RoomGuard } from "./anticheat.js";
 
 const PORT = process.env.PORT || 8080;
@@ -201,12 +201,13 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
 if (ALLOWED_ORIGINS.length === 0) ALLOWED_ORIGINS.push(...DEFAULT_ORIGINS);
 const TRUST_PROXY = process.env.TRUST_PROXY !== "0"; // Render/Railway/Fly sit behind a proxy
 
-// Hit/kill validation (see anticheat.js):
-//   "enforce" (default) — invalid hits and kills are dropped, damage is clamped
-//   "log"               — nothing is dropped, rejections are only logged (use this
-//                         to check for false positives on real matches)
-//   "off"               — no validation
-const ANTICHEAT = ["enforce", "log", "off"].includes(process.env.ANTICHEAT) ? process.env.ANTICHEAT : "enforce";
+// The server is the authority on health, hits, deaths and respawns (anticheat.js).
+// ANTICHEAT only controls how strict it is about the two things it *checks*:
+//   "enforce" (default) — impossible movement is undone (the player is snapped back)
+//                         and impossible bot shots are refused
+//   "log"               — those are only counted in the log, nothing is undone; use
+//                         it to look for false positives on real matches
+const ANTICHEAT = process.env.ANTICHEAT === "log" ? "log" : "enforce";
 const rejectCounts = new Map(); // reason -> count since the last report
 
 // A tiny HTTP server so hosts like Render have something to health-check.
@@ -222,7 +223,7 @@ const httpServer = http.createServer(async (req, res) => {
     return;
   }
   res.writeHead(200, { "Content-Type": "text/plain", "X-Content-Type-Options": "nosniff" });
-  res.end("ArenaDuels relay server is running.\\n");
+  res.end("ArenaDuels relay server is running.\n");
 });
 
 const wss = new WebSocketServer({
@@ -352,7 +353,7 @@ function handleMessage(ws, raw, isBinary) {
         arenaId: msg.arenaId,
         isPublic: msg.isPublic === true,
         members: new Map([[ws.id, ws]]),
-        guard: new RoomGuard({ arenaId: msg.arenaId, hostId: ws.id }),
+        guard: new RoomGuard({ arenaId: msg.arenaId, hostId: ws.id, enforce: ANTICHEAT === "enforce", onReject: noteReject }),
       });
       rooms.get(code).guard.addMember(ws.id);
       ws.room = code;
@@ -416,20 +417,20 @@ function handleMessage(ws, raw, isBinary) {
       const clean = cleanRelay(msg);
       if (!clean) return;
 
+      // Health, respawns and corrections are the server's to announce — never a player's.
+      if (SERVER_ONLY.has(clean.t)) return;
+
       const isHost = ws.id === room.hostId;
       if (HOST_ONLY.has(clean.t) && !isHost) return;
 
-      // Nobody gets to claim to be someone else.
-      if (clean.t === "hit") {
-        const asBot = isHost && isBotId(clean.attackerId);
-        if (clean.attackerId !== ws.id && !asBot) return;
-      } else if (clean.t === "kill") {
-        const asBot = isHost && isBotId(clean.victimId) ;
-        if (clean.victimId !== ws.id && !asBot) return;
-      }
+      // Players don't report hits or deaths: the server watches the beam and decides.
+      // Only the host reports, and only about its own bots.
+      if (clean.t === "hit" && !(isHost && isBotId(clean.attackerId))) return;
+      if (clean.t === "kill" && !(isHost && isBotId(clean.victimId))) return;
 
-      // Plausibility checks against the server's own picture of the match.
-      if (!screen(room.guard, ws, isHost, clean)) return;
+      const relay = screen(room, ws, isHost, clean);
+      deliver(room, room.guard.drain());
+      if (!relay) return;
 
       // "from" is stamped by the server and always wins; clients can't set it.
       const out = JSON.stringify({ ...clean, from: ws.id });
@@ -440,38 +441,78 @@ function handleMessage(ws, raw, isBinary) {
   }
 }
 
-// Feeds the room's guard and decides whether a gameplay message may be relayed.
-// May rewrite `clean` in place (hit damage is clamped, kill credit is the server's).
-function screen(guard, ws, isHost, clean) {
-  if (ANTICHEAT === "off") return true;
+// Feeds the room's guard with a gameplay message and decides whether it may be relayed.
+// May rewrite `clean` in place (a state message gets the server's version of the
+// player's position and health).
+function screen(room, ws, isHost, clean) {
+  const guard = room.guard;
   const now = Date.now();
   switch (clean.t) {
-    case "state": guard.onState(ws.id, clean, now); return true;
+    case "state": {
+      const r = guard.onState(ws.id, clean, now);
+      if (!r) return false;
+      if (r.correct) send(ws, { t: "correct", ...r.correct, from: SERVER_ID }); // snap them back
+      clean.x = r.x;
+      clean.y = r.y;
+      clean.z = r.z;
+      clean.hp = r.hp;
+      clean.firing = r.firing;
+      delete clean.tp;
+      return true;
+    }
     case "bots": guard.onBots(clean.bots, now); return true;
-    case "restart": guard.onRestart(clean.settings); return true;
-    case "sync": guard.onSync(clean.forId, clean.settings); return true;
+    case "restart": guard.onRestart(clean.settings, now); return true;
+    case "sync": guard.onSync(clean.forId, clean.settings, now); return true;
     case "end": guard.onEnd(); return true;
     case "hit": {
+      // The host says one of its bots shot a player. Check it, then apply it to
+      // that player's health ourselves; the hit itself is never relayed.
       const v = guard.checkHit(ws.id, isHost, clean, now);
-      if (v.ok) {
-        if (ANTICHEAT === "enforce") clean.damage = v.damage;
-        return true;
+      if (v.ok) guard.hurt(clean.targetId, clean.attackerId, v.damage, now);
+      else {
+        noteReject("bot-hit:" + v.reason);
+        if (ANTICHEAT === "log") guard.hurt(clean.targetId, clean.attackerId, clean.damage, now);
       }
-      noteReject("hit:" + v.reason);
-      return ANTICHEAT !== "enforce";
+      return false;
     }
     case "kill": {
+      // The host says one of its bots died.
       const v = guard.checkKill(ws.id, isHost, clean, now);
       if (v.ok) {
-        if (ANTICHEAT === "enforce") clean.attackerId = v.attackerId;
+        clean.attackerId = v.attackerId;
         return true;
       }
-      noteReject("kill:" + v.reason);
-      return ANTICHEAT !== "enforce";
+      noteReject("bot-kill:" + v.reason);
+      return ANTICHEAT === "log";
     }
     default: return true;
   }
 }
+
+// Send what the guard queued (health updates, kills, respawns, hits on bots) as "from the server".
+function deliver(room, events) {
+  for (const { to, msg } of events) {
+    const out = JSON.stringify({ ...msg, from: SERVER_ID });
+    if (to === "all") {
+      for (const peer of room.members.values()) if (peer.readyState === peer.OPEN) peer.send(out);
+    } else {
+      const peer = room.members.get(to);
+      if (peer && peer.readyState === peer.OPEN) peer.send(out);
+    }
+  }
+}
+
+// The server's own clock: ~30 times a second every room advances (beam damage, respawns).
+setInterval(() => {
+  const now = Date.now();
+  for (const room of rooms.values()) {
+    try {
+      deliver(room, room.guard.tick(now));
+    } catch (err) {
+      console.error("[tick] room update failed:", err.message);
+    }
+  }
+}, 33).unref();
 
 function noteReject(key) {
   rejectCounts.set(key, (rejectCounts.get(key) || 0) + 1);

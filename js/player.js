@@ -687,7 +687,16 @@ export class PlayerController {
       pitch: this.pitch,
       hp: this.hp,
       firing: !!this.firing,
+      tp: this.tp || 0, // the last server-ordered move we've heard about (see "correct"/"respawn")
     };
+  }
+
+  // The server moved us (it didn't accept where we said we were): go there and stop.
+  teleportTo(x, y, z) {
+    this.mesh.position.set(x, y, z);
+    this.prevPos.copy(this.mesh.position);
+    this.viewRoot.position.copy(this.mesh.position);
+    this.vel.set(0, 0, 0);
   }
 
   // Returns true if this hit was the killing blow.

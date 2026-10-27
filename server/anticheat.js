@@ -1,71 +1,95 @@
-// Server-side hit and kill validation for the ArenaDuels relay.
+// Server-authoritative room logic for the ArenaDuels relay.
 //
-// The game still simulates everything in the browsers (movement, aiming, hp),
-// so the relay can't *prove* a shot was real. What it can do is keep its own
-// shadow copy of the match — where everybody was recently, who is alive, how
-// much damage each player has soaked — and refuse any message that doesn't fit
-// that picture:
+// Who decides what (humans):
+//   - HEALTH, DAMAGE, DEATH, RESPAWN : the server. Clients never report hits or
+//     deaths; they only say where they are, where they're aiming and whether the
+//     trigger is held. The server runs the beam itself (30 times a second), takes
+//     health off whoever it actually hits, announces the kill, and later puts the
+//     player back at a spawn point it picked.
+//   - MOVEMENT : still simulated by each browser (so it stays smooth), but every
+//     reported position is checked against what the movement rules allow: top
+//     speed, jump height and airtime, arena bounds, walking through walls. A
+//     position that can't be real is thrown away and the player is snapped back.
+//   - AIM : trusted. The server can't know where a mouse is pointing, so an
+//     aimbot that sends perfect aim still works. That's the one thing a relay
+//     can't fix.
 //
-//   Hits  : attacker must be alive and (recently) firing; target must exist, be
-//           alive and be someone else; the target must have been inside the
-//           attacker's aim cone within the last moments, in range, with no wall
-//           in between; damage is clamped to what the beam can actually deal.
-//   Kills : only accepted for a victim who has really absorbed lethal damage
-//           from validated hits, and the credited killer is the server's own
-//           record of who hit them — whatever the client claimed is ignored.
+// Bots are simulated by the host's browser, so the host stays in charge of them:
+//   - a bot shooting a human is validated here (aim, line of sight, damage rate)
+//     and then applied by the server to the human's health;
+//   - a human shooting a bot is detected here and forwarded to the host as a hit;
+//   - a bot's death is announced by the host and accepted once per life.
 //
-// This is a *plausibility* layer, not a full authority: someone running a modified
-// client that sends honest-looking positions and aims perfectly (an aimbot), or
-// that ignores damage on their own side (god mode), still gets through. Closing
-// that needs the server to simulate movement and health itself.
-//
-// All timing is in milliseconds; every method takes an optional `now` so the
-// tests can drive a fake clock.
+// All times are milliseconds. Methods take an optional `now` so tests can use a
+// fake clock. Outgoing messages are queued with #emit and collected by drain().
 
 import { getArena } from "./arenas.js";
 
 export const TUNING = Object.freeze({
   // --- damage ---
-  PLAYER_DPS: 40,            // the beam's damage per second (see main.js)
-  DPS_SLACK: 1.1,            // tolerate 10% over before clamping
-  BUCKET_CAP: 30,            // damage that can arrive in one burst (a lag spike, ~0.75s of beam)
-  TAP_CAP: 6,                // small allowance for the first frames of a shot, before a "firing" state arrives
+  PLAYER_DPS: 40,            // the beam's damage per second (matches the client)
+  DPS_SLACK: 1.1,            // bot hits: tolerate 10% over before clamping
+  BUCKET_CAP: 30,            // bot hits: burst allowance (lag spikes)
+  TAP_CAP: 6,                // bot hits: tiny allowance before a "firing" state arrives
   TAP_REFILL_PER_SEC: 6,
-  FIRING_GRACE_MS: 400,      // a "firing" state this recent counts as "is firing"
+  FIRING_GRACE_MS: 400,      // bot hits: a "firing" state this recent counts as firing
+  FIRING_STALE_MS: 200,      // beam: ignore a firing flag whose state is older than this
+  TICK_MAX_DT: 0.1,          // beam: never integrate more than this per tick
   // --- geometry ---
-  EYE_HEIGHT: 1.0,           // camera is this far above the player's position
-  RADIUS: 0.5,               // capsule radius
-  HALF_SEGMENT: 0.6,         // capsule = vertical segment of +-0.6 around its centre, plus the radius
-  AIM_SLACK: 0.75,           // extra metres of miss we forgive (interpolation, lag)
-  AIM_SLACK_PER_M: 0.04,     // ...plus this much per metre of distance
-  WALL_SHRINK: 0.12,         // obstacle boxes are shrunk this much per side, so grazing a corner isn't "blocked"
+  EYE_HEIGHT: 1.0,
+  RADIUS: 0.5,
+  HALF_SEGMENT: 0.6,
+  AIM_SLACK: 0.75,
+  AIM_SLACK_PER_M: 0.04,
+  WALL_SHRINK: 0.12,
   RANGE_MARGIN: 12,
   // --- history (lag tolerance) ---
-  SAMPLE_GAP_MS: 40,         // states arrive at ~20Hz; extra ones just overwrite the newest sample
+  SAMPLE_GAP_MS: 40,
   HISTORY_MS: 1200,
-  ATTACKER_WINDOW_MS: 350,   // which of the shooter's recent states we try
-  TARGET_WINDOW_MS: 900,     // which of the target's recent states we try (the shooter sees them delayed)
-  MAX_STATE_AGE_MS: 2000,    // no state this recent => can't validate
-  // --- kills ---
-  KILL_DAMAGE_FRACTION: 0.9, // validated damage needed before a death is believed
-  CREDIT_WINDOW_MS: 15000,   // a hit older than this can't earn the kill
-  RESPAWN_SLACK_MS: 600,     // treat a victim as alive slightly before their respawn timer ends
+  ATTACKER_WINDOW_MS: 350,
+  TARGET_WINDOW_MS: 900,
+  MAX_STATE_AGE_MS: 2000,
+  // --- movement rules (see client player.js: ground 16 m/s, air 10.5, jump 12, gravity 35) ---
+  H_SPEED: 21,               // metres/second of horizontal travel we allow. Honest play in the replay test peaks at
+                             // 19.75 (running is 16; strafing and wall push-outs add a little).
+  H_CAP_M: 18,               // distance that can be "saved up" at most: covers about a second of network stall
+  NEAR_GROUND: 0.45,         // "touching down": a hopping player is sampled only every 50ms, so even a
+                             // bunny-hopper's lowest sample is ~0.3 above the ground; a hoverer never gets this low
+  AIR_MAX_MS: 2000,          // longest believable time without touching down (hops dip every ~0.7s, a long fall ~1s)
+  SUPPORT_MEMORY_MS: 2000,   // how far back we remember the highest surface you were over
+  APEX_MAX: 3.0,             // highest believable rise above the highest surface you've recently been over (jump apex ~2.1, +step-up)
+  MIN_Y: 1.3,                // capsule centre can't be lower than standing on the floor (1.4)
+  BOUNDS_MARGIN: 0.4,
+  PENETRATION_MAX: 0.5,      // the client can leave you overlapping a wall by a bit in tight gaps; the
+                             // centre itself must never be inside a wall (that would be > 0.5)
+  TUNNEL_MAX_CHORD: 3.5,     // straight-line moves up to this long can't pass through a wall
+  TUNNEL_SHRINK: 0.15,
+  GRACE_MS: 3000,            // after joining / a restart, positions are free (players pick their own spawn)
+  CORRECT_COOLDOWN_MS: 200,
+  // --- bots ---
+  CREDIT_WINDOW_MS: 15000,
+  RESPAWN_SLACK_MS: 600,
   MAX_BOTS: 8,
 });
 
 const DEFAULT_MAX_HP = 100;
 const DEFAULT_RESPAWN_DELAY = 2;
+const STEP = 0.5;          // client: surfaces up to this much above your feet are stepped onto
+const STAND_MARGIN = 0.3;  // client: how far past a box edge still counts as standing on it
+const REST = 1.4;          // client: capsule centre height above whatever it rests on
 
 // ---------------------------------------------------------------- arena boxes
 
-const boxCache = new Map(); // arenaId -> { boxes, maxRange }
+const geoCache = new Map();
 
 function arenaGeometry(arenaId, arenaOverride) {
-  if (!arenaOverride && boxCache.has(arenaId)) return boxCache.get(arenaId);
+  if (!arenaOverride && geoCache.has(arenaId)) return geoCache.get(arenaId);
   const arena = arenaOverride || getArena(arenaId);
-  const boxes = [];
+  const solids = []; // true size: used for movement rules
+  const boxes = [];  // slightly shrunk: used for line of sight
   const s = TUNING.WALL_SHRINK;
   const add = (w, h, d, x, y, z) => {
+    solids.push({ minX: x - w / 2, maxX: x + w / 2, minY: y - h / 2, maxY: y + h / 2, minZ: z - d / 2, maxZ: z + d / 2 });
     const hx = Math.max(0.02, w / 2 - s);
     const hy = Math.max(0.02, h / 2 - s);
     const hz = Math.max(0.02, d / 2 - s);
@@ -73,28 +97,30 @@ function arenaGeometry(arenaId, arenaOverride) {
   };
   for (const [w, h, d, x, y, z] of arena.walls ?? []) add(w, h, d, x, y, z);
   for (const p of arena.props ?? []) add(p.w, p.h, p.d, p.x, p.y, p.z);
-  const geo = { boxes, maxRange: (arena.floorSize ?? 60) * Math.SQRT2 + TUNING.RANGE_MARGIN };
-  if (!arenaOverride) boxCache.set(arenaId, geo);
+  const geo = {
+    arena,
+    solids,
+    boxes,
+    half: (arena.floorSize ?? 60) / 2,
+    maxRange: (arena.floorSize ?? 60) * Math.SQRT2 + TUNING.RANGE_MARGIN,
+  };
+  if (!arenaOverride) geoCache.set(arenaId, geo);
   return geo;
 }
 
 const insideBox = (b, x, y, z) =>
   x > b.minX && x < b.maxX && y > b.minY && y < b.maxY && z > b.minZ && z < b.maxZ;
 
-// Does the segment (ox,oy,oz) -> (px,py,pz) pass through the box? (Slab method.)
-// Boxes that contain either end are ignored: a shooter wedged into a stair edge
-// shouldn't be unable to hit anyone.
+// Does the segment O -> P pass through the box? (Slab method.) Boxes that contain
+// either end are ignored so a shooter wedged against a stair edge isn't blinded.
 function segmentBlockedBy(b, ox, oy, oz, px, py, pz) {
   if (insideBox(b, ox, oy, oz) || insideBox(b, px, py, pz)) return false;
   let tMin = 0;
   let tMax = 1;
-  const dx = px - ox;
-  const dy = py - oy;
-  const dz = pz - oz;
   const axes = [
-    [ox, dx, b.minX, b.maxX],
-    [oy, dy, b.minY, b.maxY],
-    [oz, dz, b.minZ, b.maxZ],
+    [ox, px - ox, b.minX, b.maxX],
+    [oy, py - oy, b.minY, b.maxY],
+    [oz, pz - oz, b.minZ, b.maxZ],
   ];
   for (const [o, d, lo, hi] of axes) {
     if (Math.abs(d) < 1e-9) {
@@ -111,6 +137,69 @@ function segmentBlockedBy(b, ox, oy, oz, px, py, pz) {
   return true;
 }
 
+// Same rules as the client's collision (player.js): the highest surface under you
+// that you could step onto, or the floor.
+function supportTop(solids, x, z, y, margin = STAND_MARGIN) {
+  const feet = y - REST;
+  let top = 0;
+  for (const b of solids) {
+    if (x > b.minX - margin && x < b.maxX + margin && z > b.minZ - margin && z < b.maxZ + margin) {
+      if (b.maxY <= feet + STEP && b.maxY > top) top = b.maxY;
+    }
+  }
+  return top;
+}
+
+// How far (horizontally) the capsule overlaps the nearest wall-like block.
+function wallPenetration(solids, x, z, y) {
+  const feet = y - REST;
+  let depth = -Infinity;
+  for (const b of solids) {
+    if (b.maxY <= feet + STEP) continue; // low enough to stand on, not a wall right now
+    const cx = Math.max(b.minX, Math.min(x, b.maxX));
+    const cz = Math.max(b.minZ, Math.min(z, b.maxZ));
+    const outside = Math.hypot(x - cx, z - cz);
+    if (outside > 0 || x < b.minX || x > b.maxX || z < b.minZ || z > b.maxZ) {
+      depth = Math.max(depth, TUNING.RADIUS - outside);
+    } else {
+      // The centre itself is inside the block: depth is the radius plus how far in.
+      const inward = Math.min(x - b.minX, b.maxX - x, z - b.minZ, b.maxZ - z);
+      depth = Math.max(depth, TUNING.RADIUS + inward);
+    }
+  }
+  return depth;
+}
+
+// Does the flat (x/z) move from A to B cut through a wall-like block?
+function moveCutsWall(solids, ax, az, ay, bx, bz, by) {
+  const feet = Math.min(ay, by) - REST;
+  const s = TUNING.TUNNEL_SHRINK;
+  for (const b of solids) {
+    if (b.maxY <= feet + STEP) continue;
+    const minX = b.minX + s, maxX = b.maxX - s, minZ = b.minZ + s, maxZ = b.maxZ - s;
+    if (minX >= maxX || minZ >= maxZ) continue;
+    if (ax > minX && ax < maxX && az > minZ && az < maxZ) continue; // penetration check handles these
+    if (bx > minX && bx < maxX && bz > minZ && bz < maxZ) continue;
+    let tMin = 0;
+    let tMax = 1;
+    let hit = true;
+    for (const [o, d, lo, hi] of [[ax, bx - ax, minX, maxX], [az, bz - az, minZ, maxZ]]) {
+      if (Math.abs(d) < 1e-9) {
+        if (o < lo || o > hi) { hit = false; break; }
+      } else {
+        let t1 = (lo - o) / d;
+        let t2 = (hi - o) / d;
+        if (t1 > t2) [t1, t2] = [t2, t1];
+        if (t1 > tMin) tMin = t1;
+        if (t2 < tMax) tMax = t2;
+        if (tMin > tMax) { hit = false; break; }
+      }
+    }
+    if (hit) return true;
+  }
+  return false;
+}
+
 // Same convention as the client (three.js Euler "YXZ", looking down -Z).
 function aimDirection(yaw, pitch) {
   const cp = Math.cos(pitch);
@@ -123,21 +212,31 @@ class Actor {
   constructor(id, isBot, now) {
     this.id = id;
     this.isBot = isBot;
-    this.hist = [];        // recent { t, x, y, z, yaw, pitch, firing, hp }
-    this.seq = 0;          // bumps on every new/updated sample (cache key)
+    this.hist = [];           // recent { t, x, y, z, yaw, pitch, firing, hp }
+    this.seq = 0;
     this.lastAppendT = 0;
     this.lastFiringAt = 0;
-    this.bucket = { tokens: TUNING.BUCKET_CAP, at: now };
+    this.bucket = { tokens: TUNING.BUCKET_CAP, at: now }; // bot hits only
     this.tap = { tokens: TUNING.TAP_CAP, at: now };
-    this.resetLife();
-    this.canDie = true;    // bots only: seen alive since their last accepted death
-  }
-
-  resetLife() {
-    this.damageTaken = 0;
-    this.lastHit = null;   // { id, at }
-    this.contrib = new Map(); // attackerId -> { dmg, at }
+    // bots
+    this.canDie = true;       // seen alive since its last accepted death
+    this.wasDead = false;
     this.deadUntil = 0;
+    this.contrib = new Map(); // attackerId -> { at }: who has been seen hitting it
+    // humans
+    this.hp = 0;
+    this.alive = true;
+    this.hpDirty = false;
+    this.respawnAt = 0;
+    this.pos = null;          // last accepted position { x, y, z }
+    this.tp = 0;              // teleport counter: bumps on every server-ordered move
+    this.graceUntil = 0;
+    this.lastMoveAt = now;
+    this.hBudget = TUNING.H_CAP_M;
+    this.lastNearGroundAt = now;
+    this.supports = [];       // recent { t, top }: the surfaces we've been over lately
+    this.safe = null;         // last accepted position that was near the ground
+    this.lastCorrectAt = 0;
   }
 
   last() {
@@ -168,78 +267,226 @@ function takeFrom(bucket, now, rate, cap, wanted) {
 
 const reject = (reason) => ({ ok: false, reason });
 
-// ------------------------------------------------------------------ the guard
+// ------------------------------------------------------------------ the room
 
 export class RoomGuard {
   /**
-   * @param {{ arenaId: string, hostId: string, arena?: object }} opts
-   *   `arena` lets tests pass a hand-made arena instead of a named one.
+   * @param {{ arenaId: string, hostId: string, arena?: object, enforce?: boolean, onReject?: (key:string)=>void }} opts
+   *   `arena` lets tests pass a hand-made arena. With `enforce: false` nothing is
+   *   corrected or refused for movement/bot hits; it is only reported via onReject.
    */
-  constructor({ arenaId, hostId, arena }) {
+  constructor({ arenaId, hostId, arena, enforce = true, onReject = () => {} }) {
     this.hostId = hostId;
     this.geo = arenaGeometry(arenaId, arena);
+    this.enforce = enforce;
+    this.report = onReject;
     this.actors = new Map();
     this.maxHp = DEFAULT_MAX_HP;
     this.respawnDelay = DEFAULT_RESPAWN_DELAY;
+    this.healthSteal = 0;
     this.over = false;
-    this.pairCache = new Map();
+    this.lastTickAt = Date.now();
+    this.out = [];
+  }
+
+  // ---- outgoing messages ----
+
+  #emit(to, msg) {
+    this.out.push({ to, msg });
+  }
+
+  /** Collect (and clear) queued messages: [{ to: "all" | playerId, msg }]. */
+  drain() {
+    const o = this.out;
+    this.out = [];
+    return o;
   }
 
   // ---- roster / host events ----
 
   addMember(id, now = Date.now()) {
-    if (!this.actors.has(id)) this.actors.set(id, new Actor(id, false, now));
+    if (this.actors.has(id)) return;
+    const a = new Actor(id, false, now);
+    a.hp = this.maxHp;
+    a.graceUntil = now + TUNING.GRACE_MS;
+    this.actors.set(id, a);
   }
 
   removeMember(id) {
     this.actors.delete(id);
-    this.pairCache.clear();
   }
 
   #applySettings(s) {
     if (Number.isFinite(s?.startingHealth)) this.maxHp = s.startingHealth;
     if (Number.isFinite(s?.respawnDelay)) this.respawnDelay = s.respawnDelay;
+    if (Number.isFinite(s?.healthSteal)) this.healthSteal = s.healthSteal;
   }
 
-  onRestart(settings) {
+  #freshLife(a, now) {
+    a.hp = this.maxHp;
+    a.alive = true;
+    a.hpDirty = false;
+    a.respawnAt = 0;
+    a.graceUntil = now + TUNING.GRACE_MS;
+    a.lastNearGroundAt = now;
+    a.supports.length = 0;
+  }
+
+  onRestart(settings, now = Date.now()) {
     this.#applySettings(settings);
     this.over = false;
     for (const a of this.actors.values()) {
-      a.resetLife();
-      a.canDie = true;
+      if (a.isBot) {
+        a.canDie = true;
+        a.deadUntil = 0;
+        a.contrib.clear();
+      } else {
+        this.#freshLife(a, now);
+      }
     }
   }
 
-  onSync(forId, settings) {
+  onSync(forId, settings, now = Date.now()) {
     this.#applySettings(settings);
-    this.actors.get(forId)?.resetLife(); // a joiner is topped up to full health
+    const a = this.actors.get(forId);
+    if (a && !a.isBot) this.#freshLife(a, now); // a joiner is topped up to full health
   }
 
   onEnd() {
     this.over = true;
   }
 
-  // ---- position feeds ----
+  // ---- human positions ----
 
-  onState(id, body, now = Date.now()) {
-    const a = this.actors.get(id);
-    if (!a || a.isBot) return;
-    a.push({ t: now, x: body.x, y: body.y, z: body.z, yaw: body.yaw, pitch: body.pitch ?? 0, firing: body.firing === true, hp: body.hp });
+  #inBounds(x, z, y) {
+    const lim = this.geo.half + TUNING.BOUNDS_MARGIN;
+    return Math.abs(x) <= lim && Math.abs(z) <= lim && y >= TUNING.MIN_Y && y < 200;
   }
 
-  /** The host's bots (already range-checked by cleanRelay). */
+  // Is this position/jump plausible, given where the player last was? Returns a reason or null.
+  #moveViolation(a, b, now) {
+    if (!this.#inBounds(b.x, b.z, b.y)) return "bounds";
+    if (now < a.graceUntil) {
+      a.hBudget = TUNING.H_CAP_M;
+      a.lastNearGroundAt = now;
+      a.supports.length = 0;
+      a.safe = { x: b.x, y: b.y, z: b.z };
+      a.lastMoveAt = now;
+      return null;
+    }
+    const elapsed = Math.min(1, Math.max(0, (now - a.lastMoveAt) / 1000));
+    a.lastMoveAt = now;
+    a.hBudget = Math.min(TUNING.H_CAP_M, a.hBudget + elapsed * TUNING.H_SPEED);
+
+    const dh = Math.hypot(b.x - a.pos.x, b.z - a.pos.z);
+    if (dh > a.hBudget) return "speed";
+
+    const solids = this.geo.solids;
+    if (wallPenetration(solids, b.x, b.z, b.y) > TUNING.PENETRATION_MAX) return "wall";
+    if (dh <= TUNING.TUNNEL_MAX_CHORD && moveCutsWall(solids, a.pos.x, a.pos.z, a.pos.y, b.x, b.z, b.y)) return "wall";
+
+    // Vertical. The browser moves 60 times a second but we only see 20 of those, so we can't
+    // watch someone land — we judge by what the samples allow instead:
+    //   height  : can't be higher than a jump above the highest surface lately underfoot
+    //   airtime : must come back near the ground now and then (every hop of a bunny-hopper does)
+    const top = supportTop(solids, b.x, b.z, b.y);
+    // The client works out what you're standing on before it pushes you out of a wall, so hugging
+    // a wall beside a low crate can briefly count the crate as ground. Allow for that when
+    // judging how high you may be (but not when judging whether you're touching down).
+    const reach = supportTop(solids, b.x, b.z, b.y, STAND_MARGIN + TUNING.RADIUS + 0.05);
+    let ceilTop = Math.max(top, reach);
+    for (const sup of a.supports) if (sup.top > ceilTop) ceilTop = sup.top;
+    if (b.y > ceilTop + REST + TUNING.APEX_MAX) return "height";
+    const airHeight = b.y - (top + REST);
+    if (airHeight <= TUNING.NEAR_GROUND) {
+      a.lastNearGroundAt = now;
+      a.safe = { x: b.x, y: b.y, z: b.z };
+    } else if (now - a.lastNearGroundAt > TUNING.AIR_MAX_MS) {
+      return "airtime";
+    }
+
+    a.supports.push({ t: now, top: Math.max(top, reach) });
+    while (a.supports.length && now - a.supports[0].t > TUNING.SUPPORT_MEMORY_MS) a.supports.shift();
+    a.hBudget -= dh;
+    return null;
+  }
+
+  /**
+   * A human's state message. Returns what to relay to everyone else, plus an
+   * optional `correct` to send back to the sender, or null if the sender is unknown.
+   */
+  onState(id, body, now = Date.now()) {
+    const a = this.actors.get(id);
+    if (!a || a.isBot) return null;
+    let correct = null;
+
+    if (!a.pos) {
+      if (this.#inBounds(body.x, body.z, body.y)) {
+        a.pos = { x: body.x, y: body.y, z: body.z };
+        a.safe = { ...a.pos };
+        a.lastMoveAt = now;
+        a.lastNearGroundAt = now;
+      } else {
+        const sp = this.geo.arena.spawns?.[0] ?? { x: 0, y: REST, z: 0 };
+        a.pos = { x: sp.x, y: sp.y, z: sp.z };
+        this.report("move:bounds");
+        correct = this.#teleport(a, a.pos, now);
+      }
+    } else if ((body.tp | 0) === a.tp) {
+      // (A state tagged with an old teleport number was sent before the client heard about the move; ignore its position.)
+      const why = this.#moveViolation(a, body, now);
+      if (!why) {
+        a.pos.x = body.x;
+        a.pos.y = body.y;
+        a.pos.z = body.z;
+      } else {
+        this.report("move:" + why);
+        if (this.enforce) {
+          // Speed/wall: back to where they last were. Height/airtime: somewhere they could really stand.
+          const to = (why === "airtime" || why === "height") && a.safe ? a.safe : a.pos;
+          if (now - a.lastCorrectAt >= TUNING.CORRECT_COOLDOWN_MS) correct = this.#teleport(a, to, now);
+        } else {
+          a.pos.x = body.x;
+          a.pos.y = body.y;
+          a.pos.z = body.z;
+        }
+      }
+    }
+
+    const firing = body.firing === true && a.alive;
+    a.push({ t: now, x: a.pos.x, y: a.pos.y, z: a.pos.z, yaw: body.yaw, pitch: body.pitch ?? 0, firing, hp: a.hp });
+    return { x: a.pos.x, y: a.pos.y, z: a.pos.z, hp: a.hp, firing, correct };
+  }
+
+  #teleport(a, p, now) {
+    a.tp++;
+    a.lastCorrectAt = now;
+    a.pos = { x: p.x, y: p.y, z: p.z };
+    a.lastNearGroundAt = now; // (the movement budget is deliberately NOT refilled here)
+    a.supports.length = 0;
+    a.safe = { x: p.x, y: p.y, z: p.z };
+    a.hist.length = 0; // old positions must not be hittable
+    return { x: p.x, y: p.y, z: p.z, tp: a.tp };
+  }
+
+  // ---- bots (positions come from the host) ----
+
   onBots(list, now = Date.now()) {
     for (const b of list) {
       let a = this.actors.get(b.id);
       if (!a) {
-        const botCount = [...this.actors.values()].filter((x) => x.isBot).length;
-        if (botCount >= TUNING.MAX_BOTS) continue;
+        let n = 0;
+        for (const x of this.actors.values()) if (x.isBot) n++;
+        if (n >= TUNING.MAX_BOTS) continue;
         a = new Actor(b.id, true, now);
         this.actors.set(b.id, a);
       }
       a.push({ t: now, x: b.x, y: b.y, z: b.z, yaw: b.yaw, pitch: b.pitch ?? 0, firing: b.firing === true, hp: b.hp });
       if (b.hp > 0) {
-        if (a.wasDead) a.resetLife(); // it respawned: fresh life
+        if (a.wasDead) {
+          a.contrib.clear(); // it respawned: fresh life
+          a.deadUntil = 0;
+        }
         a.wasDead = false;
         a.canDie = true;
       } else {
@@ -248,92 +495,190 @@ export class RoomGuard {
     }
   }
 
-  // ---- queries ----
-
-  #isDead(a, now) {
-    if (a.deadUntil > now) return true;
+  #botAlive(a, now) {
     const s = a.last();
-    return !!s && s.hp <= 0;
+    return !!s && s.hp > 0 && a.deadUntil <= now;
   }
 
-  #hasBots() {
-    for (const a of this.actors.values()) if (a.isBot) return true;
-    return false;
-  }
+  // ---- the beam ----
 
-  // Was `tgt` plausibly under `atk`'s beam recently? Tries the shooter's last few
-  // states against the target's last second of states (the shooter was looking at
-  // a slightly old picture of the target), and returns on the first match.
-  #canHit(atk, tgt, now) {
-    const key = `${atk.id}>${tgt.id}`;
-    const cached = this.pairCache.get(key);
-    if (cached && cached.sa === atk.seq && cached.st === tgt.seq) return cached.res;
-
-    const { boxes, maxRange } = this.geo;
+  // Can a ray from (ox,oy,oz) along d reach `tgt` — near one of its recent positions, with a clear line?
+  #rayVsTarget(ox, oy, oz, dx, dy, dz, tgt, now) {
     const T = TUNING;
+    const { boxes, maxRange } = this.geo;
     let sawRange = false;
     let sawAim = false;
-    let res = null;
 
-    search: for (let i = atk.hist.length - 1; i >= 0; i--) {
-      const a = atk.hist[i];
-      if (now - a.t > T.ATTACKER_WINDOW_MS) break;
-      const ox = a.x;
-      const oy = a.y + T.EYE_HEIGHT;
-      const oz = a.z;
-      const [dx, dy, dz] = aimDirection(a.yaw, a.pitch);
+    for (let j = tgt.hist.length - 1; j >= 0; j--) {
+      const t = tgt.hist[j];
+      if (now - t.t > T.TARGET_WINDOW_MS) break;
 
-      for (let j = tgt.hist.length - 1; j >= 0; j--) {
-        const t = tgt.hist[j];
-        if (now - t.t > T.TARGET_WINDOW_MS) break;
+      const dist = Math.hypot(t.x - ox, t.y - oy, t.z - oz);
+      if (dist > maxRange) continue;
+      sawRange = true;
 
-        const dist = Math.hypot(t.x - ox, t.y - oy, t.z - oz);
-        if (dist > maxRange) continue;
-        sawRange = true;
+      let miss = Infinity;
+      for (const off of [-T.HALF_SEGMENT, 0, T.HALF_SEGMENT]) {
+        const vx = t.x - ox;
+        const vy = t.y + off - oy;
+        const vz = t.z - oz;
+        const along = vx * dx + vy * dy + vz * dz;
+        const d2 = along <= 0 ? vx * vx + vy * vy + vz * vz : vx * vx + vy * vy + vz * vz - along * along;
+        miss = Math.min(miss, Math.sqrt(Math.max(0, d2)));
+      }
+      if (miss > T.RADIUS + T.AIM_SLACK + T.AIM_SLACK_PER_M * dist) continue;
+      sawAim = true;
 
-        // Closest approach of the aim ray to the capsule's axis (3 sample points).
-        let miss = Infinity;
-        for (const off of [-T.HALF_SEGMENT, 0, T.HALF_SEGMENT]) {
-          const vx = t.x - ox;
-          const vy = t.y + off - oy;
-          const vz = t.z - oz;
-          const along = vx * dx + vy * dy + vz * dz;
-          const d2 = along <= 0
-            ? vx * vx + vy * vy + vz * vz
-            : vx * vx + vy * vy + vz * vz - along * along;
-          miss = Math.min(miss, Math.sqrt(Math.max(0, d2)));
+      for (const off of [0, T.HALF_SEGMENT, -T.HALF_SEGMENT]) {
+        let blocked = false;
+        for (const b of boxes) {
+          if (segmentBlockedBy(b, ox, oy, oz, t.x, t.y + off, t.z)) {
+            blocked = true;
+            break;
+          }
         }
-        if (miss > T.RADIUS + T.AIM_SLACK + T.AIM_SLACK_PER_M * dist) continue;
-        sawAim = true;
+        if (!blocked) return { pass: true, dist };
+      }
+    }
+    return { pass: false, reason: !sawRange ? "out-of-range" : !sawAim ? "off-target" : "blocked" };
+  }
 
-        // Line of sight to the centre, head or feet.
-        for (const off of [0, T.HALF_SEGMENT, -T.HALF_SEGMENT]) {
-          let blocked = false;
-          for (const b of boxes) {
-            if (segmentBlockedBy(b, ox, oy, oz, t.x, t.y + off, t.z)) {
-              blocked = true;
-              break;
-            }
+  // Whoever the shooter's beam is on right now: the nearest living opponent that passes the ray test.
+  #beamTarget(shooter, s, now) {
+    const ox = s.x;
+    const oy = s.y + TUNING.EYE_HEIGHT;
+    const oz = s.z;
+    const [dx, dy, dz] = aimDirection(s.yaw, s.pitch);
+    let best = null;
+    let bestDist = Infinity;
+    for (const c of this.actors.values()) {
+      if (c === shooter) continue;
+      if (c.isBot ? !this.#botAlive(c, now) : !c.alive) continue;
+      const r = this.#rayVsTarget(ox, oy, oz, dx, dy, dz, c, now);
+      if (r.pass && r.dist < bestDist) {
+        best = c;
+        bestDist = r.dist;
+      }
+    }
+    return best;
+  }
+
+  // ---- damage, death, respawn ----
+
+  /** Take health off a human. Handles death and the kill announcement. */
+  applyDamage(victim, attackerId, damage, now = Date.now()) {
+    if (this.over || victim.isBot || !victim.alive || !(damage > 0)) return;
+    victim.hp = Math.max(0, victim.hp - damage);
+    victim.hpDirty = true;
+    if (victim.hp > 0) return;
+
+    victim.alive = false;
+    victim.hpDirty = false;
+    victim.respawnAt = now + this.respawnDelay * 1000;
+    this.#emit(victim.id, { t: "hp", hp: 0 });
+    this.#emit("all", { t: "kill", attackerId, victimId: victim.id });
+  }
+
+  #heal(a, amount) {
+    if (!a.alive || !(amount > 0)) return;
+    const hp = Math.min(this.maxHp, a.hp + amount);
+    if (hp !== a.hp) {
+      a.hp = hp;
+      a.hpDirty = true;
+    }
+  }
+
+  #respawn(a, now) {
+    // The spawn point farthest from everyone still standing (with a little randomness).
+    let best = this.geo.arena.spawns[0];
+    let bestScore = -Infinity;
+    for (const sp of this.geo.arena.spawns) {
+      let minD = Infinity;
+      for (const o of this.actors.values()) {
+        if (o === a) continue;
+        const pos = o.isBot ? o.last() : o.alive ? o.pos : null;
+        if (!pos || (o.isBot && !this.#botAlive(o, now))) continue;
+        minD = Math.min(minD, Math.hypot(pos.x - sp.x, pos.z - sp.z));
+      }
+      const score = (minD === Infinity ? 0 : minD) + Math.random() * 4;
+      if (score > bestScore) {
+        bestScore = score;
+        best = sp;
+      }
+    }
+    a.hp = this.maxHp;
+    a.alive = true;
+    a.hpDirty = false;
+    a.respawnAt = 0;
+    const tp = this.#teleport(a, best, now);
+    a.hBudget = TUNING.H_CAP_M;
+    a.lastMoveAt = now;
+    this.#emit(a.id, { t: "respawn", x: best.x, y: best.y, z: best.z, yaw: best.yaw || 0, tp: tp.tp });
+    this.#emit(a.id, { t: "hp", hp: a.hp });
+  }
+
+  /**
+   * Run one step of the simulation (the relay calls this ~30 times a second):
+   * respawns, beam damage, health updates. Returns the messages to send.
+   */
+  tick(now = Date.now()) {
+    const dt = Math.min(TUNING.TICK_MAX_DT, Math.max(0, (now - this.lastTickAt) / 1000));
+    this.lastTickAt = now;
+
+    if (!this.over) {
+      for (const a of this.actors.values()) {
+        if (!a.isBot && !a.alive && now >= a.respawnAt) this.#respawn(a, now);
+      }
+      const damage = TUNING.PLAYER_DPS * dt;
+      if (damage > 0) {
+        for (const shooter of this.actors.values()) {
+          if (shooter.isBot || !shooter.alive) continue;
+          const s = shooter.last();
+          if (!s || !s.firing || now - s.t > TUNING.FIRING_STALE_MS) continue;
+          const target = this.#beamTarget(shooter, s, now);
+          if (!target) continue;
+          if (target.isBot) {
+            target.contrib.set(shooter.id, { at: now });
+            this.#emit(this.hostId, { t: "hit", targetId: target.id, attackerId: shooter.id, damage });
+          } else {
+            this.applyDamage(target, shooter.id, damage, now);
           }
-          if (!blocked) {
-            res = { pass: true };
-            break search;
-          }
+          this.#heal(shooter, (damage * this.healthSteal) / 100);
         }
       }
     }
 
-    if (!res) res = { pass: false, reason: !sawRange ? "out-of-range" : !sawAim ? "off-target" : "blocked" };
-    this.pairCache.set(key, { sa: atk.seq, st: tgt.seq, res });
-    return res;
+    for (const a of this.actors.values()) {
+      if (!a.isBot && a.hpDirty) {
+        a.hpDirty = false;
+        this.#emit(a.id, { t: "hp", hp: a.hp });
+      }
+    }
+    return this.drain();
   }
 
-  // ---- the two checks ----
+  // ---- bots shooting humans / bot deaths ----
+
+  // Can a bot's shot (relayed by the host) really have landed? Aim + line of sight over the
+  // last moments, and a damage rate bots can't exceed. (Human shots never come through
+  // here — the server detects those itself in tick().)
+  #canHit(atk, tgt, now) {
+    const T = TUNING;
+    let saw = { range: false, aim: false };
+    for (let i = atk.hist.length - 1; i >= 0; i--) {
+      const a = atk.hist[i];
+      if (now - a.t > T.ATTACKER_WINDOW_MS) break;
+      const [dx, dy, dz] = aimDirection(a.yaw, a.pitch);
+      const r = this.#rayVsTarget(a.x, a.y + T.EYE_HEIGHT, a.z, dx, dy, dz, tgt, now);
+      if (r.pass) return { pass: true };
+      if (r.reason !== "out-of-range") saw.range = true;
+      if (r.reason === "blocked") saw.aim = true;
+    }
+    return { pass: false, reason: !saw.range ? "out-of-range" : !saw.aim ? "off-target" : "blocked" };
+  }
 
   /**
-   * @param {string} senderId  socket id of whoever sent the message
-   * @param {boolean} senderIsHost
-   * @param {{targetId:string, attackerId:string, damage:number}} hit  (already cleaned)
+   * Validate one `hit` message from the host about a bot's shot.
    * @returns {{ok:true, damage:number} | {ok:false, reason:string}}
    */
   checkHit(senderId, senderIsHost, hit, now = Date.now()) {
@@ -344,75 +689,57 @@ export class RoomGuard {
     if (!tgt) return reject("unknown-target");
     if (atk === tgt) return reject("self-hit");
     if (atk.isBot ? !senderIsHost : atk.id !== senderId) return reject("bad-attacker");
+    if (tgt.isBot) return reject("bad-target"); // a bot's health lives on the host
 
     const a = atk.last();
     const t = tgt.last();
     if (!a || now - a.t > TUNING.MAX_STATE_AGE_MS) return reject("attacker-no-state");
-    if (!t || now - t.t > TUNING.MAX_STATE_AGE_MS) return reject("target-no-state");
-    if (this.#isDead(atk, now)) return reject("attacker-dead");
-    if (this.#isDead(tgt, now)) return reject("target-dead");
+    if (!t && !tgt.pos) return reject("target-no-state");
+    if (atk.isBot ? !this.#botAlive(atk, now) : !atk.alive) return reject("attacker-dead");
+    if (!tgt.alive) return reject("target-dead");
+    if (t && now - t.t > TUNING.MAX_STATE_AGE_MS) return reject("target-no-state");
 
     const geometry = this.#canHit(atk, tgt, now);
     if (!geometry.pass) return reject(geometry.reason);
 
-    // Damage: a player's beam does 40/s, so that's all anyone may deal. Without a
-    // recent "firing" state only a sliver is allowed (the first frames of a shot).
     const firing = now - atk.lastFiringAt <= TUNING.FIRING_GRACE_MS;
     const damage = firing
       ? takeFrom(atk.bucket, now, TUNING.PLAYER_DPS * TUNING.DPS_SLACK, TUNING.BUCKET_CAP, hit.damage)
       : takeFrom(atk.tap, now, TUNING.TAP_REFILL_PER_SEC, TUNING.TAP_CAP, hit.damage);
     if (damage <= 0) return reject(firing ? "damage-rate" : "not-firing");
-
-    tgt.damageTaken += damage;
-    tgt.lastHit = { id: atk.id, at: now };
-    const c = tgt.contrib.get(atk.id) || { dmg: 0, at: now };
-    c.dmg += damage;
-    c.at = now;
-    tgt.contrib.set(atk.id, c);
     return { ok: true, damage };
   }
 
+  /** Apply a validated bot hit to a human's health. */
+  hurt(targetId, attackerId, damage, now = Date.now()) {
+    const v = this.actors.get(targetId);
+    if (v && !v.isBot) this.applyDamage(v, attackerId, damage, now);
+  }
+
   /**
+   * The host announcing that one of its bots died. Humans' deaths are never
+   * announced by clients — the server announces those itself.
    * @returns {{ok:true, attackerId:string} | {ok:false, reason:string}}
-   *   `attackerId` is the server's verdict on who gets the elimination.
    */
   checkKill(senderId, senderIsHost, kill, now = Date.now()) {
     if (this.over) return reject("match-over");
     const victim = this.actors.get(kill.victimId);
     if (!victim) return reject("unknown-victim");
-    if (victim.isBot ? !senderIsHost : victim.id !== senderId) return reject("bad-victim");
-    if (victim.deadUntil > now) return reject("already-dead");
+    if (!victim.isBot) return reject("server-decides");
+    if (!senderIsHost) return reject("bad-victim");
+    if (!victim.canDie) return reject("bot-not-alive");
 
     const claimed = this.actors.get(kill.attackerId);
-    const fresh = (c) => c && now - c.at <= TUNING.CREDIT_WINDOW_MS;
-    let credit = null;
-
-    if (victim.isBot) {
-      // The relay only sees hits from *remote* humans on a bot; the host's own
-      // shots and bot-vs-bot fights happen locally. So trust the host's account,
-      // but only for a bot that was alive, and never credit a remote human who
-      // hasn't actually been seen hitting it.
-      if (!victim.canDie) return reject("bot-not-alive");
-      if (!claimed || claimed === victim) return reject("unknown-attacker");
-      if (!claimed.isBot && claimed.id !== this.hostId && !fresh(victim.contrib.get(claimed.id))) return reject("no-credit");
-      credit = claimed.id;
-      victim.canDie = false;
-    } else {
-      const fatal = victim.damageTaken >= this.maxHp * TUNING.KILL_DAMAGE_FRACTION;
-      // Bots shooting the host never touch the network, so the relay can't have
-      // counted that damage; for the host's own death accept a bot or anyone seen hitting them.
-      const hostDeath = victim.id === this.hostId && this.#hasBots();
-      if (hostDeath && claimed && (claimed.isBot || fresh(victim.contrib.get(claimed.id)))) {
-        credit = claimed.id;
-      } else if (fatal && fresh(victim.lastHit)) {
-        credit = victim.lastHit.id;
-      } else {
-        return reject(fatal ? "no-credit" : "not-enough-damage");
-      }
+    if (!claimed || claimed === victim) return reject("unknown-attacker");
+    // The host's own shots and bot-vs-bot fights are invisible to the relay, so the host's
+    // word is enough for those. A remote player only gets credit if seen shooting it.
+    if (!claimed.isBot && claimed.id !== this.hostId) {
+      const c = victim.contrib.get(claimed.id);
+      if (!c || now - c.at > TUNING.CREDIT_WINDOW_MS) return reject("no-credit");
     }
-
-    victim.resetLife();
+    victim.canDie = false;
+    victim.contrib.clear();
     victim.deadUntil = now + Math.max(0, this.respawnDelay * 1000 - TUNING.RESPAWN_SLACK_MS);
-    return { ok: true, attackerId: credit };
+    return { ok: true, attackerId: claimed.id };
   }
 }

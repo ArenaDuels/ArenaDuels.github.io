@@ -77,41 +77,58 @@ Optional environment variables:
 `server/validate.js` is an identical copy of `js/validate.js`. If you change
 the message rules, copy the file to both places.
 
-## Hit and kill checking (anticheat.js)
+## The server runs the fight (anticheat.js)
 
-The browsers still run the game, so the server can't see a shot happen — instead
-it keeps its own record of where everyone was, who is alive and how much damage
-each player has taken, and refuses messages that don't fit:
+The server is now the authority on health, hits, deaths and respawns. Browsers
+still simulate their own movement (so it stays smooth) but no longer decide
+anything that matters:
 
-- **Hits** need an attacker who is alive and firing, a real living opponent as the
-  target, and the target inside the shooter's aim (with some lag allowance),
-  within range, with no wall in between. Damage is clamped to the beam's real
-  rate (40/s), so nobody can send huge or rapid-fire damage.
-- **Kills** are only accepted for a player who has actually taken lethal damage
-  from hits the server accepted. The server decides who gets the kill; whatever
-  the client claimed is ignored. Dead players can't be hit or shoot until they
-  respawn.
+- **Hits and damage:** browsers don't report hits at all. They say where they are,
+  where they're aiming and whether the trigger is held. About 30 times a second
+  the server works out who each beam is on (aim, range, walls in the way, with a
+  little lag allowance) and takes 40 damage per second off them. Health steal is
+  applied here too.
+- **Health, deaths, respawns:** the server keeps everyone's health, announces each
+  kill (and who gets it), waits out the respawn delay and puts the player back at a
+  spawn point it picks. Other players see the server's health number, not the
+  player's own claim.
+- **Movement:** every reported position is checked: top speed (21 m/s, honest play
+  peaks at ~19.75), saved-up allowance for lag (~1s), arena bounds, walking into or
+  through walls, jump height and hovering. A position that can't be real is thrown
+  away and the player is snapped back (`correct` message).
+- **Bots** run on the host's browser, so the host still owns them. A bot shooting a
+  player is checked (aim, line of sight, damage rate) and then applied to that
+  player's health by the server. A player's beam on a bot is forwarded to the host.
+  The host announces bot deaths, once per life.
 
-What this does *not* stop: a modified client that sends honest-looking positions
-and aims perfectly (aimbot), or one that ignores damage on its own screen
-(god mode). That needs the server to run movement and health itself.
+What this does *not* stop: an aimbot (perfect aim sent as honest-looking aim), a
+modified client that simply plays well within the movement limits (for example
+~20% faster than normal running), or the host cheating with their own bots and
+score. Aim and the host are the two things a relay has to trust.
 
 Environment variable `ANTICHEAT`:
 
-- `enforce` (default) — bad hits/kills are dropped.
-- `log` — nothing is dropped; what *would* have been rejected is printed once a
-  minute. Use this to check for false positives before enforcing.
-- `off` — no checking.
+- `enforce` (default): impossible movement is undone, impossible bot shots refused.
+- `log`: movement problems and bot shots are only counted, nothing is undone.
+  Use it to look for false positives before enforcing.
+
+(`off` no longer exists: the game depends on the server for health.)
 
 Once a minute the server prints a line like
-`[anticheat:enforce] last minute: hit:off-target=12 kill:not-enough-damage=1`
+`[anticheat:enforce] last minute: move:speed=12 bot-hit:off-target=3`
 (nothing is printed when nothing was rejected).
+
+The browser and the server must be deployed together: an older cached copy of the
+game doesn't understand the server's health and respawn messages.
 
 `server/arenas.js` and `server/arenas/` are identical copies of `js/arenas.js`
 and `js/arenas/`. **If you change an arena's walls or props, copy the files to
 both places** — otherwise the server checks line of sight against old walls.
 
-Run the tests with `cd server && npm test`.
+Run the tests with `cd server && npm test`. `movement-replay.test.js` replays random
+honest play through a port of the browser's physics on every arena and fails if the
+movement rules would ever flag it; if you change the movement numbers in
+`js/player.js`, update the port at the top of that file and re-run.
 
 
 ## Optional username/password accounts

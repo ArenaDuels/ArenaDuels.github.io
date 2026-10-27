@@ -5,277 +5,479 @@ import { RoomGuard } from "./anticheat.js";
 
 const FACE_PLUS_X = -Math.PI / 2;  // yaw that looks toward +x
 const FACE_MINUS_X = Math.PI / 2;
+const Y = 1.4;                     // capsule centre when standing on the floor
 
-// A shared fake clock so every test is deterministic.
-function setup({ arena, arenaId = "classic" } = {}) {
-  const g = new RoomGuard({ arenaId, hostId: "host", arena });
+const OPEN_ARENA = {
+  floorSize: 30,
+  walls: [],
+  props: [],
+  spawns: [{ x: -12, y: Y, z: 0, yaw: FACE_PLUS_X }, { x: 12, y: Y, z: 0, yaw: FACE_MINUS_X }, { x: 0, y: Y, z: 12, yaw: 0 }],
+};
+// A solid pillar between x=-1 and x=1.
+const PILLAR_ARENA = { ...OPEN_ARENA, props: [{ w: 2, h: 8, d: 10, x: 0, y: 4, z: 0 }] };
+
+function setup({ arena = OPEN_ARENA, enforce = true } = {}) {
+  const rejects = [];
+  const g = new RoomGuard({ arenaId: "classic", hostId: "host", arena, enforce, onReject: (k) => rejects.push(k) });
   g.addMember("host", 0);
   g.addMember("p2", 0);
-  const clock = { now: 1000 };
-  const put = (id, x, z, yaw, extra = {}) =>
-    g.onState(id, { x, y: 1.4, z, yaw, pitch: 0, hp: 100, firing: false, ...extra }, clock.now);
-  // host at x=-10 looking at p2 at x=+10
-  const duel = (hostFiring = true) => {
+  const clock = { now: 10_000 }; // well past the join grace period
+  g.lastTickAt = clock.now;
+
+  const put = (id, x, z, yaw = 0, extra = {}) => {
+    const { y = Y, ...rest } = extra;
+    return g.onState(id, { x, y, z, yaw, pitch: 0, hp: 100, firing: false, tp: 0, ...rest }, clock.now);
+  };
+  // host at x=-10 facing p2 at x=+10
+  const duel = ({ hostFiring = false, p2Firing = false } = {}) => {
     put("host", -10, 0, FACE_PLUS_X, { firing: hostFiring });
-    put("p2", 10, 0, FACE_MINUS_X);
+    put("p2", 10, 0, FACE_MINUS_X, { firing: p2Firing });
   };
-  const hit = (attackerId, targetId, damage = 0.5, sender = attackerId) =>
-    g.checkHit(sender, sender === "host", { t: "hit", attackerId, targetId, damage }, clock.now);
-  // Hold the beam on `target` for `seconds` at 60fps, states every 3 frames. Returns total damage dealt.
-  const beam = (attacker, target, seconds) => {
-    let dealt = 0;
-    for (let i = 0; i < Math.round(seconds * 60); i++) {
-      clock.now += 1000 / 60;
-      if (i % 3 === 0) {
-        put("host", -10, 0, FACE_PLUS_X, { firing: attacker === "host" });
-        put("p2", 10, 0, FACE_MINUS_X, { firing: attacker === "p2" });
+  // Run the room clock for `seconds`: tick every 33ms, clients report every 50ms.
+  const run = (seconds, { hostFiring = false, p2Firing = false, hostAim = FACE_PLUS_X, after } = {}) => {
+    const events = [];
+    const end = clock.now + seconds * 1000;
+    let lastReport = -Infinity;
+    while (clock.now < end) {
+      clock.now += 33;
+      if (clock.now - lastReport >= 50) {
+        lastReport = clock.now;
+        const h = g.actors.get("host");
+        const p = g.actors.get("p2");
+        put("host", h.pos?.x ?? -10, h.pos?.z ?? 0, hostAim, { firing: hostFiring, y: h.pos?.y ?? Y, tp: h.tp });
+        put("p2", p.pos?.x ?? 10, p.pos?.z ?? 0, FACE_MINUS_X, { firing: p2Firing, y: p.pos?.y ?? Y, tp: p.tp });
       }
-      const r = hit(attacker, target, 40 / 60);
-      if (r.ok) dealt += r.damage;
+      events.push(...g.tick(clock.now));
+      after?.();
     }
-    return dealt;
+    return events;
   };
-  return { g, clock, put, duel, hit, beam };
+  const hp = (id) => g.actors.get(id).hp;
+  return { g, clock, put, duel, run, hp, rejects };
 }
 
-test("a normal shot goes through unchanged", () => {
-  const { duel, hit } = setup();
+// =============================================================== beam & health
+
+test("holding the trigger on someone does about 40 damage a second", () => {
+  const { duel, run, hp } = setup();
   duel();
-  const r = hit("host", "p2", 0.6);
-  assert.equal(r.ok, true);
-  assert.equal(r.damage, 0.6);
+  run(1, { hostFiring: true });
+  assert.ok(hp("p2") > 55 && hp("p2") < 65, `expected ~60, got ${hp("p2").toFixed(1)}`);
+  assert.equal(hp("host"), 100);
 });
 
-test("aiming away from the target is rejected", () => {
-  const { put, hit } = setup();
-  put("host", -10, 0, FACE_MINUS_X, { firing: true }); // looking at the wall behind them
-  put("p2", 10, 0, FACE_MINUS_X);
-  assert.deepEqual(hit("host", "p2"), { ok: false, reason: "off-target" });
-});
-
-test("a target far outside the arena is out of range", () => {
-  const { put, hit } = setup();
-  put("host", -10, 0, FACE_PLUS_X, { firing: true });
-  put("p2", 900, 0, 0);
-  assert.equal(hit("host", "p2").reason, "out-of-range");
-});
-
-test("walls block shots; open lines of sight don't", () => {
-  const arena = {
-    floorSize: 30,
-    walls: [],
-    props: [{ w: 2, h: 8, d: 10, x: 0, y: 4, z: 0 }], // a pillar between the two players
-  };
-  const { put, hit } = setup({ arena });
-  put("host", -10, 0, FACE_PLUS_X, { firing: true });
-  put("p2", 10, 0, FACE_MINUS_X);
-  assert.equal(hit("host", "p2").reason, "blocked");
-
-  // p2 steps out from behind the pillar (and the host turns to follow)
-  const { put: put2, hit: hit2, clock } = setup({ arena });
-  clock.now += 3000;
-  put2("host", -10, 0, FACE_PLUS_X, { firing: true });
-  put2("p2", 10, 12, FACE_MINUS_X);
-  // aim at them: direction from (-10,0) to (10,12)
-  put2("host", -10, 0, Math.atan2(-20, -12), { firing: true });
-  const r = hit2("host", "p2");
-  assert.equal(r.ok, true, JSON.stringify(r));
-});
-
-test("lag tolerance: a target who just moved out of the line of fire can still be hit", () => {
-  const { put, hit, clock } = setup();
-  put("host", -10, 0, FACE_PLUS_X, { firing: true });
-  put("p2", 10, 0, FACE_MINUS_X);
-  clock.now += 50;
-  put("p2", 10, 6, FACE_MINUS_X); // moved sideways since
-  put("host", -10, 0, FACE_PLUS_X, { firing: true });
-  assert.equal(hit("host", "p2").ok, true); // shooter was looking at where p2 *was*
-});
-
-test("unknown targets, self hits and impersonation are rejected", () => {
-  const { duel, hit } = setup();
+test("not holding the trigger does nothing", () => {
+  const { duel, run, hp } = setup();
   duel();
-  assert.equal(hit("host", "nobody").reason, "unknown-target");
-  assert.equal(hit("host", "host").reason, "self-hit");
-  assert.equal(hit("p2", "host", 0.5, "host").reason, "bad-attacker"); // host claiming p2 shot
-  assert.equal(hit("bot-1", "p2", 0.5, "host").reason, "unknown-attacker");
+  run(2, { hostFiring: false });
+  assert.equal(hp("p2"), 100);
 });
 
-test("no hits without a state, or from a dead attacker", () => {
-  const { g, put, hit } = setup();
-  assert.equal(hit("host", "p2").reason, "attacker-no-state");
-  put("host", -10, 0, FACE_PLUS_X, { firing: true });
-  assert.equal(hit("host", "p2").reason, "target-no-state");
-  put("p2", 10, 0, FACE_MINUS_X);
-  put("host", -10, 0, FACE_PLUS_X, { firing: true, hp: 0 });
-  assert.equal(hit("host", "p2").reason, "attacker-dead");
-  assert.ok(g);
-});
-
-test("damage is capped at what the beam can deal", () => {
-  const { duel, hit } = setup();
+test("aiming somewhere else does nothing", () => {
+  const { duel, run, hp } = setup();
   duel();
-  let total = 0;
-  // 200 forged hits of 40 damage each, all at the same instant
-  for (let i = 0; i < 200; i++) {
-    const r = hit("host", "p2", 40);
-    if (r.ok) total += r.damage;
+  run(2, { hostFiring: true, hostAim: FACE_MINUS_X });
+  assert.equal(hp("p2"), 100);
+});
+
+test("walls stop the beam", () => {
+  const { duel, run, hp } = setup({ arena: PILLAR_ARENA });
+  duel();
+  run(2, { hostFiring: true });
+  assert.equal(hp("p2"), 100);
+});
+
+test("flooding the server with messages doesn't make the beam hit harder", () => {
+  const { g, clock, put, duel, hp } = setup();
+  duel();
+  const end = clock.now + 1000;
+  let nextTick = clock.now;
+  while (clock.now < end) {
+    clock.now += 5; // a state every 5ms instead of every 50
+    put("host", -10, 0, FACE_PLUS_X, { firing: true });
+    put("p2", 10, 0, FACE_MINUS_X);
+    if (clock.now >= nextTick) {
+      g.tick(clock.now);
+      nextTick += 33;
+    }
   }
-  assert.ok(total <= 30.01, `a burst may not exceed the 30-damage allowance, got ${total}`);
-  assert.equal(hit("host", "p2", 40).reason, "damage-rate");
+  assert.ok(hp("p2") > 50 && hp("p2") < 75, `damage should still follow the clock, got ${hp("p2")}`);
 });
 
-test("sustained fire does about 40 damage per second, no more", () => {
-  const { duel, beam } = setup();
+test("a client can't set its own health", () => {
+  const { put, duel, run, hp } = setup();
   duel();
-  const dealt = beam("host", "p2", 2);
-  assert.ok(dealt > 70 && dealt < 90, `expected ~80 for 2s of beam, got ${dealt.toFixed(1)}`);
+  run(1, { hostFiring: true });
+  const before = hp("p2");
+  const r = put("p2", 10, 0, FACE_MINUS_X, { hp: 100 }); // lying: "I'm at full health"
+  assert.equal(hp("p2"), before);
+  assert.equal(r.hp, before); // and what gets relayed to everyone is the server's number
 });
 
-test("a flood of hits faster than the beam is clamped to the beam's rate", () => {
-  const { duel, clock, put, hit } = setup();
+test("a player's health reaches them as 'hp' messages, a kill is announced once to everyone", () => {
+  const { duel, run, hp } = setup();
   duel();
-  let dealt = 0;
-  for (let i = 0; i < 300; i++) { // 3 seconds, hits every 10ms for 20 damage each
-    clock.now += 10;
-    if (i % 5 === 0) put("host", -10, 0, FACE_PLUS_X, { firing: true });
-    const r = hit("host", "p2", 20);
-    if (r.ok) dealt += r.damage;
-  }
-  assert.ok(dealt < 3 * 44 + 30 + 1, `3s should allow at most ~162, got ${dealt.toFixed(1)}`);
+  const events = run(3, { hostFiring: true });
+  assert.equal(hp("p2"), 0);
+  const kills = events.filter((e) => e.msg.t === "kill");
+  assert.equal(kills.length, 1);
+  assert.deepEqual(kills[0], { to: "all", msg: { t: "kill", attackerId: "host", victimId: "p2" } });
+  const toVictim = events.filter((e) => e.to === "p2" && e.msg.t === "hp");
+  assert.ok(toVictim.length > 5);
+  assert.equal(toVictim.at(-1).msg.hp, 0);
+  // the 'hp: 0' reaches the victim before the kill does
+  assert.ok(events.indexOf(toVictim.at(-1)) < events.indexOf(kills[0]));
 });
 
-test("hits without a 'firing' state only get a tiny allowance", () => {
-  const { duel, hit } = setup();
-  duel(false);
-  let total = 0;
-  for (let i = 0; i < 50; i++) {
-    const r = hit("host", "p2", 5);
-    if (r.ok) total += r.damage;
-  }
-  assert.ok(total <= 6.01, `got ${total}`);
-  assert.equal(hit("host", "p2", 5).reason, "not-firing");
-});
-
-test("a kill with no damage behind it is refused", () => {
-  const { duel, g, clock } = setup();
+test("the dead can't be hurt again and can't shoot", () => {
+  const { duel, run, hp } = setup();
   duel();
-  const r = g.checkKill("p2", false, { t: "kill", attackerId: "host", victimId: "p2" }, clock.now);
-  assert.deepEqual(r, { ok: false, reason: "not-enough-damage" });
+  run(3, { hostFiring: true });
+  assert.equal(hp("p2"), 0);
+  const events = run(1, { hostFiring: true, p2Firing: true });
+  assert.equal(events.filter((e) => e.msg.t === "kill").length, 0);
+  assert.equal(hp("host"), 100); // p2 is dead: their trigger does nothing
 });
 
-test("a real kill is accepted once, and the server decides who gets credit", () => {
-  const { duel, beam, g, clock } = setup();
+test("after the respawn delay the server puts them back at a spawn point with full health", () => {
+  const { g, duel, run, hp } = setup();
   duel();
-  beam("host", "p2", 3); // 120 damage worth of beam, 100 hp
-  // p2 (the victim) announces their own death but tries to credit themselves / someone else
-  const r = g.checkKill("p2", false, { t: "kill", attackerId: "p2", victimId: "p2" }, clock.now);
-  assert.equal(r.ok, true);
-  assert.equal(r.attackerId, "host");
-  assert.equal(g.checkKill("p2", false, { t: "kill", attackerId: "host", victimId: "p2" }, clock.now).reason, "already-dead");
+  run(3, { hostFiring: true });
+  const early = run(1, { hostFiring: false });
+  assert.equal(early.filter((e) => e.msg.t === "respawn").length, 0, "default delay is 2s");
+  const events = run(1.5, { hostFiring: false });
+  const resp = events.filter((e) => e.msg.t === "respawn");
+  assert.equal(resp.length, 1);
+  assert.equal(resp[0].to, "p2");
+  assert.ok(OPEN_ARENA.spawns.some((s) => s.x === resp[0].msg.x && s.z === resp[0].msg.z));
+  assert.equal(resp[0].msg.tp, 1);
+  assert.equal(hp("p2"), 100);
+  assert.equal(g.actors.get("p2").alive, true);
 });
 
-test("you can't announce somebody else's death", () => {
-  const { duel, beam, g, clock } = setup();
+test("health steal heals the shooter, up to full", () => {
+  const { g, duel, run, hp } = setup();
+  g.onRestart({ startingHealth: 100, respawnDelay: 2, healthSteal: 50 }, 0);
   duel();
-  beam("host", "p2", 3);
-  assert.equal(g.checkKill("host", true, { t: "kill", attackerId: "host", victimId: "p2" }, clock.now).reason, "bad-victim");
+  run(0.5, { p2Firing: true });
+  assert.ok(hp("host") < 85, `host should have taken damage, got ${hp("host")}`);
+  run(1, { hostFiring: true });
+  assert.ok(hp("host") > 99, `host should have healed back, got ${hp("host")}`);
 });
 
-test("dead players can't be hit until they respawn", () => {
-  const { duel, beam, g, clock, hit, put } = setup();
+test("starting health comes from the match settings", () => {
+  const { g, duel, run, hp } = setup();
+  g.onRestart({ startingHealth: 300, respawnDelay: 2 }, 0);
   duel();
-  beam("host", "p2", 3);
-  g.checkKill("p2", false, { t: "kill", attackerId: "host", victimId: "p2" }, clock.now);
-  put("p2", 10, 0, FACE_MINUS_X, { hp: 0 });
-  assert.equal(hit("host", "p2").reason, "target-dead");
-  clock.now += 2000; // default respawn delay
-  put("p2", 10, 0, FACE_MINUS_X, { hp: 100 });
-  put("host", -10, 0, FACE_PLUS_X, { firing: true });
-  assert.equal(hit("host", "p2").ok, true);
-  // ...and their health really is back: one tap isn't a kill
-  assert.equal(g.checkKill("p2", false, { t: "kill", attackerId: "host", victimId: "p2" }, clock.now).reason, "not-enough-damage");
+  run(3, { hostFiring: true });
+  assert.ok(hp("p2") > 150, `300hp should survive 3s of beam, got ${hp("p2")}`);
+  g.addMember("p3", 0);
+  assert.equal(hp("p3"), 300);
 });
 
-test("nothing is accepted after the match has ended, until a restart", () => {
-  const { duel, g, hit } = setup();
+test("nothing happens after the match ends, until a restart", () => {
+  const { g, duel, run, hp } = setup();
   duel();
   g.onEnd();
-  assert.equal(hit("host", "p2").reason, "match-over");
-  g.onRestart({ startingHealth: 100, respawnDelay: 2 });
-  assert.equal(hit("host", "p2").ok, true);
+  run(2, { hostFiring: true });
+  assert.equal(hp("p2"), 100);
+  g.onRestart({ startingHealth: 100, respawnDelay: 2 }, 0);
+  run(1, { hostFiring: true });
+  assert.ok(hp("p2") < 100);
 });
 
-test("match settings change how much damage counts as lethal", () => {
-  const { duel, g, clock, beam } = setup();
-  g.onRestart({ startingHealth: 300, respawnDelay: 2 });
+test("a restart brings the dead back with full health", () => {
+  const { g, duel, run, hp } = setup();
   duel();
-  beam("host", "p2", 3); // ~120 damage: lethal at 100hp, not at 300
-  assert.equal(g.checkKill("p2", false, { t: "kill", attackerId: "host", victimId: "p2" }, clock.now).reason, "not-enough-damage");
+  run(3, { hostFiring: true });
+  assert.equal(hp("p2"), 0);
+  g.onRestart({ startingHealth: 100, respawnDelay: 2 }, 0);
+  assert.equal(hp("p2"), 100);
+  assert.equal(g.actors.get("p2").alive, true);
 });
 
-// ---- bots ----
+// ============================================================== movement rules
 
-const bot = (id, x, z, yaw, extra = {}) => ({ id, name: "Bot", x, y: 1.4, z, yaw, pitch: 0, hp: 100, firing: false, ...extra });
+test("ordinary running is fine", () => {
+  const { put, clock } = setup();
+  put("host", -10, 0);
+  for (let i = 1; i <= 20; i++) {
+    clock.now += 50;
+    const r = put("host", -10 + i * 0.8, 0); // 16 m/s, the top running speed
+    assert.equal(r.correct, null);
+    assert.ok(Math.abs(r.x - (-10 + i * 0.8)) < 1e-9);
+  }
+});
 
-test("bots can hit a human only if they're really aimed at them", () => {
+test("speed hacking gets the player snapped back, and held to the top honest speed", () => {
+  const { put, clock, rejects } = setup();
+  put("host", -10, 0);
+  let corrected = null;
+  let last;
+  for (let i = 1; i <= 12; i++) {
+    clock.now += 50;
+    last = put("host", -10 + i * 5, 0); // 100 m/s, 60m in 0.6s
+    corrected = corrected || last.correct;
+  }
+  assert.ok(corrected, "should have been corrected");
+  assert.equal(corrected.tp, 1);
+  // however hard they push, the server's version of them can't have gone further than
+  // the saved-up allowance (18m) plus 21 m/s for the 0.6s that passed
+  assert.ok(last.x - -10 <= 18 + 21 * 0.6 + 0.01, `server position must not follow the cheat (moved ${(last.x + 10).toFixed(1)}m)`);
+  assert.ok(rejects.includes("move:speed"));
+});
+
+test("snapping a cheater back doesn't hand them a fresh allowance", () => {
   const { g, put, clock } = setup();
+  put("host", -10, 0);
+  let tp = 0;
+  let dir = 1;
+  let travelled = 0;
+  for (let i = 0; i < 100; i++) { // 5 seconds of "running" at 100 m/s, back and forth, obeying each snap-back
+    clock.now += 50;
+    const before = g.actors.get("host").pos.x;
+    let claimed = before + dir * 5;
+    if (claimed > 14 || claimed < -14) { dir = -dir; claimed = before + dir * 5; }
+    const r = put("host", claimed, 0, 0, { tp });
+    if (r.correct) tp = r.correct.tp;
+    travelled += Math.abs(g.actors.get("host").pos.x - before);
+  }
+  assert.ok(travelled <= 18 + 21 * 5 + 0.5, `travelled ${travelled.toFixed(1)}m in 5s`);
+  assert.ok(travelled > 21 * 4, `the allowance should still let them move at the legal top speed (got ${travelled.toFixed(1)}m)`);
+});
+
+test("teleporting across the map is refused", () => {
+  const { put, clock } = setup();
+  put("host", -10, 0);
+  clock.now += 50;
+  const r = put("host", 14, 14); // ~34m away, more than any saved-up budget
+  assert.ok(r.correct);
+  assert.deepEqual([r.x, r.z], [-10, 0]);
+});
+
+test("positions outside the arena are refused", () => {
+  const { put, clock, rejects } = setup();
+  put("host", 0, 0);
+  clock.now += 50;
+  const r = put("host", 40, 0);
+  assert.ok(r.correct);
+  assert.ok(rejects.includes("move:bounds"));
+});
+
+test("an honest jump is accepted", () => {
+  const { put, clock } = setup();
+  put("host", 0, 0);
+  for (let t = 0.05; t < 0.68; t += 0.05) {
+    clock.now += 50;
+    const y = Y + 12 * t - 17.5 * t * t;
+    assert.equal(put("host", 0, 0, 0, { y }).correct, null, `at t=${t.toFixed(2)}`);
+  }
+  clock.now += 50;
+  assert.equal(put("host", 0, 0, 0, { y: Y }).correct, null);
+});
+
+test("flying upward past a jump's height is refused", () => {
+  const { put, clock, rejects } = setup();
+  put("host", 0, 0);
+  clock.now += 50;
+  const r = put("host", 0, 0, 0, { y: Y + 6 });
+  assert.ok(r.correct);
+  assert.ok(rejects.includes("move:height"));
+});
+
+test("hovering in mid-air for too long is refused", () => {
+  const { put, clock, rejects } = setup();
+  put("host", 0, 0);
+  let corrected = false;
+  for (let i = 0; i < 60; i++) {
+    clock.now += 50;
+    if (put("host", 0, 0, 0, { y: Y + 1.5 }).correct) corrected = true;
+  }
+  assert.ok(corrected);
+  assert.ok(rejects.includes("move:airtime"));
+});
+
+test("walking into a wall, or through it, is refused", () => {
+  const { put, clock, rejects } = setup({ arena: PILLAR_ARENA });
+  put("host", -4, 0);
+  clock.now += 50;
+  assert.ok(put("host", 0, 0).correct, "inside the pillar");
+
+  const second = setup({ arena: PILLAR_ARENA });
+  second.put("host", -1.6, 0);
+  second.clock.now += 50;
+  const r = second.put("host", 1.6, 0); // both ends are in the open; the straight line is through the pillar
+  assert.ok(r.correct, "through the pillar");
+  assert.ok(second.rejects.includes("move:wall"));
+  assert.ok(rejects.includes("move:wall"));
+});
+
+test("standing right next to a wall is fine", () => {
+  const { put, clock } = setup({ arena: PILLAR_ARENA });
+  put("host", -1.52, 0); // the client rests you 0.51 from the surface
+  clock.now += 50;
+  assert.equal(put("host", -1.52, 1).correct, null);
+});
+
+test("states sent before the player heard about a correction don't count", () => {
+  const { put, clock } = setup();
+  put("host", -10, 0);
+  clock.now += 50;
+  const first = put("host", 14, 14);
+  assert.equal(first.correct.tp, 1);
+  clock.now += 50;
+  const stale = put("host", 14, 14, 0, { tp: 0 }); // still believes the cheat position
+  assert.equal(stale.correct, null, "no second correction for a state that predates the first");
+  assert.deepEqual([stale.x, stale.z], [-10, 0]);
+  clock.now += 50;
+  const ack = put("host", -10, 0.5, 0, { tp: 1 }); // heard it, now moving normally from the corrected spot
+  assert.equal(ack.correct, null);
+  assert.equal(ack.z, 0.5);
+});
+
+test("with enforcement off, movement problems are only counted", () => {
+  const { put, clock, rejects } = setup({ enforce: false });
+  put("host", -10, 0);
+  clock.now += 50;
+  const r = put("host", 14, 14);
+  assert.equal(r.correct, null);
+  assert.equal(r.x, 14);
+  assert.ok(rejects.length > 0);
+});
+
+test("joining or restarting gives a short window to appear at a spawn point", () => {
+  const { g, put, clock } = setup();
+  put("host", -10, 0);
+  g.onRestart({ startingHealth: 100, respawnDelay: 2 }, clock.now);
+  clock.now += 50;
+  assert.equal(put("host", 12, 0).correct, null); // spawned on the far side after the restart
+  clock.now += 4000; // the window closes
+  assert.ok(put("host", -12, 14).correct);
+});
+
+test("a cheater who 'jumps' out of the line of fire is still hit where the server last accepted them", () => {
+  const { put, clock, run, hp } = setup();
+  put("host", -10, 0, FACE_PLUS_X);
+  put("p2", 10, 0, FACE_MINUS_X);
+  clock.now += 50;
+  put("p2", 10, 14); // cheat: leap sideways out of the line of fire
+  run(1, { hostFiring: true });
+  assert.ok(hp("p2") < 80, `got ${hp("p2")}`);
+});
+
+// ===================================================================== bots
+
+const bot = (id, x, z, yaw, extra = {}) => ({ id, name: "Bot", x, y: Y, z, yaw, pitch: 0, hp: 100, firing: false, ...extra });
+
+test("a player's beam on a bot is forwarded to the host as a hit", () => {
+  const { g, put, clock, run } = setup();
+  put("host", -10, 5, 0);
+  put("p2", 10, 0, FACE_MINUS_X);
+  g.onBots([bot("bot-1", -10, 0, FACE_PLUS_X)], clock.now);
+  const events = run(1, { p2Firing: true, after: () => g.onBots([bot("bot-1", -10, 0, FACE_PLUS_X)], clock.now) });
+  const hits = events.filter((e) => e.msg.t === "hit");
+  assert.ok(hits.length > 20);
+  assert.ok(hits.every((e) => e.to === "host" && e.msg.targetId === "bot-1" && e.msg.attackerId === "p2"));
+  const total = hits.reduce((s, e) => s + e.msg.damage, 0);
+  assert.ok(total > 35 && total < 45, `about 40 damage in a second, got ${total.toFixed(1)}`);
+});
+
+test("bots shooting a human: aim and line of sight are checked, damage is capped, and the server applies it", () => {
+  const { g, put, clock, hp } = setup();
+  put("host", -10, 5, 0);
   put("p2", 10, 0, FACE_MINUS_X);
   g.onBots([bot("bot-1", -10, 0, FACE_PLUS_X, { firing: true })], clock.now);
-  const ok = g.checkHit("host", true, { t: "hit", attackerId: "bot-1", targetId: "p2", damage: 0.4 }, clock.now);
-  assert.equal(ok.ok, true);
-  clock.now += 500; // longer than the lag-tolerance window, so the old aim no longer counts
+  const v = g.checkHit("host", true, { t: "hit", attackerId: "bot-1", targetId: "p2", damage: 0.4 }, clock.now);
+  assert.deepEqual(v, { ok: true, damage: 0.4 });
+  g.hurt("p2", "bot-1", v.damage, clock.now);
+  assert.equal(hp("p2"), 99.6);
+
+  // a burst far above what a bot can do is clamped
+  let total = 0;
+  for (let i = 0; i < 100; i++) {
+    const r = g.checkHit("host", true, { t: "hit", attackerId: "bot-1", targetId: "p2", damage: 40 }, clock.now);
+    if (r.ok) total += r.damage;
+  }
+  assert.ok(total <= 30.01, `got ${total}`);
+
+  // pointing the wrong way
+  clock.now += 500;
   g.onBots([bot("bot-1", -10, 0, FACE_MINUS_X, { firing: true })], clock.now);
   put("p2", 10, 0, FACE_MINUS_X);
-  const bad = g.checkHit("host", true, { t: "hit", attackerId: "bot-1", targetId: "p2", damage: 0.4 }, clock.now);
-  assert.equal(bad.reason, "off-target");
-  // a non-host can't speak for a bot
-  assert.equal(g.checkHit("p2", false, { t: "hit", attackerId: "bot-1", targetId: "p2", damage: 0.4 }, clock.now).reason, "bad-attacker");
+  assert.equal(g.checkHit("host", true, { t: "hit", attackerId: "bot-1", targetId: "p2", damage: 0.4 }, clock.now).reason, "off-target");
 });
 
-test("bot deaths: host may announce them once per life, remote players need real hits", () => {
+test("only the host can speak for bots, and a bot can only be a shooter, never a target", () => {
   const { g, put, clock } = setup();
   put("host", -10, 0, FACE_PLUS_X);
+  put("p2", 10, 0, FACE_MINUS_X);
+  g.onBots([bot("bot-1", -10, 0, FACE_PLUS_X, { firing: true })], clock.now);
+  const hit = { t: "hit", attackerId: "bot-1", targetId: "p2", damage: 0.4 };
+  assert.equal(g.checkHit("p2", false, hit, clock.now).reason, "bad-attacker");
+  assert.equal(g.checkHit("host", true, { ...hit, targetId: "bot-1", attackerId: "host" }, clock.now).reason, "bad-target");
+  assert.equal(g.checkHit("host", true, { ...hit, targetId: "nobody" }, clock.now).reason, "unknown-target");
+  assert.equal(g.checkHit("host", true, { ...hit, attackerId: "bot-9" }, clock.now).reason, "unknown-attacker");
+});
+
+test("a bot killing the host, or anyone, kills them through the server", () => {
+  const { g, put, clock } = setup();
+  put("host", -10, 0, FACE_PLUS_X);
+  put("p2", 10, 0, FACE_MINUS_X);
+  g.onBots([bot("bot-1", 10, 5, FACE_MINUS_X)], clock.now);
+  g.hurt("host", "bot-1", 150, clock.now);
+  const events = g.drain();
+  assert.deepEqual(events.filter((e) => e.msg.t === "kill").map((e) => e.msg), [{ t: "kill", attackerId: "bot-1", victimId: "host" }]);
+});
+
+test("bot deaths: the host announces them, once per life; players get credit only if seen shooting", () => {
+  const { g, put, clock } = setup();
+  put("host", -10, 5, 0);
   put("p2", 10, 0, FACE_MINUS_X, { firing: true });
   g.onBots([bot("bot-1", 0, 0, 0)], clock.now);
-  // the host killing it themselves
   const k = { t: "kill", attackerId: "host", victimId: "bot-1" };
   assert.equal(g.checkKill("host", true, k, clock.now).ok, true);
-  assert.equal(g.checkKill("host", true, k, clock.now).reason, "already-dead");
-  // it respawns, then the host tries to credit p2 who never touched it
+  assert.equal(g.checkKill("host", true, k, clock.now).reason, "bot-not-alive");
+
   clock.now += 3000;
   g.onBots([bot("bot-1", 0, 0, 0, { hp: 0 })], clock.now);
-  g.onBots([bot("bot-1", 0, 0, 0, { hp: 100 })], clock.now + 50);
+  g.onBots([bot("bot-1", 0, 0, 0)], clock.now + 50);
   clock.now += 50;
   const forged = { t: "kill", attackerId: "p2", victimId: "bot-1" };
-  assert.equal(g.checkKill("host", true, forged, clock.now).reason, "no-credit");
-  // after p2 really shoots it, the credit is fine
+  assert.equal(g.checkKill("host", true, forged, clock.now).reason, "no-credit"); // p2 never touched it
+
+  g.onBots([bot("bot-1", -10, 0, FACE_PLUS_X)], clock.now); // now p2 shoots it for real
+  g.lastTickAt = clock.now;
+  clock.now += 33;
   put("p2", 10, 0, FACE_MINUS_X, { firing: true });
-  g.onBots([bot("bot-1", 0, 0, 0)], clock.now);
-  assert.equal(g.checkHit("p2", false, { t: "hit", attackerId: "p2", targetId: "bot-1", damage: 0.5 }, clock.now).ok, true);
+  put("host", -10, 5, 0);
+  const events = g.tick(clock.now);
+  assert.ok(events.some((e) => e.msg.t === "hit" && e.msg.targetId === "bot-1"));
   assert.equal(g.checkKill("host", true, forged, clock.now).ok, true);
 });
 
-test("the host's death to bots (unseen by the relay) is still believed", () => {
+test("players can't announce deaths — theirs or anyone's", () => {
   const { g, put, clock } = setup();
   put("host", -10, 0, FACE_PLUS_X);
-  g.onBots([bot("bot-1", 10, 0, FACE_MINUS_X)], clock.now);
-  const r = g.checkKill("host", true, { t: "kill", attackerId: "bot-1", victimId: "host" }, clock.now);
-  assert.deepEqual(r, { ok: true, attackerId: "bot-1" });
-});
-
-test("a non-host can't use the bot allowance to fake their own death", () => {
-  const { g, put, clock } = setup();
   put("p2", 10, 0, FACE_MINUS_X);
-  g.onBots([bot("bot-1", 0, 0, 0)], clock.now);
-  const r = g.checkKill("p2", false, { t: "kill", attackerId: "bot-1", victimId: "p2" }, clock.now);
-  assert.equal(r.reason, "not-enough-damage");
+  assert.equal(g.checkKill("p2", false, { t: "kill", attackerId: "host", victimId: "p2" }, clock.now).reason, "server-decides");
+  assert.equal(g.checkKill("host", true, { t: "kill", attackerId: "host", victimId: "p2" }, clock.now).reason, "server-decides");
 });
 
-test("real arenas load and have walls that block", () => {
+// ================================================================== arenas
+
+test("real arenas load, with walls the movement rules know about", () => {
   for (const arenaId of ["classic", "foundry", "ruins", "neon", "mansion"]) {
     const g = new RoomGuard({ arenaId, hostId: "host" });
-    assert.ok(g.geo.boxes.length >= 4, arenaId);
-    assert.ok(g.geo.maxRange > 30, arenaId);
+    assert.ok(g.geo.solids.length >= 4, arenaId);
+    assert.ok(g.geo.arena.spawns.length >= 2, arenaId);
+    // every spawn point has to be a legal place to stand
+    g.geo.arena.spawns.forEach((sp, i) => {
+      g.addMember("a" + i, 0); // a fresh player each time: their first state is accepted where they stand
+      const r = g.onState("a" + i, { x: sp.x, y: sp.y, z: sp.z, yaw: 0, pitch: 0, hp: 100, firing: false, tp: 0 }, 5000);
+      assert.equal(r.correct, null, `${arenaId} spawn ${JSON.stringify(sp)}`);
+      // ...and standing there must also stay legal a moment later (not inside a wall, not "floating")
+      const again = g.onState("a" + i, { x: sp.x, y: sp.y, z: sp.z, yaw: 1, pitch: 0, hp: 100, firing: false, tp: 0 }, 9000);
+      assert.equal(again.correct, null, `${arenaId} spawn ${JSON.stringify(sp)} (standing)`);
+    });
   }
 });

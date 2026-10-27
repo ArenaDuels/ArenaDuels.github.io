@@ -9,7 +9,7 @@ import { COLORS, PATTERNS, ACCESSORIES, loadLook, saveLook, sanitizeLook } from 
 import { MatchState, DEFAULT_SETTINGS as DEFAULT_MATCH_RULES, sanitizeSettings } from "./match.js";
 import { iconSvg } from "./icons.js";
 import { createLookPreview } from "./look-preview.js";
-import { cleanName, cleanRelay, isBotId, isValidArenaId, isValidId } from "./validate.js";
+import { cleanName, cleanRelay, isBotId, isValidArenaId, isValidId, SERVER_ID, SERVER_ONLY } from "./validate.js";
 
 /* =========================================================
    SETTINGS — persisted to localStorage. Sensitivity uses the same
@@ -388,8 +388,11 @@ function handleData(rawMsg, fromId) {
   const msg = cleanRelay(rawMsg);
   if (!msg) return;
   const fromHost = fromId === hostId;
+  // The relay server is the authority on health, deaths and respawns; its messages come "from" SERVER_ID.
+  const fromServer = fromId === SERVER_ID;
+  if (SERVER_ONLY.has(msg.t) && !fromServer) return;
   if ((msg.t === "end" || msg.t === "restart" || msg.t === "sync" || msg.t === "clock" || msg.t === "bots") && !fromHost) return;
-  if (!players.has(fromId) && players.size >= MAX_REMOTE_PLAYERS) return;
+  if (!fromServer && !players.has(fromId) && players.size >= MAX_REMOTE_PLAYERS) return;
 
   if (msg.t === "hello") {
     // Older clients send no look — sanitizeLook turns that into the default.
@@ -397,22 +400,27 @@ function handleData(rawMsg, fromId) {
   } else if (msg.t === "state") {
     addOrUpdatePlayer(fromId).applyNetState(msg);
   } else if (msg.t === "hit") {
-    // Players may only report their own shots; only the host may attack as a bot.
-    if (msg.attackerId !== fromId && !(fromHost && isBotId(msg.attackerId))) return;
-    // Host only: a remote player shot one of the bots.
-    if (botManager && botManager.has(msg.targetId)) {
-      botManager.damage(msg.targetId, msg.attackerId, msg.damage);
-      return;
-    }
-    if (msg.targetId !== myId) return;
-    applyDamageToLocal(msg.attackerId, msg.damage);
+    // Players don't report hits any more: the server watches everyone's beam and decides.
+    // The one thing it tells us about is a player's beam landing on one of OUR bots (host only).
+    if (!fromServer) return;
+    if (botManager && botManager.has(msg.targetId)) botManager.damage(msg.targetId, msg.attackerId, msg.damage);
   } else if (msg.t === "kill") {
-    // A player reports their own death; the host reports bot deaths.
-    const ok =
-      typeof msg.attackerId === "string" &&
-      typeof msg.victimId === "string" &&
-      (msg.victimId === fromId || (fromHost && isBotId(msg.victimId)));
-    if (ok) applyKill(msg.attackerId, msg.victimId);
+    // The server announces every player's death; the host announces its bots' deaths.
+    if (!fromServer && !(fromHost && isBotId(msg.victimId))) return;
+    applyKill(msg.attackerId, msg.victimId);
+    if (fromServer && msg.victimId === myId) beginLocalDeath(msg.attackerId);
+  } else if (msg.t === "hp") {
+    // Our health, as the server has it.
+    if (local) local.hp = Math.min(msg.hp, GAME.maxHp);
+  } else if (msg.t === "respawn") {
+    // The server decided when and where we come back.
+    if (local && !match.over) respawnLocal({ x: msg.x, y: msg.y, z: msg.z, yaw: msg.yaw }, msg.tp);
+  } else if (msg.t === "correct") {
+    // The server says that position wasn't possible: go back to where it has us.
+    if (local) {
+      local.tp = msg.tp;
+      local.teleportTo(msg.x, msg.y, msg.z);
+    }
   } else if (msg.t === "end") {
     if (fromId !== hostId || match.over) return;
     match.load(msg.snap);
@@ -440,13 +448,6 @@ function handleData(rawMsg, fromId) {
       rp.applyNetState(b);
     }
   }
-}
-
-function applyDamageToLocal(attackerId, damage, echoState = true) {
-  if (match.over || local.hp <= 0) return; // nothing to hurt: already down, or the match is over
-  const died = local.takeDamage(damage);
-  if (echoState || died) net.broadcast({ t: "state", id: myId, ...local.getNetState() });
-  if (died) onLocalDeath(attackerId);
 }
 
 function handleServerLost() {
@@ -713,9 +714,12 @@ function startBots() {
     getSolids: () => arenaObjects,
     getWallBoxes: () => wallBoxes,
     addPlayer: (id, name) => addOrUpdatePlayer(id, name),
-    // A bot hit the host's own player.
-    damageLocal: (attackerId, amount) => applyDamageToLocal(attackerId, amount, false),
-    // A bot hit a remote human — they apply it on their end like any other hit.
+    // A bot hit the host's own player — the server checks it and takes the health off.
+    damageLocal: (attackerId, amount) => {
+      if (!local || local.hp <= 0 || match.over) return; // already down, or the match is over
+      net.broadcast({ t: "hit", targetId: myId, attackerId, damage: amount });
+    },
+    // A bot hit a remote human — same: the server checks it and takes the health off.
     sendHit: (targetId, attackerId, amount) =>
       net.broadcast({ t: "hit", targetId, attackerId, damage: amount }),
     // A bot died — tell everyone so the scoreboard and kill feed stay in step.
@@ -1461,8 +1465,8 @@ function addKillFeed(attackerId, victimId) {
 }
 
 /* ---- kills ----
-   Whoever notices a death announces it ("kill"); everyone, including the
-   announcer, applies it — so all scoreboards agree. Only the host decides
+   The server announces every player's death (the host announces its bots');
+   everyone applies it — so all scoreboards agree. Only the host decides
    when that adds up to the end of the match. */
 function applyKill(attackerId, victimId) {
   if (!match.addKill(attackerId, victimId)) return;
@@ -1546,21 +1550,23 @@ function pickSpawn() {
   return best;
 }
 
-function respawnLocal() {
+// Back in the game at `spawnPoint`. After a death the server picks it (and numbers the move, `tp`);
+// for a new round we pick our own.
+function respawnLocal(spawnPoint = pickSpawn(), tp) {
   deadUntil = 0;
   respawnOverlay.classList.add("hidden");
-  local.spawn(pickSpawn());
+  if (tp !== undefined) local.tp = tp;
+  local.spawn(spawnPoint);
   net.broadcast({ t: "state", id: myId, ...local.getNetState() });
 }
 
-function onLocalDeath(attackerId) {
-  announceKill(attackerId, myId);
-  if (match.over) return;
+// The server said we died. It also decides when we come back (a "respawn" message), so all we do
+// here is show the countdown.
+function beginLocalDeath(attackerId) {
+  if (match.over || !local) return;
+  local.hp = 0;
   const delay = match.settings.respawnDelay;
-  if (delay <= 0) {
-    respawnLocal();
-    return;
-  }
+  if (delay <= 0) return;
   deadUntil = performance.now() + delay * 1000;
   document.getElementById("respawn-by").textContent = attackerId === myId ? "" : `by ${match.nameOf(attackerId)}`;
   respawnCountEl.textContent = Math.ceil(delay);
@@ -1714,9 +1720,8 @@ function loop() {
 
   const dead = local.hp <= 0;
   if (dead && deadUntil) {
-    const left = deadUntil - now;
-    if (left <= 0) respawnLocal();
-    else respawnCountEl.textContent = Math.ceil(left / 1000);
+    // Just the countdown: the server sends the "respawn" when it's time.
+    respawnCountEl.textContent = Math.max(0, Math.ceil((deadUntil - now) / 1000));
   }
 
   pollController(dt);
@@ -1778,14 +1783,9 @@ function loop() {
     if (hit) {
       const idx = targets.indexOf(hit.object);
       if (idx !== -1) {
-        const targetId = targetIds[idx];
-        if (botManager && botManager.has(targetId)) {
-          botManager.damage(targetId, myId, 40 * dt);
-        } else {
-          net.broadcast({ t: "hit", targetId, attackerId: myId, damage: 40 * dt });
-        }
-        const steal = match.settings.healthSteal;
-        if (steal > 0) local.heal((40 * dt * steal) / 100);
+        // The beam is only drawn here. The server sees the same trigger and aim in our state
+        // messages, works out who it hits, takes their health off (and heals us, with health
+        // steal on), so there's nothing to report.
         endScorchStroke(); // hit a player, not environment — don't connect scorch marks across this
       } else if (hit.face) {
         const worldNormal = hit.face.normal

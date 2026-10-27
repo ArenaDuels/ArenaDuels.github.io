@@ -17,6 +17,12 @@ export const MAX_MESSAGE_BYTES = 8192;
 // Gameplay messages only the host may send.
 export const HOST_ONLY = new Set(["end", "restart", "sync", "clock", "bots"]);
 
+// Messages that only the SERVER may send (it is the authority on health, deaths and
+// respawns). The relay drops them if a player sends one, and the browser ignores them
+// unless they came from SERVER_ID. (Real player ids are random hex, never "server".)
+export const SERVER_ID = "server";
+export const SERVER_ONLY = new Set(["hp", "respawn", "correct"]);
+
 const ID_RE = /^[A-Za-z0-9_-]{1,16}$/;
 const BOT_ID_RE = /^bot-\d{1,2}$/;
 const CODE_RE = /^\d{6}$/;
@@ -113,7 +119,30 @@ export function cleanRelay(msg) {
     }
     case "state": {
       const body = cleanBody(msg);
-      return body && { t: "state", ...body };
+      // tp: the number of the last server-ordered move this player has heard about
+      return body && { t: "state", ...body, tp: Math.floor(clampNum(msg.tp, 0, 1e9) ?? 0) };
+    }
+    // ---- server -> player only (see SERVER_ONLY) ----
+    case "hp": {
+      const hp = clampNum(msg.hp, 0, 1000);
+      return hp === null ? null : { t: "hp", hp };
+    }
+    case "respawn": {
+      const x = clampNum(msg.x, -2000, 2000);
+      const y = clampNum(msg.y, -2000, 2000);
+      const z = clampNum(msg.z, -2000, 2000);
+      const yaw = clampNum(msg.yaw, -1e5, 1e5);
+      const tp = clampNum(msg.tp, 0, 1e9);
+      if (x === null || y === null || z === null || yaw === null || tp === null) return null;
+      return { t: "respawn", x, y, z, yaw, tp: Math.floor(tp) };
+    }
+    case "correct": {
+      const x = clampNum(msg.x, -2000, 2000);
+      const y = clampNum(msg.y, -2000, 2000);
+      const z = clampNum(msg.z, -2000, 2000);
+      const tp = clampNum(msg.tp, 0, 1e9);
+      if (x === null || y === null || z === null || tp === null) return null;
+      return { t: "correct", x, y, z, tp: Math.floor(tp) };
     }
     case "hit": {
       const damage = msg.damage; // out-of-range damage is rejected outright, not clamped
