@@ -355,14 +355,24 @@ test("joining or restarting gives a short window to appear at a spawn point", ()
   assert.ok(put("host", -12, 14).correct);
 });
 
-test("a cheater who 'jumps' out of the line of fire is still hit where the server last accepted them", () => {
-  const { put, clock, run, hp } = setup();
+test("a rejected teleport leaves the target at its last server-accepted position", () => {
+  const { put, clock, run, hp, g } = setup();
   put("host", -10, 0, FACE_PLUS_X);
   put("p2", 10, 0, FACE_MINUS_X);
   clock.now += 50;
-  put("p2", 10, 14); // cheat: leap sideways out of the line of fire
+  put("p2", 10, 25); // out of bounds: server rejects it and keeps the accepted position
+  assert.equal(g.actors.get("p2").pos.z, 0);
   run(1, { hostFiring: true });
   assert.ok(hp("p2") < 80, `got ${hp("p2")}`);
+});
+
+test("a target that moves out of the beam is not hit at an old historical position", () => {
+  const { put, run, hp } = setup();
+  put("host", -10, 0, FACE_PLUS_X);
+  put("p2", 10, 0, FACE_MINUS_X);
+  put("p2", 10, 5); // accepted sidestep, outside the beam's path
+  run(1, { hostFiring: true });
+  assert.equal(hp("p2"), 100);
 });
 
 // ===================================================================== bots

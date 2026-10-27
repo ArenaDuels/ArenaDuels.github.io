@@ -731,6 +731,7 @@ export class RemotePlayer {
 
     this.name = name;
     this.hp = GAME.maxHp;
+    this.displayHp = GAME.maxHp; // visual-only health value, eased toward authoritative health
     this.hpBar = makeHpBar();
     scene.add(this.hpBar);
 
@@ -795,7 +796,9 @@ export class RemotePlayer {
     this.targetPos.set(state.x, state.y, state.z);
     this.targetYaw = state.yaw;
     this.targetPitch = state.pitch;
-    this.hp = state.hp;
+    const previousHp = this.hp;
+    this.hp = state.hp; // authoritative health; never use displayHp for gameplay
+    if (previousHp <= 0 && state.hp > 0) this.displayHp = state.hp; // respawn without animating from zero
     this.firing = state.firing;
     if (state.hp <= 0) {
       this.setVisible(false);
@@ -831,7 +834,11 @@ export class RemotePlayer {
     if (this.visible && this.hp > 0) {
       this.hpBar.position.copy(this.mesh.position);
       this.hpBar.position.y += 1.5;
-      this.hpBar.scale.x = 1.2 * Math.min(1, Math.max(this.hp / GAME.maxHp, 0));
+      // Smooth only the visual bar. Server-reported this.hp remains authoritative.
+      const hpBlend = 1 - Math.exp(-Math.max(0, dt) * 14);
+      this.displayHp += (this.hp - this.displayHp) * hpBlend;
+      if (Math.abs(this.hp - this.displayHp) < 0.05) this.displayHp = this.hp;
+      this.hpBar.scale.x = 1.2 * Math.min(1, Math.max(this.displayHp / GAME.maxHp, 0));
 
       this.nameSprite.position.copy(this.mesh.position);
       this.nameSprite.position.y += 1.85;
