@@ -39,14 +39,15 @@ export const TUNING = Object.freeze({
   EYE_HEIGHT: 1.0,
   RADIUS: 0.5,
   HALF_SEGMENT: 0.6,
-  AIM_SLACK: 0.025,         // minimal extra forgiveness beyond the target capsule itself
-  AIM_SLACK_PER_M: 0.001,   // almost no extra forgiveness at long range
+  AIM_SLACK: 0.75,
+  AIM_SLACK_PER_M: 0.04,
   WALL_SHRINK: 0.12,
   RANGE_MARGIN: 12,
   // --- history (lag tolerance) ---
   SAMPLE_GAP_MS: 40,
   HISTORY_MS: 1200,
   ATTACKER_WINDOW_MS: 350,
+  TARGET_WINDOW_MS: 900,
   MAX_STATE_AGE_MS: 2000,
   // --- movement rules (see client player.js: ground 16 m/s, air 10.5, jump 12, gravity 35) ---
   H_SPEED: 21,               // metres/second of horizontal travel we allow. Honest play in the replay test peaks at
@@ -505,15 +506,16 @@ export class RoomGuard {
   #rayVsTarget(ox, oy, oz, dx, dy, dz, tgt, now) {
     const T = TUNING;
     const { boxes, maxRange } = this.geo;
-    // Test only the latest server-accepted target position. Searching a history
-    // of old positions lets a beam keep dealing damage after the target has moved
-    // away from the ray. If a movement update is rejected, the latest accepted
-    // position remains authoritative and can still be hit (including during a
-    // correction), without opening a large historical hitbox.
-    const t = tgt.last();
-    if (!t) return { pass: false, reason: "off-target" };
-    const dist = Math.hypot(t.x - ox, t.y - oy, t.z - oz);
-    if (dist > maxRange) return { pass: false, reason: "out-of-range" };
+    let sawRange = false;
+    let sawAim = false;
+
+    for (let j = tgt.hist.length - 1; j >= 0; j--) {
+      const t = tgt.hist[j];
+      if (now - t.t > T.TARGET_WINDOW_MS) break;
+
+      const dist = Math.hypot(t.x - ox, t.y - oy, t.z - oz);
+      if (dist > maxRange) continue;
+      sawRange = true;
 
       let miss = Infinity;
       for (const off of [-T.HALF_SEGMENT, 0, T.HALF_SEGMENT]) {
@@ -524,21 +526,21 @@ export class RoomGuard {
         const d2 = along <= 0 ? vx * vx + vy * vy + vz * vz : vx * vx + vy * vy + vz * vz - along * along;
         miss = Math.min(miss, Math.sqrt(Math.max(0, d2)));
       }
-    if (miss > T.RADIUS + T.AIM_SLACK + T.AIM_SLACK_PER_M * dist) {
-      return { pass: false, reason: "off-target" };
-    }
+      if (miss > T.RADIUS + T.AIM_SLACK + T.AIM_SLACK_PER_M * dist) continue;
+      sawAim = true;
 
-    for (const off of [0, T.HALF_SEGMENT, -T.HALF_SEGMENT]) {
-      let blocked = false;
-      for (const b of boxes) {
-        if (segmentBlockedBy(b, ox, oy, oz, t.x, t.y + off, t.z)) {
-          blocked = true;
-          break;
+      for (const off of [0, T.HALF_SEGMENT, -T.HALF_SEGMENT]) {
+        let blocked = false;
+        for (const b of boxes) {
+          if (segmentBlockedBy(b, ox, oy, oz, t.x, t.y + off, t.z)) {
+            blocked = true;
+            break;
+          }
         }
+        if (!blocked) return { pass: true, dist };
       }
-      if (!blocked) return { pass: true, dist };
     }
-    return { pass: false, reason: "blocked" };
+    return { pass: false, reason: !sawRange ? "out-of-range" : !sawAim ? "off-target" : "blocked" };
   }
 
   // Whoever the shooter's beam is on right now: the nearest living opponent that passes the ray test.

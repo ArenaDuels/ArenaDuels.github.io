@@ -121,6 +121,37 @@ Once a minute the server prints a line like
 The browser and the server must be deployed together: an older cached copy of the
 game doesn't understand the server's health and respawn messages.
 
+## Account names (names.js, nameTickets.js)
+
+Every name the game hands out is **Adjective + Noun + two digits**, like `SwiftViper42`
+or `GallantCheetah98`: 274 adjectives x 320 nouns x 88 numbers = about **7.7 million**
+different names, all at most 16 characters. Guests get one at random in the browser;
+account names come from the server.
+
+You can't create an account with a name you made up:
+
+1. The dice button asks the server for a name. The server picks one at random,
+   checks it's free, and signs it (a "name ticket", good for 15 minutes).
+2. Signing up needs the name **and** its ticket. The server refuses a name that
+   isn't one the generator can produce, and a name without a valid ticket for that
+   exact name, so a script can't pick `NovaViper99` for itself.
+3. Each address can roll 60 names per 10 minutes, so nobody can sit rolling
+   thousands of times to cherry-pick one. (Rolling a few times until you like what
+   you get is how the dice button is meant to work.)
+
+Old accounts (one word + two digits, like `Blaze42`) keep working at sign-in; that
+style just isn't handed out any more. The numbers 69 and 88 are never handed out,
+and a few word pairs that run together into something rude are banned. `npm test`
+scans **every** pair of words for that, so adding a word that creates a new accident
+fails the tests.
+
+Setting: `NAME_TICKET_SECRET` — a long random string (any 30+ characters). Without
+it the server makes up a temporary one at start-up: fine for one server, but name
+offers still open at a restart stop working (the page just rolls a new name).
+
+`js/names.js` and `server/names.js` are identical copies (a test checks that). To add
+words, edit one and copy it over the other.
+
 `server/arenas.js` and `server/arenas/` are identical copies of `js/arenas.js`
 and `js/arenas/`. **If you change an arena's walls or props, copy the files to
 both places** — otherwise the server checks line of sight against old walls.

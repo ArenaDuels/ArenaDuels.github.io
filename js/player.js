@@ -731,7 +731,6 @@ export class RemotePlayer {
 
     this.name = name;
     this.hp = GAME.maxHp;
-    this.displayHp = GAME.maxHp; // visual-only health value, eased toward authoritative health
     this.hpBar = makeHpBar();
     scene.add(this.hpBar);
 
@@ -796,11 +795,7 @@ export class RemotePlayer {
     this.targetPos.set(state.x, state.y, state.z);
     this.targetYaw = state.yaw;
     this.targetPitch = state.pitch;
-    this.hp = state.hp; // authoritative health; never use a visual value for gameplay
-    // Apply each network health snapshot immediately. This avoids a separate
-    // client-side easing value lagging behind or appearing to freeze/catch up.
-    this.displayHp = state.hp;
-    this.hpBar.scale.x = 1.2 * Math.min(1, Math.max(state.hp / GAME.maxHp, 0));
+    this.hp = state.hp;
     this.firing = state.firing;
     if (state.hp <= 0) {
       this.setVisible(false);
@@ -836,7 +831,6 @@ export class RemotePlayer {
     if (this.visible && this.hp > 0) {
       this.hpBar.position.copy(this.mesh.position);
       this.hpBar.position.y += 1.5;
-      // Keep the bar tied directly to the latest authoritative snapshot.
       this.hpBar.scale.x = 1.2 * Math.min(1, Math.max(this.hp / GAME.maxHp, 0));
 
       this.nameSprite.position.copy(this.mesh.position);

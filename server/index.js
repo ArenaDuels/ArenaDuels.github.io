@@ -22,20 +22,11 @@ import { getAuth } from "firebase-admin/auth";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { cleanRelay, HOST_ONLY, isBotId, isValidArenaId, isValidCode, MAX_MESSAGE_BYTES, SERVER_ID, SERVER_ONLY } from "./validate.js";
 import { RoomGuard } from "./anticheat.js";
+import { canonicalName, isLegacyName, randomName } from "./names.js";
+import { createNameTickets } from "./nameTickets.js";
 
 const PORT = process.env.PORT || 8080;
 const scrypt = promisify(crypto.scrypt);
-const ACCOUNT_NAME_WORDS = [
-  "Blaze", "Nova", "Vortex", "Cipher", "Nomad", "Rogue", "Havoc", "Ember",
-  "Frost", "Glitch", "Raptor", "Viper", "Comet", "Shadow", "Quartz", "Onyx",
-  "Zenith", "Drift", "Static", "Volt", "Surge", "Nebula", "Vector", "Pulse",
-  "Falcon", "Talon", "Wraith", "Specter", "Cinder", "Blitz", "Storm", "Tempest",
-  "Rift", "Echo", "Vertex", "Prism", "Flux", "Turbo", "Rocket", "Meteor",
-  "Aurora", "Eclipse", "Lunar", "Solar", "Photon", "Quantum", "Cobalt", "Chrome",
-  "Crimson", "Scarlet", "Amber", "Jade", "Obsidian", "Ivory", "Rebel", "Maverick",
-  "Outlaw", "Ranger", "Hunter", "Phantom", "Titan", "Bolt", "Spark", "Fury",
-  "Venom", "Reaper", "Rocketeer"
-];
 let firebaseAuth = null;
 let firestore = null;
 try {
@@ -47,7 +38,32 @@ try {
   console.error("[auth] Firebase Admin SDK unavailable; account endpoints will return 503:", err.message);
 }
 const authAttempts = new Map();
-const authRandomName = () => ACCOUNT_NAME_WORDS[crypto.randomInt(ACCOUNT_NAME_WORDS.length)] + crypto.randomInt(10, 100);
+// Account names come only from the generator in names.js, and only with a ticket the server
+// signed when it offered that name (nameTickets.js) — so nobody can register a name of their own.
+const authRandomName = () => randomName(crypto.randomInt);
+const nameTickets = createNameTickets({ secret: process.env.NAME_TICKET_SECRET });
+if (nameTickets.temporary) {
+  console.warn("[auth] NAME_TICKET_SECRET is not set: using a temporary key (name offers still open when the server restarts will stop working).");
+}
+// Rolling for a name is limited so nobody can sit there rolling thousands of times to cherry-pick one.
+const NAME_ROLLS_PER_WINDOW = 60;
+const NAME_ROLL_WINDOW_MS = 10 * 60_000;
+const nameRolls = new Map();
+function nameRollAllowed(ip) {
+  const now = Date.now();
+  const entry = nameRolls.get(ip);
+  if (!entry || entry.resetAt <= now) {
+    nameRolls.set(ip, { count: 1, resetAt: now + NAME_ROLL_WINDOW_MS });
+    return true;
+  }
+  if (entry.count >= NAME_ROLLS_PER_WINDOW) return false;
+  entry.count++;
+  return true;
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of nameRolls) if (entry.resetAt <= now) nameRolls.delete(ip);
+}, 5 * 60_000).unref();
 const usernameKey = (name) => name.toLowerCase();
 function authRateAllowed(ip) {
   const now = Date.now();
@@ -80,9 +96,12 @@ async function readJsonBody(req, maxBytes = 4096) {
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
-function validAccountUsername(name) {
-  return typeof name === "string" && name.length <= 16 &&
-    new RegExp("^(?:" + ACCOUNT_NAME_WORDS.join("|") + ")\\d{2}$", "i").test(name);
+// The account name in its proper capitals if it is a name this game can have: one the generator
+// can produce, or (to sign in) an old-style name from before the bigger name list.
+function knownAccountName(name, { allowLegacy }) {
+  const generated = canonicalName(name);
+  if (generated) return generated;
+  return allowLegacy && isLegacyName(name) ? name : null;
 }
 async function passwordHash(password, salt) {
   return (await scrypt(password, salt, 64)).toString("hex");
@@ -126,28 +145,50 @@ async function handleAuthHttp(req, res, url) {
   if (!authRateAllowed(ip)) return authJson(res, 429, { error: "Too many account requests. Try again in a minute." });
 
   if (req.method === "GET" && url.pathname === "/api/auth/random-name") {
-    for (let i = 0; i < 30; i++) {
-      const username = authRandomName();
-      const doc = await firestore.collection("arenaUsernames").doc(usernameKey(username)).get();
-      if (!doc.exists) return authJson(res, 200, { username });
+    if (!nameRollAllowed(ip)) return authJson(res, 429, { error: "You've rolled a lot of names. Wait a few minutes and try again." });
+    try {
+      for (let i = 0; i < 30; i++) {
+        const username = authRandomName();
+        const doc = await firestore.collection("arenaUsernames").doc(usernameKey(username)).get();
+        if (!doc.exists) {
+          return authJson(res, 200, { username, nameTicket: nameTickets.issue(username), expiresInSeconds: nameTickets.ttlSeconds });
+        }
+      }
+      return authJson(res, 503, { error: "Could not find an available name. Try again." });
+    } catch (err) {
+      console.error("[auth] name roll failed:", err.message);
+      return authJson(res, 500, { error: "Could not generate a name. Try again later." });
     }
-    return authJson(res, 503, { error: "Could not find an available name. Try again." });
   }
   if (req.method !== "POST") return authJson(res, 405, { error: "Method not allowed." });
 
   let body;
   try { body = await readJsonBody(req); }
   catch { return authJson(res, 400, { error: "Invalid request body." }); }
-  const username = typeof body.username === "string" ? body.username : "";
   const password = typeof body.password === "string" ? body.password : "";
   const turnstileToken = typeof body.turnstileToken === "string" ? body.turnstileToken : "";
-  if (!validAccountUsername(username)) return authJson(res, 400, { error: "Choose a generated username using the dice button." });
+  const registering = url.pathname === "/api/auth/register";
+  const username = knownAccountName(typeof body.username === "string" ? body.username : "", { allowLegacy: !registering });
+  if (!username) {
+    return registering
+      ? authJson(res, 400, { error: "That isn't a name the game hands out. Use the dice button to roll one." })
+      : authJson(res, 401, { error: "Username or password is incorrect." });
+  }
   if (password.length < 8 || password.length > 128) return authJson(res, 400, { error: "Password must be 8–128 characters." });
 
   try {
     const key = usernameKey(username);
     const usernameRef = firestore.collection("arenaUsernames").doc(key);
-    if (url.pathname === "/api/auth/register") {
+    if (registering) {
+      // The name must be one the server itself offered (and recently): you can't pick your own.
+      const offer = nameTickets.verify(typeof body.nameTicket === "string" ? body.nameTicket : "", username);
+      if (!offer.ok) {
+        return authJson(res, 400, {
+          error: offer.reason === "expired"
+            ? "That name offer expired. Roll a new name."
+            : "That name wasn't offered by the server. Use the dice button to roll a new one.",
+        });
+      }
       await verifyTurnstile(turnstileToken, ip);
       const uid = crypto.randomUUID().replace(/-/g, "");
       const salt = crypto.randomBytes(16).toString("hex");

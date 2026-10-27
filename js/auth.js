@@ -70,22 +70,31 @@ export function initializeAccountUi(nameInput, randomName) {
     title.textContent = registering ? "Create an account" : "Sign in";
     showMessage("");
   }
+  // Account names are handed out by the server, each with a signed "name ticket" that proves the
+  // server offered it. Registering needs both, so a made-up name can't be signed up with.
+  let nameTicket = "";
   async function getGeneratedName() {
+    let response;
     try {
-      const response = await fetch(`${API_BASE}/api/auth/random-name`, { cache: "no-store" });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Could not generate a username.");
-      return data.username;
-    } catch (err) {
-      // The client fallback is only for the guest name. Account registration
-      // still requires a server-generated available username.
-      return randomName();
+      response = await fetch(`${API_BASE}/api/auth/random-name`, { cache: "no-store" });
+    } catch {
+      throw new Error("Could not reach the server to get a username. Try again in a moment.");
     }
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.username || !data.nameTicket) throw new Error(data.error || "Could not get a username from the server.");
+    return data;
   }
   async function refreshGeneratedName() {
     registerName.value = "Generating…";
-    const generated = await getGeneratedName();
-    registerName.value = generated;
+    nameTicket = "";
+    try {
+      const data = await getGeneratedName();
+      registerName.value = data.username;
+      nameTicket = data.nameTicket;
+    } catch (err) {
+      registerName.value = "";
+      showMessage(err.message, true);
+    }
   }
   function setGuestName() {
     accountUsername = "";
@@ -110,12 +119,12 @@ export function initializeAccountUi(nameInput, randomName) {
     showMessage(`Signed in as ${username}.`);
     setTimeout(() => modal.classList.add("hidden"), 700);
   }
-  async function postAuth(path, username, password, turnstileToken = "") {
+  async function postAuth(path, username, password, turnstileToken = "", ticket = "") {
     const response = await fetch(`${API_BASE}/api/auth/${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       cache: "no-store",
-      body: JSON.stringify({ username, password, ...(path === "register" ? { turnstileToken } : {}) })
+      body: JSON.stringify({ username, password, ...(path === "register" ? { turnstileToken, nameTicket: ticket } : {}) })
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || "Account request failed.");
@@ -147,17 +156,17 @@ export function initializeAccountUi(nameInput, randomName) {
     submit.disabled = true;
     showMessage("Creating account…");
     try {
-      if (!username || username === "Generating…") throw new Error("Generate a username first.");
+      if (!username || username === "Generating…" || !nameTicket) throw new Error("Roll a username first.");
       const turnstileInput = document.querySelector('[name="cf-turnstile-response"]');
       const turnstileToken = turnstileInput?.value || "";
       if (!turnstileToken) throw new Error("Please complete the human verification first.");
-      const data = await postAuth("register", username, password, turnstileToken);
+      const data = await postAuth("register", username, password, turnstileToken, nameTicket);
       await finishSignIn(data.token, data.username);
       registerPassword.value = "";
     } catch (err) {
       showMessage(err.message, true);
       if (window.turnstile && turnstileWidgetId !== null) window.turnstile.reset(turnstileWidgetId);
-      if (/taken|available|generate/i.test(err.message)) await refreshGeneratedName();
+      if (/taken|available|generate|roll|offer|expired/i.test(err.message)) await refreshGeneratedName();
     } finally {
       submit.disabled = false;
     }
