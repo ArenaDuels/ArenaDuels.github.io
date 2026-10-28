@@ -13,21 +13,9 @@ export const COLORS = [0xffffff, 0xff4d6a, 0x39ff88, 0xffd166, 0x9b5de5, 0x4cc9f
 // Each id doubles as the icon name in icons.js.
 export const PATTERNS = [
   { id: "solid", label: "Solid" },
-  { id: "neon", label: "Neon" },
-  { id: "galaxy", label: "Galaxy" },
-  { id: "fire", label: "Fire" },
-  { id: "ice", label: "Ice" },
-  { id: "camo", label: "Camo" },
-  { id: "digital", label: "Digital Camo" },
-  { id: "lava", label: "Lava" },
-  { id: "rainbow", label: "Rainbow" },
-  { id: "gold", label: "Gold" },
-  { id: "glitch", label: "Glitch" },
-  { id: "carbon", label: "Carbon" },
-  { id: "contour", label: "Contour" },
-  { id: "crown", label: "Crowns" },
-  { id: "lightning", label: "Lightning" },
-  { id: "smoke", label: "Red Smoke" },
+  { id: "stripes", label: "Stripes" },
+  { id: "bands", label: "Bands" },
+  { id: "dots", label: "Dots" },
   { id: "checker", label: "Checker" },
 ];
 
@@ -136,34 +124,6 @@ export function applyBodyLook(material, color, patternId) {
   } else {
     material.map = patternTexture(patternId, color);
     material.color.set(0xffffff); // the texture already carries the color
-  }
-  material.needsUpdate = true;
-}
-
-/* ---------- image-based full-surface skins ---------- */
-
-// Textured skins are real PNG files generated from the custom texture atlas.
-// Their pixels replace the selected player color; only Solid uses that color.
-const skinTextureCache = new Map();
-const skinTextureLoader = new THREE.TextureLoader();
-
-function patternTexture(patternId) {
-  if (skinTextureCache.has(patternId)) return skinTextureCache.get(patternId);
-  const texture = skinTextureLoader.load(`assets/skins/${patternId}.png`);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-  texture.anisotropy = 4;
-  skinTextureCache.set(patternId, texture);
-  return texture;
-}
-
-export function applyBodyLook(material, color, patternId) {
-  if (!patternId || patternId === "solid") {
-    material.map = null;
-    material.color.set(color);
-  } else {
-    material.map = patternTexture(patternId);
-    material.color.set(0xffffff);
   }
   material.needsUpdate = true;
 }

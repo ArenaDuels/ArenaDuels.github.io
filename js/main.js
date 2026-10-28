@@ -567,21 +567,10 @@ function buildLookPickers() {
   auto.dataset.key = "auto";
   colorPicker.appendChild(auto);
 
-  const skinLabels = {
-    solid: "linear-gradient(135deg,#f5f7ff,#aab6c8)",
-  };
   for (const p of PATTERNS) {
     const b = tile("pattern-option", "", p.label, () => setMyLook({ pattern: p.id }));
+    b.innerHTML = iconSvg(p.id); // static, trusted markup from icons.js
     b.dataset.key = p.id;
-    if (p.id === "solid") {
-      b.style.background = skinLabels.solid;
-    } else {
-      // Use the exact same generated PNG for the picker preview and the 3D skin.
-      b.style.backgroundImage = `url("assets/skins/${p.id}.png")`;
-      b.style.backgroundSize = "cover";
-      b.style.backgroundPosition = "center";
-      b.style.backgroundRepeat = "no-repeat";
-    }
     patternPicker.appendChild(b);
   }
   for (const a of ACCESSORIES) {
