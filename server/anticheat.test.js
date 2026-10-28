@@ -2,6 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { RoomGuard } from "./anticheat.js";
+import { cleanRelay, SERVER_ONLY } from "./validate.js";
 
 const FACE_PLUS_X = -Math.PI / 2;  // yaw that looks toward +x
 const FACE_MINUS_X = Math.PI / 2;
@@ -194,6 +195,63 @@ test("a restart brings the dead back with full health", () => {
   g.onRestart({ startingHealth: 100, respawnDelay: 2 }, 0);
   assert.equal(hp("p2"), 100);
   assert.equal(g.actors.get("p2").alive, true);
+});
+
+// ====================================================== everyone sees health at once
+
+test("when someone takes damage, everyone else is told straight away (not via that player's own messages)", () => {
+  const { g, duel, run } = setup();
+  g.addMember("p3", 0);
+  g.onState("p3", { x: 0, y: Y, z: 8, yaw: 0, pitch: 0, hp: 100, firing: false, tp: 0 }, 10_000);
+  duel();
+  const events = run(1, { hostFiring: true });
+  const health = events.filter((e) => e.msg.t === "health");
+  assert.ok(health.length >= 25, `about one per tick for a second, got ${health.length}`);
+  assert.ok(health.every((e) => e.to === "all" && e.except === "p2" && e.msg.playerId === "p2"), "goes to everyone except the player it is about");
+  // the numbers fall steadily and end where the server says p2 is
+  const values = health.map((e) => e.msg.hp);
+  assert.ok(values.every((v, i) => i === 0 || v < values[i - 1]), "strictly falling");
+  assert.equal(values.at(-1), g.actors.get("p2").hp);
+});
+
+test("the player who was hit still gets their own 'hp', and nobody gets a 'health' about themselves", () => {
+  const { duel, run } = setup();
+  duel();
+  const events = run(0.5, { hostFiring: true });
+  assert.ok(events.some((e) => e.to === "p2" && e.msg.t === "hp"));
+  assert.ok(!events.some((e) => e.msg.t === "health" && e.msg.playerId === "host"));
+});
+
+test("a death shows as 0 health to everyone else before the kill", () => {
+  const { duel, run } = setup();
+  duel();
+  const events = run(3, { hostFiring: true });
+  const zero = events.findIndex((e) => e.msg.t === "health" && e.msg.hp === 0);
+  const kill = events.findIndex((e) => e.msg.t === "kill");
+  assert.ok(zero !== -1 && zero < kill, `health 0 at ${zero}, kill at ${kill}`);
+});
+
+test("a respawn shows as full health to everyone else, and a restart resets every bar", () => {
+  const { g, duel, run } = setup();
+  duel();
+  run(3, { hostFiring: true });
+  const events = run(2.5);
+  const back = events.filter((e) => e.msg.t === "health" && e.msg.playerId === "p2" && e.msg.hp === 100);
+  assert.equal(back.length, 1);
+  g.onRestart({ startingHealth: 100, respawnDelay: 2 }, 0);
+  const restart = g.drain().filter((e) => e.msg.t === "health");
+  assert.deepEqual(restart.map((e) => e.msg.playerId).sort(), ["host", "p2"]);
+});
+
+test("'health' messages are the server's alone and are checked like any other", () => {
+  assert.ok(SERVER_ONLY.has("health"));
+  assert.deepEqual(cleanRelay({ t: "health", playerId: "abc123def456", hp: 42.5 }), { t: "health", playerId: "abc123def456", hp: 42.5 });
+  for (const bad of [
+    { t: "health", playerId: "abc123def456" },
+    { t: "health", playerId: "abc123def456", hp: "lots" },
+    { t: "health", playerId: "not a valid id!", hp: 10 },
+    { t: "health", hp: 10 },
+  ]) assert.equal(cleanRelay(bad), null, JSON.stringify(bad));
 });
 
 // ============================================================== movement rules

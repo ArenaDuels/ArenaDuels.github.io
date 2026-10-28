@@ -21,7 +21,7 @@ export const HOST_ONLY = new Set(["end", "restart", "sync", "clock", "bots"]);
 // respawns). The relay drops them if a player sends one, and the browser ignores them
 // unless they came from SERVER_ID. (Real player ids are random hex, never "server".)
 export const SERVER_ID = "server";
-export const SERVER_ONLY = new Set(["hp", "respawn", "correct"]);
+export const SERVER_ONLY = new Set(["hp", "health", "respawn", "correct"]);
 
 const ID_RE = /^[A-Za-z0-9_-]{1,16}$/;
 const BOT_ID_RE = /^bot-\d{1,2}$/;
@@ -126,6 +126,11 @@ export function cleanRelay(msg) {
     case "hp": {
       const hp = clampNum(msg.hp, 0, 1000);
       return hp === null ? null : { t: "hp", hp };
+    }
+    case "health": {
+      // Someone's health, announced to everybody the moment it changes.
+      const hp = clampNum(msg.hp, 0, 1000);
+      return hp === null || !isValidId(msg.playerId) ? null : { t: "health", playerId: msg.playerId, hp };
     }
     case "respawn": {
       const x = clampNum(msg.x, -2000, 2000);

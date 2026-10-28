@@ -412,6 +412,10 @@ function handleData(rawMsg, fromId) {
   } else if (msg.t === "hp") {
     // Our health, as the server has it.
     if (local) local.hp = Math.min(msg.hp, GAME.maxHp);
+  } else if (msg.t === "health") {
+    // Someone else's health, the moment the server changes it. (Their own state messages can run
+    // late — browsers slow the timers of a hidden or covered window to about one a second.)
+    players.get(msg.playerId)?.setHealth(msg.hp);
   } else if (msg.t === "respawn") {
     // The server decided when and where we come back.
     if (local && !match.over) respawnLocal({ x: msg.x, y: msg.y, z: msg.z, yaw: msg.yaw }, msg.tp);

@@ -532,10 +532,10 @@ function screen(room, ws, isHost, clean) {
 
 // Send what the guard queued (health updates, kills, respawns, hits on bots) as "from the server".
 function deliver(room, events) {
-  for (const { to, msg } of events) {
+  for (const { to, msg, except } of events) {
     const out = JSON.stringify({ ...msg, from: SERVER_ID });
     if (to === "all") {
-      for (const peer of room.members.values()) if (peer.readyState === peer.OPEN) peer.send(out);
+      for (const [id, peer] of room.members) if (id !== except && peer.readyState === peer.OPEN) peer.send(out);
     } else {
       const peer = room.members.get(to);
       if (peer && peer.readyState === peer.OPEN) peer.send(out);

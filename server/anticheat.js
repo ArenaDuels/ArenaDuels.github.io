@@ -291,11 +291,19 @@ export class RoomGuard {
 
   // ---- outgoing messages ----
 
-  #emit(to, msg) {
-    this.out.push({ to, msg });
+  #emit(to, msg, except) {
+    this.out.push(except ? { to, msg, except } : { to, msg });
   }
 
-  /** Collect (and clear) queued messages: [{ to: "all" | playerId, msg }]. */
+  // A player's health changed: tell them, and tell everyone else straight away. (Other players
+  // used to learn it only from that player's own "state" messages, which arrive late whenever
+  // their browser slows its timers — e.g. when their window is covered by another.)
+  #announceHealth(a) {
+    this.#emit(a.id, { t: "hp", hp: a.hp });
+    this.#emit("all", { t: "health", playerId: a.id, hp: a.hp }, a.id);
+  }
+
+  /** Collect (and clear) queued messages: [{ to: "all" | playerId, msg, except? }]. */
   drain() {
     const o = this.out;
     this.out = [];
@@ -342,6 +350,7 @@ export class RoomGuard {
         a.contrib.clear();
       } else {
         this.#freshLife(a, now);
+        this.#emit("all", { t: "health", playerId: a.id, hp: a.hp });
       }
     }
   }
@@ -575,7 +584,7 @@ export class RoomGuard {
     victim.alive = false;
     victim.hpDirty = false;
     victim.respawnAt = now + this.respawnDelay * 1000;
-    this.#emit(victim.id, { t: "hp", hp: 0 });
+    this.#announceHealth(victim);
     this.#emit("all", { t: "kill", attackerId, victimId: victim.id });
   }
 
@@ -614,7 +623,7 @@ export class RoomGuard {
     a.hBudget = TUNING.H_CAP_M;
     a.lastMoveAt = now;
     this.#emit(a.id, { t: "respawn", x: best.x, y: best.y, z: best.z, yaw: best.yaw || 0, tp: tp.tp });
-    this.#emit(a.id, { t: "hp", hp: a.hp });
+    this.#announceHealth(a);
   }
 
   /**
@@ -651,7 +660,7 @@ export class RoomGuard {
     for (const a of this.actors.values()) {
       if (!a.isBot && a.hpDirty) {
         a.hpDirty = false;
-        this.#emit(a.id, { t: "hp", hp: a.hp });
+        this.#announceHealth(a);
       }
     }
     return this.drain();

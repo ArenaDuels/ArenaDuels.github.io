@@ -101,6 +101,14 @@ anything that matters:
   player's health by the server. A player's beam on a bot is forwarded to the host.
   The host announces bot deaths, once per life.
 
+Everyone's health is announced by the server the moment it changes (`health` messages),
+not read from each player's own position updates. That matters because browsers slow
+the timers of a hidden or covered window to about once a second, so a player whose
+window is behind another one reports their position (and used to report their health)
+only once a second. If you test with two windows on one computer and maximize one, the
+covered window's player will still look jerky to the other (that's the browser, not the
+game) but their health bar now moves smoothly. Side by side, or a second device, avoids it.
+
 What this does *not* stop: an aimbot (perfect aim sent as honest-looking aim), a
 modified client that simply plays well within the movement limits (for example
 ~20% faster than normal running), or the host cheating with their own bots and

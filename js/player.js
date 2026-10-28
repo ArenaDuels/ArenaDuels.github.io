@@ -806,6 +806,13 @@ export class RemotePlayer {
     }
   }
 
+  // Health straight from the server (a "health" message), which doesn't wait for this player's own
+  // state messages. Coming back to life is left to the next state message, which also has where they are.
+  setHealth(hp) {
+    this.hp = hp;
+    if (hp <= 0) this.setVisible(false);
+  }
+
   setVisible(v) {
     this.visible = v;
     this.mesh.visible = v;
