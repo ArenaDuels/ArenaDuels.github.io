@@ -18,16 +18,16 @@ export const PATTERNS = [
   { id: "fire", label: "Fire" },
   { id: "ice", label: "Ice" },
   { id: "camo", label: "Camo" },
-  { id: "digital", label: "Digital" },
+  { id: "digital", label: "Digital Camo" },
   { id: "lava", label: "Lava" },
   { id: "rainbow", label: "Rainbow" },
   { id: "gold", label: "Gold" },
   { id: "glitch", label: "Glitch" },
   { id: "carbon", label: "Carbon" },
-  // Keep older saved choices valid for existing players.
-  { id: "stripes", label: "Stripes" },
-  { id: "bands", label: "Bands" },
-  { id: "dots", label: "Dots" },
+  { id: "contour", label: "Contour" },
+  { id: "crown", label: "Crowns" },
+  { id: "lightning", label: "Lightning" },
+  { id: "smoke", label: "Red Smoke" },
   { id: "checker", label: "Checker" },
 ];
 
@@ -76,102 +76,87 @@ export function saveLook(look) {
   }
 }
 
-/* ---------- full-surface character skins ---------- */
+/* ---------- body pattern ---------- */
 
-// Every non-solid skin is a self-coloured albedo texture. The selected player
-// colour is deliberately NOT multiplied into these maps, so a skin fully
-// replaces the body colour instead of merely tinting it.
 const textureCache = new Map();
-function patternTexture(patternId) {
-  if (textureCache.has(patternId)) return textureCache.get(patternId);
 
-  const size = 512;
+// Draws the pattern on a canvas in the chosen color (the capsule's UVs run
+// around the body horizontally and along its length vertically).
+function patternTexture(patternId, color) {
+  const key = `${patternId}:${color}`;
+  if (textureCache.has(key)) return textureCache.get(key);
+
+  const size = 256;
   const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = size;
+  canvas.width = size;
+  canvas.height = size;
   const ctx = canvas.getContext("2d");
-  const grad = (stops, x0=0, y0=0, x1=size, y1=size) => {
-    const g = ctx.createLinearGradient(x0, y0, x1, y1);
-    for (const [at, color] of stops) g.addColorStop(at, color);
-    return g;
-  };
-  const seeded = (seed) => () => {
-    seed = (seed * 1664525 + 1013904223) >>> 0;
-    return seed / 4294967296;
-  };
-  const rand = seeded(patternId.split("").reduce((a,c)=>a+c.charCodeAt(0), 17));
 
-  if (patternId === "neon") {
-    ctx.fillStyle = "#080d20"; ctx.fillRect(0,0,size,size);
-    ctx.strokeStyle = "#00eaff"; ctx.lineWidth = 8; ctx.shadowColor = "#00cfff"; ctx.shadowBlur = 18;
-    for (let x=24; x<size; x+=96) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,120); ctx.lineTo(x+28,150); ctx.lineTo(x+28,340); ctx.lineTo(x+58,370); ctx.lineTo(x+58,size); ctx.stroke(); }
-    ctx.shadowBlur = 0;
-    ctx.strokeStyle = "rgba(190,250,255,.65)"; ctx.lineWidth=2;
-    for(let y=36;y<size;y+=64){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(size,y);ctx.stroke();}
-  } else if (patternId === "galaxy") {
-    ctx.fillStyle = grad([[0,"#090b2c"],[.45,"#38106b"],[.7,"#071b4a"],[1,"#08091c"]],0,0,size,size); ctx.fillRect(0,0,size,size);
-    for(let i=0;i<16;i++){ctx.fillStyle=`rgba(${80+Math.floor(rand()*150)},${30+Math.floor(rand()*100)},255,${.04+rand()*.12})`;ctx.beginPath();ctx.ellipse(rand()*size,rand()*size,30+rand()*110,8+rand()*40,rand()*3.14,0,Math.PI*2);ctx.fill();}
-    for(let i=0;i<360;i++){const x=rand()*size,y=rand()*size,r=rand()*2.4+.3;ctx.fillStyle=rand()>.8?"#ffdcff":rand()>.5?"#8feaff":"#ffffff";ctx.globalAlpha=.35+rand()*.65;ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();} ctx.globalAlpha=1;
-  } else if (patternId === "fire" || patternId === "lava") {
-    ctx.fillStyle = patternId==="fire"?"#17080b":"#171316";ctx.fillRect(0,0,size,size);
-    for(let i=0;i<70;i++){const x=rand()*size,y=rand()*size,r=18+rand()*70;ctx.fillStyle=patternId==="fire"?`rgba(255,${35+Math.floor(rand()*130)},${Math.floor(rand()*18)},${.16+rand()*.28})`:`rgba(255,${35+Math.floor(rand()*70)},${Math.floor(rand()*12)},${.12+rand()*.2})`;ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();}
-    ctx.lineWidth=2;
-    for(let i=0;i<34;i++){let x=rand()*size,y=rand()*size;ctx.beginPath();ctx.moveTo(x,y);for(let j=0;j<5;j++){x+=(rand()-.5)*65;y+=12+rand()*35;ctx.lineTo(x,y);}ctx.strokeStyle=patternId==="fire"?"#ff7a13":"#ff3b12";ctx.shadowColor="#ff3900";ctx.shadowBlur=10;ctx.stroke();}
-    ctx.shadowBlur=0;
-  } else if (patternId === "ice") {
-    ctx.fillStyle=grad([[0,"#efffff"],[.35,"#69d9ff"],[.7,"#2186ce"],[1,"#d8f8ff"]],0,0,size,size);ctx.fillRect(0,0,size,size);
-    for(let i=0;i<75;i++){let x=rand()*size,y=rand()*size,r=14+rand()*55;ctx.beginPath();ctx.moveTo(x,y-r);ctx.lineTo(x+r*.65,y-r*.25);ctx.lineTo(x+r*.5,y+r*.7);ctx.lineTo(x-r*.45,y+r*.8);ctx.lineTo(x-r*.8,y);ctx.closePath();ctx.fillStyle=`rgba(255,255,255,${.12+rand()*.45})`;ctx.fill();ctx.strokeStyle="rgba(10,100,180,.45)";ctx.lineWidth=2;ctx.stroke();}
-  } else if (patternId === "camo") {
-    ctx.fillStyle="#77795a";ctx.fillRect(0,0,size,size);
-    const colors=["#303c2c","#48543b","#a3a078","#202a27","#6b7048"];
-    for(let i=0;i<170;i++){ctx.fillStyle=colors[Math.floor(rand()*colors.length)];ctx.beginPath();let x=rand()*size,y=rand()*size;ctx.ellipse(x,y,10+rand()*35,5+rand()*23,rand()*Math.PI,0,Math.PI*2);ctx.fill();}
-  } else if (patternId === "digital") {
-    ctx.fillStyle="#242c32";ctx.fillRect(0,0,size,size);
-    const colors=["#151b21","#4d5961","#78858b","#303b43","#b5bec0"];
-    for(let y=0;y<size;y+=16)for(let x=0;x<size;x+=16){if(rand()>.37){ctx.fillStyle=colors[Math.floor(rand()*colors.length)];ctx.fillRect(x,y,8+Math.floor(rand()*2)*8,8+Math.floor(rand()*2)*8);}}
-  } else if (patternId === "rainbow") {
-    ctx.fillStyle=grad([[0,"#ff426d"],[.17,"#ffb83d"],[.34,"#f8f65b"],[.5,"#47f3a2"],[.67,"#43caff"],[.84,"#806bff"],[1,"#ff55c8"]],0,0,size,size);ctx.fillRect(0,0,size,size);
-    for(let i=0;i<12;i++){ctx.beginPath();ctx.moveTo(-50,i*52);ctx.bezierCurveTo(140,i*52-100,300,i*52+100,560,i*52-40);ctx.strokeStyle="rgba(255,255,255,.2)";ctx.lineWidth=18;ctx.stroke();}
-  } else if (patternId === "gold") {
-    ctx.fillStyle=grad([[0,"#70420b"],[.18,"#ffe99a"],[.34,"#b87912"],[.52,"#fff0a8"],[.72,"#c48b19"],[1,"#583008"]],0,0,size,size);ctx.fillRect(0,0,size,size);
-    for(let y=0;y<size;y+=48){ctx.fillStyle="rgba(255,255,255,.13)";ctx.fillRect(0,y,size,3);}
-    for(let i=0;i<90;i++){ctx.fillStyle=`rgba(255,255,220,${rand()*.45})`;ctx.fillRect(rand()*size,rand()*size,1+rand()*3,1+rand()*3);}
-  } else if (patternId === "glitch") {
-    ctx.fillStyle="#090b12";ctx.fillRect(0,0,size,size);
-    for(let i=0;i<180;i++){const y=rand()*size,h=1+rand()*14;ctx.fillStyle=["#00f0ff","#ff2e8a","#7c4dff","#e7faff"][Math.floor(rand()*4)];ctx.globalAlpha=.2+rand()*.7;ctx.fillRect(rand()*size,y,20+rand()*220,h);}ctx.globalAlpha=1;
-    for(let i=0;i<30;i++){ctx.strokeStyle=rand()>.5?"#00d9ff":"#ff2b82";ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(rand()*size,0);ctx.lineTo(rand()*size,size);ctx.stroke();}
-  } else if (patternId === "carbon") {
-    ctx.fillStyle="#171b22";ctx.fillRect(0,0,size,size);
-    for(let y=0;y<size;y+=16)for(let x=0;x<size;x+=16){ctx.fillStyle=((x/16+y/16)%2)?"#303743":"#101319";ctx.fillRect(x,y,16,16);ctx.fillStyle="rgba(255,255,255,.08)";ctx.fillRect(x,y,16,2);}
-    ctx.strokeStyle="rgba(0,220,255,.35)";ctx.lineWidth=3;ctx.strokeRect(8,8,size-16,size-16);
-  } else if (patternId === "stripes" || patternId === "bands") {
-    ctx.fillStyle="#f2f5fb";ctx.fillRect(0,0,size,size);ctx.fillStyle="#18243a";
-    for(let i=0;i<8;i++) if(i%2===1) { if(patternId==="stripes")ctx.fillRect(i*size/8,0,size/8,size);else ctx.fillRect(0,i*size/8,size,size/8); }
-    ctx.fillStyle="#27e5ff";for(let i=0;i<8;i+=4){if(patternId==="stripes")ctx.fillRect(i*size/8,0,5,size);else ctx.fillRect(0,i*size/8,size,5);}
-  } else if (patternId === "dots") {
-    ctx.fillStyle="#12223b";ctx.fillRect(0,0,size,size);ctx.fillStyle="#ff4d9d";
-    for(let y=24;y<size;y+=64)for(let x=24;x<size;x+=64){ctx.beginPath();ctx.arc(x,y,17,0,Math.PI*2);ctx.fill();ctx.strokeStyle="#ffd5e7";ctx.lineWidth=3;ctx.stroke();}
+  const base = new THREE.Color(color);
+  const dark = base.clone().multiplyScalar(0.4);
+  ctx.fillStyle = `#${base.getHexString()}`;
+  ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = `#${dark.getHexString()}`;
+
+  if (patternId === "stripes") {
+    for (let i = 1; i < 8; i += 2) ctx.fillRect((i * size) / 8, 0, size / 8, size);
+  } else if (patternId === "bands") {
+    for (let i = 1; i < 8; i += 2) ctx.fillRect(0, (i * size) / 8, size, size / 8);
   } else if (patternId === "checker") {
-    const n=8;for(let y=0;y<n;y++)for(let x=0;x<n;x++){ctx.fillStyle=(x+y)%2?"#111827":"#f3f6ff";ctx.fillRect(x*size/n,y*size/n,size/n,size/n);}
-    ctx.strokeStyle="#21d4fd";ctx.lineWidth=4;ctx.strokeRect(2,2,size-4,size-4);
+    const n = 8;
+    for (let y = 0; y < n; y++) {
+      for (let x = 0; x < n; x++) {
+        if ((x + y) % 2) ctx.fillRect((x * size) / n, (y * size) / n, size / n, size / n);
+      }
+    }
+  } else if (patternId === "dots") {
+    const n = 4;
+    const cell = size / n;
+    for (let y = 0; y < n; y++) {
+      for (let x = 0; x < n; x++) {
+        ctx.beginPath();
+        ctx.arc((x + 0.5 + (y % 2 ? 0.5 : 0)) * cell, (y + 0.5) * cell, cell * 0.26, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
   }
-
-  // Add a subtle baked-in highlight and micro-detail so the maps read as
-  // finished game skins under the capsule's glossy lighting.
-  ctx.globalCompositeOperation = "soft-light";
-  ctx.fillStyle = grad([[0,"rgba(255,255,255,.2)"],[.5,"rgba(255,255,255,0)"],[1,"rgba(0,0,0,.28)"]],0,0,size,size);
-  ctx.fillRect(0,0,size,size);
-  ctx.globalCompositeOperation = "source-over";
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.anisotropy = 4;
-  textureCache.set(patternId, tex);
+  textureCache.set(key, tex);
   return tex;
 }
 
-// Apply a complete skin map to the capsule. Textured skins use white material
-// tint so the chosen color cannot wash out or recolour their pixels.
+// Applies color + pattern to a capsule body material.
+export function applyBodyLook(material, color, patternId) {
+  if (patternId === "solid") {
+    material.map = null;
+    material.color.set(color);
+  } else {
+    material.map = patternTexture(patternId, color);
+    material.color.set(0xffffff); // the texture already carries the color
+  }
+  material.needsUpdate = true;
+}
+
+/* ---------- image-based full-surface skins ---------- */
+
+// Textured skins are real PNG files generated from the custom texture atlas.
+// Their pixels replace the selected player color; only Solid uses that color.
+const skinTextureCache = new Map();
+const skinTextureLoader = new THREE.TextureLoader();
+
+function patternTexture(patternId) {
+  if (skinTextureCache.has(patternId)) return skinTextureCache.get(patternId);
+  const texture = skinTextureLoader.load(`assets/skins/${patternId}.png`);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.anisotropy = 4;
+  skinTextureCache.set(patternId, texture);
+  return texture;
+}
+
 export function applyBodyLook(material, color, patternId) {
   if (!patternId || patternId === "solid") {
     material.map = null;

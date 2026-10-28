@@ -567,28 +567,21 @@ function buildLookPickers() {
   auto.dataset.key = "auto";
   colorPicker.appendChild(auto);
 
-  const skinSwatches = {
+  const skinLabels = {
     solid: "linear-gradient(135deg,#f5f7ff,#aab6c8)",
-    neon: "repeating-linear-gradient(120deg,#07101f 0 9px,#00eaff 10px 13px,#07101f 15px 27px)",
-    galaxy: "radial-gradient(circle at 30% 35%,#ffb6f2 0 2px,transparent 4px),radial-gradient(circle at 70% 60%,#62e9ff 0 3px,transparent 5px),linear-gradient(135deg,#080b2d,#7626a6,#081a48)",
-    fire: "linear-gradient(160deg,#260b0b,#ff3c08 45%,#ffd34e)",
-    ice: "repeating-linear-gradient(135deg,#efffff 0 5px,#72d9ff 6px 10px,#2584c5 11px 14px)",
-    camo: "repeating-linear-gradient(35deg,#303c2c 0 9px,#a3a078 10px 18px,#48543b 19px 28px)",
-    digital: "repeating-conic-gradient(#5a6670 0% 25%,#202830 0% 50%) 0/12px 12px",
-    lava: "linear-gradient(135deg,#151216,#ff3b12 48%,#ffb52c)",
-    rainbow: "linear-gradient(135deg,#ff426d,#ffb83d,#f8f65b,#47f3a2,#43caff,#806bff)",
-    gold: "linear-gradient(135deg,#70420b,#ffe99a,#b87912,#fff0a8,#583008)",
-    glitch: "repeating-linear-gradient(0deg,#090b12 0 6px,#00f0ff 7px 9px,#090b12 10px 17px,#ff2e8a 18px 20px)",
-    carbon: "repeating-conic-gradient(#303743 0% 25%,#101319 0% 50%) 0/12px 12px",
-    stripes: "repeating-linear-gradient(90deg,#f2f5fb 0 12px,#18243a 13px 25px,#27e5ff 26px 28px)",
-    bands: "repeating-linear-gradient(0deg,#f2f5fb 0 12px,#18243a 13px 25px,#27e5ff 26px 28px)",
-    dots: "radial-gradient(circle,#ff4d9d 0 4px,transparent 5px) 0 0/18px 18px,#12223b",
-    checker: "repeating-conic-gradient(#f3f6ff 0% 25%,#111827 0% 50%) 0/18px 18px"
   };
   for (const p of PATTERNS) {
-    const b = tile("pattern-option skin-option", p.label, p.label, () => setMyLook({ pattern: p.id }));
+    const b = tile("pattern-option", "", p.label, () => setMyLook({ pattern: p.id }));
     b.dataset.key = p.id;
-    b.style.setProperty("--skin-swatch", skinSwatches[p.id] || "linear-gradient(135deg,#333,#aaa)");
+    if (p.id === "solid") {
+      b.style.background = skinLabels.solid;
+    } else {
+      // Use the exact same generated PNG for the picker preview and the 3D skin.
+      b.style.backgroundImage = `url("assets/skins/${p.id}.png")`;
+      b.style.backgroundSize = "cover";
+      b.style.backgroundPosition = "center";
+      b.style.backgroundRepeat = "no-repeat";
+    }
     patternPicker.appendChild(b);
   }
   for (const a of ACCESSORIES) {
