@@ -210,7 +210,7 @@ function playSession({ arenaId, seed, seconds }) {
   return { rejects, corrections, sent, travelled, airTime, maxSpeed };
 }
 
-for (const arenaId of ["classic", "foundry", "ruins", "neon", "mansion"]) {
+for (const arenaId of ["classic", "foundry", "ruins", "neon", "mansion", "glacier"]) {
   test(`honest play on ${arenaId} is never flagged`, () => {
     let totalSent = 0;
     let fastest = 0;

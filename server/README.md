@@ -160,6 +160,9 @@ offers still open at a restart stop working (the page just rolls a new name).
 `js/names.js` and `server/names.js` are identical copies (a test checks that). To add
 words, edit one and copy it over the other.
 
+The map list includes **Glacier**, a 112x112 map (more than five times Foundry's floor) for
+three or four players. Its art and layout tools are in `tools/glacier/`.
+
 `server/arenas.js` and `server/arenas/` are identical copies of `js/arenas.js`
 and `js/arenas/`. **If you change an arena's walls or props, copy the files to
 both places** — otherwise the server checks line of sight against old walls.

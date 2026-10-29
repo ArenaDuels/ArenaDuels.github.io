@@ -7,7 +7,7 @@
 // Rule of thumb: nothing that arrives over the network is used until it has
 // been through cleanRelay() (gameplay messages) or one of the helpers below.
 
-export const ARENA_IDS = ["classic", "foundry", "ruins", "neon", "mansion"];
+export const ARENA_IDS = ["classic", "foundry", "ruins", "neon", "mansion", "glacier"];
 export const MAX_NAME_LEN = 16;
 export const MAX_BOTS = 8;
 export const MAX_SNAP_ENTRIES = 16;

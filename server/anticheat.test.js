@@ -524,7 +524,7 @@ test("players can't announce deaths — theirs or anyone's", () => {
 // ================================================================== arenas
 
 test("real arenas load, with walls the movement rules know about", () => {
-  for (const arenaId of ["classic", "foundry", "ruins", "neon", "mansion"]) {
+  for (const arenaId of ["classic", "foundry", "ruins", "neon", "mansion", "glacier"]) {
     const g = new RoomGuard({ arenaId, hostId: "host" });
     assert.ok(g.geo.solids.length >= 4, arenaId);
     assert.ok(g.geo.arena.spawns.length >= 2, arenaId);
