@@ -30,13 +30,16 @@ function player(name) {
   const n = nextAddress++;
   const ws = new WebSocket(`ws://localhost:${port}`, { headers: { Origin: "https://arenaduels.github.io", "X-Forwarded-For": `10.77.${n >> 8}.${n & 255}` } });
   const p = { name, ws, got: [], id: null };
+  let readyResolve;
+  p.open = new Promise((r) => { readyResolve = r; });
   ws.on("message", (raw) => {
     const m = JSON.parse(raw);
     p.got.push(m);
     if (m.t === "match_found" && m.role === "host") p.id = m.id;
     if (m.t === "room_joined") p.id = m.id;
+    if (m.t === "auth_ready") readyResolve();
   });
-  p.open = new Promise((r) => ws.on("open", r));
+  ws.on("open", () => ws.send(JSON.stringify({ t: "authenticate_guest" })));
   p.send = (o) => ws.send(JSON.stringify(o));
   p.of = (t) => p.got.filter((m) => m.t === t);
   p.last = (t) => p.of(t).at(-1);
@@ -63,6 +66,24 @@ const closeAll = async (ps) => {
   })));
   await sleep(150);      // let the server notice, so the next test starts from an empty queue
 };
+
+
+test("the relay requires an explicit guest or Firebase authentication handshake before room actions", async () => {
+  const ws = new WebSocket(`ws://localhost:${port}`, { headers: { Origin: "https://arenaduels.github.io" } });
+  const received = [];
+  ws.on("message", (raw) => received.push(JSON.parse(raw)));
+  await new Promise((resolve) => ws.once("open", resolve));
+  ws.send(JSON.stringify({ t: "create_room", arenaId: "classic", isPublic: false }));
+  await sleep(100);
+  assert.equal(received.some((m) => m.t === "room_created"), false);
+  ws.send(JSON.stringify({ t: "authenticate_guest" }));
+  for (let i = 0; i < 40 && !received.some((m) => m.t === "auth_ready"); i++) await sleep(25);
+  assert.equal(received.some((m) => m.t === "auth_ready" && m.authenticated === false), true);
+  ws.send(JSON.stringify({ t: "create_room", arenaId: "classic", isPublic: false }));
+  for (let i = 0; i < 40 && !received.some((m) => m.t === "room_created"); i++) await sleep(25);
+  assert.equal(received.some((m) => m.t === "room_created"), true);
+  ws.close();
+});
 
 test("four players: search, vote, host loads the map, everyone is let in", async () => {
   const ps = await search(["p1", "p2", "p3", "p4"], "blitz");

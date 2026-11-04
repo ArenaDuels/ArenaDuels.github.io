@@ -19,10 +19,20 @@ const firebaseConfig = {
 
 const API_BASE = "https://arenaduels-relay.onrender.com";
 const ACCOUNT_NAME_KEY = "arenaduels-account-username";
+let activeFirebaseAuth = null;
+
+// The relay receives Firebase ID tokens, never account passwords or custom tokens.
+export async function getCurrentFirebaseIdToken() {
+  const auth = activeFirebaseAuth;
+  if (!auth) return null;
+  if (typeof auth.authStateReady === "function") await auth.authStateReady();
+  return auth.currentUser ? await auth.currentUser.getIdToken() : null;
+}
 
 export function initializeAccountUi(nameInput, randomName) {
   const app = initializeApp(firebaseConfig);
   const auth = getAuth(app);
+  activeFirebaseAuth = auth;
   const modal = document.getElementById("account-modal");
   const openBtn = document.getElementById("btn-account");
   const signoutBtn = document.getElementById("btn-account-signout");

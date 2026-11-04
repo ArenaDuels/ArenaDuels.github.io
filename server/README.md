@@ -213,6 +213,10 @@ Render setup:
 - Firestore client rules should remain deny-all. The server uses Admin SDK access.
 - The server stores password hashes made with scrypt plus per-account random salts, never plaintext passwords.
 - Account creation and login are served from `/api/auth/register` and `/api/auth/login`; `/api/auth/random-name` returns an available generated name.
+- Every WebSocket connection must now send either `authenticate` with a Firebase **ID token** or `authenticate_guest` before it can list lobbies, create/join a room, search, or send gameplay messages.
+- For signed-in players, the relay verifies the ID token with Firebase Admin, looks up `arenaAccounts/{uid}`, and uses that Firestore username for the player's network identity. It does not trust the username supplied by the browser.
+- Guests remain supported. Guest display names are checked against `arenaUsernames`; a guest cannot take a registered account's username.
+- The browser sends the Firebase ID token only; it never sends the account password or the Firebase custom sign-in token over WebSocket.
 
 There is no email-based password recovery in this version. If a password is lost, the account cannot currently be recovered.
 

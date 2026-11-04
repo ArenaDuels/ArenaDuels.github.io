@@ -9,6 +9,7 @@ const SERVER_URL = "wss://arenaduels-relay.onrender.com";
 
 import { cleanLobbies, isValidArenaId, isValidCode, isValidId, MAX_MESSAGE_BYTES } from "./validate.js";
 import { isValidModeId } from "./modes.js";
+import { getCurrentFirebaseIdToken } from "./auth.js";
 
 const CONNECT_TIMEOUT_MS = 12000;
 
@@ -30,8 +31,7 @@ export class Net {
   /** Create a room for the given arena. Resolves with the 6-digit room code. */
   host(arenaId, isPublic) {
     return new Promise((resolve, reject) => {
-      const ws = this._connect(reject);
-      ws.onopen = () => ws.send(JSON.stringify({ t: "create_room", arenaId, isPublic: !!isPublic }));
+      const ws = this._connect(reject, () => ws.send(JSON.stringify({ t: "create_room", arenaId, isPublic: !!isPublic })));
       ws.onmessage = (ev) => {
         const msg = this._parse(ev);
         if (!msg) return;
@@ -53,23 +53,16 @@ export class Net {
   /** One-shot fetch of currently open public lobbies. */
   listLobbies() {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(SERVER_URL);
+      let settled = false;
+      const finish = (fn) => { if (settled) return; settled = true; clearTimeout(timeout); fn(); };
+      const ws = this._connect((err) => finish(() => reject(err)), () => ws.send(JSON.stringify({ t: "list_lobbies" })));
       const timeout = setTimeout(() => {
-        ws.close();
-        reject(new Error("Timed out fetching lobby list."));
+        try { ws.close(); } catch {}
+        finish(() => reject(new Error("Timed out fetching lobby list.")));
       }, 8000);
-      ws.onopen = () => ws.send(JSON.stringify({ t: "list_lobbies" }));
       ws.onmessage = (ev) => {
         const msg = this._parse(ev);
-        if (msg && msg.t === "lobby_list") {
-          clearTimeout(timeout);
-          ws.close();
-          resolve(cleanLobbies(msg.lobbies));
-        }
-      };
-      ws.onerror = () => {
-        clearTimeout(timeout);
-        reject(new Error("Couldn't reach the relay server."));
+        if (msg && msg.t === "lobby_list") finish(() => { ws.close(); resolve(cleanLobbies(msg.lobbies)); });
       };
     });
   }
@@ -81,8 +74,7 @@ export class Net {
         reject(new Error("Enter the 6-digit code."));
         return;
       }
-      const ws = this._connect(reject);
-      ws.onopen = () => ws.send(JSON.stringify({ t: "join_room", code }));
+      const ws = this._connect(reject, () => ws.send(JSON.stringify({ t: "join_room", code })));
       ws.onmessage = (ev) => {
         const msg = this._parse(ev);
         if (!msg) return;
@@ -134,7 +126,11 @@ export class Net {
         reject(new Error("Unknown game mode."));
         return;
       }
-      const ws = this._connect(reject);
+      const ws = this._connect(reject, () => {
+        this._settled = true; // authenticated (or explicitly guest); the search can now begin
+        clearTimeout(this._timeout);
+        ws.send(JSON.stringify({ t: "find_match", mode }));
+      });
       let finished = false;
       let found = null; // details from "match_found", once the server has made a match for us
       const finish = (fn) => {
@@ -165,11 +161,6 @@ export class Net {
         this._wire();
       };
 
-      ws.onopen = () => {
-        this._settled = true; // connected: from here a search may take as long as it takes
-        clearTimeout(this._timeout);
-        ws.send(JSON.stringify({ t: "find_match", mode }));
-      };
       ws.onclose = () => fail(new Error("Lost the connection while searching."));
       ws.onmessage = (ev) => {
         const msg = this._parse(ev);
@@ -246,19 +237,53 @@ export class Net {
     this._search?.cancel();
   }
 
-  _connect(reject) {
+  _connect(reject, onReady = () => {}) {
     this._settled = false;
     const ws = new WebSocket(SERVER_URL);
+    let authReplyReceived = false;
 
     this._timeout = setTimeout(() => {
       if (this._settled) return;
       this._settled = true;
-      ws.close();
+      try { ws.close(); } catch {}
       reject(new Error(
         "Couldn't reach the server in time. It may still be waking up " +
         "from sleep — try again in a moment."
       ));
     }, CONNECT_TIMEOUT_MS);
+
+    ws.addEventListener("open", async () => {
+      try {
+        const token = await getCurrentFirebaseIdToken();
+        if (ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify(token
+          ? { t: "authenticate", token }
+          : { t: "authenticate_guest" }));
+      } catch {
+        this._settled = true;
+        clearTimeout(this._timeout);
+        try { ws.close(); } catch {}
+        reject(new Error("Couldn't verify your sign-in. Please refresh and try again."));
+      }
+    });
+
+    ws.addEventListener("message", (ev) => {
+      if (authReplyReceived) return;
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch { return; }
+      if (!msg || typeof msg !== "object") return;
+      if (msg.t === "auth_error") {
+        authReplyReceived = true;
+        this._settled = true;
+        clearTimeout(this._timeout);
+        reject(new Error(msg.error || "Account verification failed. Please sign in again."));
+      } else if (msg.t === "auth_ready") {
+        authReplyReceived = true;
+        clearTimeout(this._timeout);
+        try { onReady(msg); }
+        catch (err) { this._settled = true; reject(err); }
+      }
+    });
 
     ws.onerror = () => {
       if (this._settled) return;

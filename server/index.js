@@ -330,6 +330,11 @@ wss.on("connection", (ws, req) => {
 
   ws.id = randomId();
   ws.room = null;
+  ws.authReady = false;
+  ws.authInProgress = false;
+  ws.uid = null;
+  ws.username = null;
+  ws.publicName = null;
   ws.ip = ip;
   ws.tokens = RATE_CAPACITY;
   ws.lastRefill = Date.now();
@@ -346,7 +351,9 @@ wss.on("connection", (ws, req) => {
 
   ws.on("message", (raw, isBinary) => {
     try {
-      handleMessage(ws, raw, isBinary);
+      handleMessage(ws, raw, isBinary).catch((err) => {
+        console.error("message handler error:", err.message); // async auth/database failures must not crash the relay
+      });
     } catch (err) {
       console.error("message handler error:", err.message); // a bad packet must never kill the server
     }
@@ -509,7 +516,7 @@ setInterval(() => {
   }
 }, 250).unref();
 
-function handleMessage(ws, raw, isBinary) {
+async function handleMessage(ws, raw, isBinary) {
   if (isBinary) return;
 
   if (!takeToken(ws)) {
@@ -525,6 +532,48 @@ function handleMessage(ws, raw, isBinary) {
   }
   // JSON.parse("null") / "5" / "[]" are valid JSON — they must not reach msg.t below.
   if (msg === null || typeof msg !== "object" || Array.isArray(msg) || typeof msg.t !== "string") return;
+
+  // Every socket must explicitly authenticate or identify as a guest before it can
+  // list, create, join, search, or send gameplay messages.
+  if (msg.t === "authenticate_guest") {
+    if (ws.authReady || ws.authInProgress) return;
+    ws.authInProgress = true;
+    ws.authReady = true;
+    ws.authInProgress = false;
+    send(ws, { t: "auth_ready", authenticated: false });
+    return;
+  }
+  if (msg.t === "authenticate") {
+    if (ws.authReady || ws.authInProgress) return;
+    ws.authInProgress = true;
+    if (typeof msg.token !== "string" || msg.token.length < 20 || msg.token.length > 6000 || !firebaseAuth || !firestore) {
+      send(ws, { t: "auth_error", error: "Account verification is unavailable. Please sign in again." });
+      ws.close(1008, "Authentication failed");
+      return;
+    }
+    try {
+      const decoded = await firebaseAuth.verifyIdToken(msg.token, true);
+      if (ws.readyState !== ws.OPEN) return;
+      const accountSnap = await firestore.collection("arenaAccounts").doc(decoded.uid).get();
+      if (ws.readyState !== ws.OPEN) return;
+      if (!accountSnap.exists || accountSnap.data()?.uid !== decoded.uid || typeof accountSnap.data()?.username !== "string") {
+        throw new Error("Account record not found");
+      }
+      const accountUsername = cleanRelay({ t: "hello", name: accountSnap.data().username })?.name;
+      if (!accountUsername) throw new Error("Invalid account username");
+      ws.uid = decoded.uid;
+      ws.username = accountUsername;
+      ws.authReady = true;
+      ws.authInProgress = false;
+      send(ws, { t: "auth_ready", authenticated: true, username: accountUsername });
+    } catch (err) {
+      console.warn("[auth] WebSocket identity rejected:", err.message);
+      send(ws, { t: "auth_error", error: "Your sign-in could not be verified. Please sign in again." });
+      ws.close(1008, "Authentication failed");
+    }
+    return;
+  }
+  if (!ws.authReady) return;
 
   switch (msg.t) {
     case "create_room": {
@@ -617,6 +666,29 @@ function handleMessage(ws, raw, isBinary) {
       // Rebuild the message from validated fields; unknown types come back null.
       const clean = cleanRelay(msg);
       if (!clean) return;
+
+      if (clean.t === "hello") {
+        if (ws.uid) {
+          // Authenticated identity is derived only from the verified Firebase UID + Firestore.
+          clean.name = ws.username;
+        } else if (ws.publicName) {
+          clean.name = ws.publicName;
+        } else {
+          // Guests may choose an unreserved display name, but cannot claim a registered one.
+          const claimed = clean.name;
+          let reserved = null;
+          try {
+            reserved = firestore
+              ? await firestore.collection("arenaUsernames").doc(usernameKey(claimed)).get()
+              : null;
+          } catch {
+            // If the reservation store is unavailable, don't risk allowing a registered-name claim.
+            reserved = { exists: true };
+          }
+          if (reserved?.exists) clean.name = `Guest-${ws.id.slice(0, 4)}`;
+          ws.publicName = clean.name;
+        }
+      }
 
       // Health, respawns and corrections are the server's to announce — never a player's.
       if (SERVER_ONLY.has(clean.t)) return;
