@@ -970,6 +970,11 @@ const matchmakingHooks = {
 };
 
 async function enterMatchmadeGame(found) {
+  // Reserve the arena build synchronously before the first await. In TDM, later
+  // teammates can be admitted while this client is still loading; the resulting
+  // peer_joined event must not start a second build using selectedArenaId (the
+  // previously selected/private-room map) over the voted matchmaking arena.
+  matchStarting = true;
   hostId = found.hostId;
   myId = net.myId;
   myName = getPlayerName();
