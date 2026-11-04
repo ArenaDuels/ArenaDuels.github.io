@@ -21,6 +21,7 @@
 export const MATCHMAKING = Object.freeze({
   MIN_PLAYERS: 2,
   MAX_PLAYERS: 4,
+  MODE_MAX_PLAYERS: { "1v1": 2, tdm: 8 },
   FILL_MS: 10_000,         // with 2+ waiting, wait this long for more before starting
   VOTE_MS: 15_000,         // time to vote on the map
   VOTE_LOCK_MS: 1_500,     // once everyone has voted, keep the result on screen this long
@@ -150,6 +151,8 @@ export class Matchmaker {
 
   // ------------------------------------------------------------------------- internals
 
+  #maxPlayers(modeId) { return this.cfg.MODE_MAX_PLAYERS?.[modeId] ?? this.cfg.MAX_PLAYERS; }
+
   #players(s) {
     return s.entries.map((e) => e.player);
   }
@@ -158,7 +161,7 @@ export class Matchmaker {
   #settle(modeId, now) {
     const q = this.queues.get(modeId);
     const out = [];
-    while (q.length >= this.cfg.MAX_PLAYERS) out.push(...this.#startVote(modeId, now));
+    while (q.length >= this.#maxPlayers(modeId)) out.push(...this.#startVote(modeId, now));
     if (q.length >= this.cfg.MIN_PLAYERS) {
       if (this.fillStart.get(modeId) == null) this.fillStart.set(modeId, now);
     } else {
@@ -167,14 +170,14 @@ export class Matchmaker {
     if (q.length) {
       const start = this.fillStart.get(modeId);
       const startsInMs = start != null ? Math.max(0, start + this.cfg.FILL_MS - now) : null;
-      out.push(to(q.map((e) => e.player), { t: "queue", mode: modeId, players: q.length, max: this.cfg.MAX_PLAYERS, startsInMs }));
+      out.push(to(q.map((e) => e.player), { t: "queue", mode: modeId, players: q.length, max: this.#maxPlayers(modeId), startsInMs }));
     }
     return out;
   }
 
   #startVote(modeId, now) {
     const q = this.queues.get(modeId);
-    const entries = q.splice(0, Math.min(this.cfg.MAX_PLAYERS, q.length));
+    const entries = q.splice(0, Math.min(this.#maxPlayers(modeId), q.length));
     this.fillStart.delete(modeId);
 
     // a few distinct maps, chosen at random

@@ -11,7 +11,7 @@ const player = (name) => ({ id: name });
 // A matchmaker with a fake clock. `random` can be scripted to force particular choices.
 function setup({ random } = {}) {
   const clock = { now: 1_000_000 };
-  const mm = new Matchmaker({ modeIds: MODE_IDS, arenaIds: ARENAS, random: random ?? ((n) => Math.floor(Math.random() * n)) });
+  const mm = new Matchmaker({ modeIds: MODE_IDS, arenaIds: ARENAS, random: random ?? ((n) => Math.floor(Math.random() * n)), config: { MODE_MAX_PLAYERS: { "1v1": 4, tdm: 4 } } });
   const sent = [];                       // everything ever sent: { to: [names], msg }
   const matches = [];
   const run = (outputs) => {
@@ -24,12 +24,26 @@ function setup({ random } = {}) {
   const last = (name, type) => [...sent].reverse().find((s) => s.to.includes(name) && s.msg.t === type)?.msg;
   return {
     mm, clock, sent, matches, last,
-    search: (p, mode = "deathmatch") => run(mm.enqueue(p, mode, clock.now)),
+    search: (p, mode = "1v1") => run(mm.enqueue(p, mode, clock.now)),
     cancel: (p) => run(mm.cancel(p, clock.now)),
     vote: (p, arena) => run(mm.vote(p, arena, clock.now)),
     tick: (ms = 0) => { clock.now += ms; return run(mm.tick(clock.now)); },
   };
 }
+
+test("production queues cap 1v1 at two and TDM at eight", () => {
+  const mm = new Matchmaker({ modeIds: MODE_IDS, arenaIds: ARENAS, random: () => 0 });
+  const now = 1000;
+  const one = Array.from({ length: 2 }, (_, i) => player(`one${i}`));
+  const team = Array.from({ length: 8 }, (_, i) => player(`team${i}`));
+  let out = [];
+  for (const p of one) out.push(...mm.enqueue(p, "1v1", now));
+  assert.equal(out.filter((o) => o.msg?.t === "vote_start").length, 1);
+  out = [];
+  for (const p of team) out.push(...mm.enqueue(p, "tdm", now));
+  assert.equal(out.filter((o) => o.msg?.t === "vote_start").length, 1);
+  assert.equal(out.find((o) => o.msg?.t === "vote_start")?.msg.players, 8);
+});
 
 // ------------------------------------------------------------------------- forming a group
 
@@ -85,12 +99,12 @@ test("a fifth player waits for the next match, not this one", () => {
 
 test("each game mode has its own queue", () => {
   const t = setup();
-  t.search(player("a"), "deathmatch");
-  t.search(player("b"), "blitz");
-  t.search(player("c"), "blitz");
+  t.search(player("a"), "1v1");
+  t.search(player("b"), "tdm");
+  t.search(player("c"), "tdm");
   t.tick(M.FILL_MS);
   const start = t.sent.find((s) => s.msg.t === "vote_start");
-  assert.equal(start.msg.mode, "blitz");
+  assert.equal(start.msg.mode, "tdm");
   assert.deepEqual(start.to.sort(), ["b", "c"]);
   assert.equal(t.last("a", "queue").players, 1, "the deathmatch player is still waiting alone");
 });
@@ -231,12 +245,12 @@ test("once everybody has voted the vote ends shortly after, not at the full 15 s
 test("the player who waited longest is the host, and the match carries the mode", () => {
   const t = setup();
   const ps = ["first", "second", "third"].map(player);
-  for (const p of ps) { t.search(p, "vampire"); t.clock.now += 500; }
+  for (const p of ps) { t.search(p, "tdm"); t.clock.now += 500; }
   t.tick(M.FILL_MS);
   t.tick(M.VOTE_MS);
   const m = t.matches[0];
   assert.deepEqual(m.players.map((p) => p.id), ["first", "second", "third"]);
-  assert.equal(m.modeId, "vampire");
+  assert.equal(m.modeId, "tdm");
   assert.equal(m.entries.length, 3);
 });
 
@@ -308,17 +322,22 @@ test("someone disconnecting while searching, or never searching, is harmless", (
 // ------------------------------------------------------------------------------ the modes
 
 test("every game mode is well formed and its rules are inside the game's limits", () => {
-  assert.ok(GAME_MODES.length >= 4);
+  assert.equal(GAME_MODES.length, 2);
   assert.equal(new Set(MODE_IDS).size, MODE_IDS.length, "ids are unique");
   const limits = { timeLimit: [0, 60], scoreLimit: [0, 200], startingHealth: [10, 500], healthSteal: [0, 100], respawnDelay: [0, 10] };
   for (const m of GAME_MODES) {
-    assert.match(m.id, /^[a-z-]+$/);
+    assert.match(m.id, /^[a-z0-9-]+$/);
     assert.ok(m.name && m.tagline && m.description, m.id);
     assert.deepEqual(Object.keys(m.settings).sort(), Object.keys(limits).sort(), m.id);
     for (const [k, [lo, hi]] of Object.entries(limits)) assert.ok(m.settings[k] >= lo && m.settings[k] <= hi, `${m.id}.${k}=${m.settings[k]}`);
     assert.ok(m.settings.timeLimit > 0 || m.settings.scoreLimit > 0, `${m.id} has to be able to end`);
   }
-  assert.equal(isValidModeId("deathmatch"), true);
+  assert.equal(isValidModeId("1v1"), true);
+  assert.equal(isValidModeId("tdm"), true);
+  assert.deepEqual(getMode("1v1").settings, { timeLimit: 10, scoreLimit: 30, startingHealth: 100, healthSteal: 0, respawnDelay: 2 });
+  assert.equal(getMode("1v1").maxPlayers, 2);
+  assert.deepEqual(getMode("tdm").settings, { timeLimit: 10, scoreLimit: 50, startingHealth: 100, healthSteal: 0, respawnDelay: 2 });
+  assert.equal(getMode("tdm").maxPlayers, 8);
   assert.equal(isValidModeId("nope"), false);
   assert.equal(isValidModeId({}), false);
   assert.equal(getMode("nope").id, GAME_MODES[0].id);

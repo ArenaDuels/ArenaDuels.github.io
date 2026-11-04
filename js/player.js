@@ -282,15 +282,12 @@ function makeFirstPersonGun(color) {
 // capsule body, positioned like it's held out in front, rotates with
 // whichever way the capsule is facing since it's a child of that mesh.
 function makeHeldGun(color) {
-  const { group, muzzle } = makeGunModel(color);
+  const { group } = makeGunModel(color);
   // Capsule radius is 0.5 — the attachment point has to clear that or the
   // gun renders embedded in the body instead of held beside it.
   group.position.set(0.62, 0.05, -0.15);
-  // Keep the gun's forward axis aligned with the player's aim direction.
-  // The remote player's pitch is applied during RemotePlayer.update().
-  group.rotation.y = 0;
+  group.rotation.y = -0.12;
   group.scale.setScalar(1.25); // reads better at typical view distance
-  group.userData.muzzle = muzzle;
   group.traverse((o) => {
     if (o.isMesh) {
       o.castShadow = true;
@@ -721,13 +718,16 @@ export class PlayerController {
  * always fully face the camera), and its own LG beam that lights up
  * whenever their broadcasted state says they're firing.
  */
-const _remoteMuzzleWorld = new THREE.Vector3();
-const _remoteBeamDirection = new THREE.Vector3();
-
 export class RemotePlayer {
   constructor(scene, color = 0xff4444, name = "Player") {
     this.scene = scene;
     this.mesh = makeCapsuleMesh(color);
+    this.teamOutline = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.525, 1.225, 6, 12),
+      new THREE.MeshBasicMaterial({ color: 0x42a5ff, side: THREE.BackSide, transparent: true, opacity: 0.95, depthWrite: false })
+    );
+    this.teamOutline.visible = false;
+    this.mesh.add(this.teamOutline);
     scene.add(this.mesh);
 
     // Visible to everyone else, unlike the local player's own first-person
@@ -781,6 +781,11 @@ export class RemotePlayer {
     }
   }
 
+  setTeam(team, myTeam, isTdm = true) {
+    this.teamOutline.visible = isTdm && (team === 0 || team === 1) && team === myTeam;
+    this.teamOutline.material.color.setHex(0x42a5ff);
+  }
+
   setName(name) {
     this.name = cleanName(name);
     this.nameSprite.userData.setText(this.name); // drawn on a canvas — never parsed as HTML
@@ -829,6 +834,8 @@ export class RemotePlayer {
 
   dispose() {
     this.scene.remove(this.mesh, this.hpBar, this.nameSprite, this.laser);
+    this.teamOutline.geometry.dispose();
+    this.teamOutline.material.dispose();
     if (this.accessory) {
       this.mesh.remove(this.accessory);
       disposeGroup(this.accessory);
@@ -849,13 +856,10 @@ export class RemotePlayer {
       this.nameSprite.position.copy(this.mesh.position);
       this.nameSprite.position.y += 1.85;
 
-      // Pitch the third-person gun to match the remote player's replicated aim.
-      // The beam starts at the actual muzzle in world space, not at the capsule
-      // centre/eye position, so observers see it emerge from the barrel.
-      this.heldGun.rotation.x = this.targetPitch;
       if (this.firing) {
-        const origin = this.heldGun.userData.muzzle.getWorldPosition(_remoteMuzzleWorld);
-        const dir = dirFromYawPitch(this.mesh.rotation.y, this.targetPitch, _remoteBeamDirection);
+        const origin = this.mesh.position.clone();
+        origin.y += MOVE.EYE_HEIGHT - 1.4; // mesh position is feet-ish; eye is higher
+        const dir = dirFromYawPitch(this.targetYaw, this.targetPitch);
         const end = origin.clone().addScaledVector(dir, 50);
         aimLaser(this.laser, origin, end, false);
       } else {

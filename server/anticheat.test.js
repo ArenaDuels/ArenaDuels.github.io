@@ -17,9 +17,9 @@ const OPEN_ARENA = {
 // A solid pillar between x=-1 and x=1.
 const PILLAR_ARENA = { ...OPEN_ARENA, props: [{ w: 2, h: 8, d: 10, x: 0, y: 4, z: 0 }] };
 
-function setup({ arena = OPEN_ARENA, enforce = true } = {}) {
+function setup({ arena = OPEN_ARENA, enforce = true, teams = {} } = {}) {
   const rejects = [];
-  const g = new RoomGuard({ arenaId: "classic", hostId: "host", arena, enforce, onReject: (k) => rejects.push(k) });
+  const g = new RoomGuard({ arenaId: "classic", hostId: "host", arena, enforce, teams, onReject: (k) => rejects.push(k) });
   g.addMember("host", 0);
   g.addMember("p2", 0);
   const clock = { now: 10_000 }; // well past the join grace period
@@ -65,6 +65,23 @@ test("holding the trigger on someone does about 40 damage a second", () => {
   run(1, { hostFiring: true });
   assert.ok(hp("p2") > 55 && hp("p2") < 65, `expected ~60, got ${hp("p2").toFixed(1)}`);
   assert.equal(hp("host"), 100);
+});
+
+test("a kill restores the attacker's health to full", () => {
+  const { g, duel, run, hp } = setup();
+  g.actors.get("host").hp = 35;
+  duel();
+  const events = run(3, { hostFiring: true });
+  assert.equal(hp("p2"), 0);
+  assert.equal(hp("host"), 100);
+  assert.ok(events.some((m) => m.msg?.t === "hp" && m.to === "host" && m.msg.hp === 100));
+});
+
+test("TDM teammates cannot damage each other", () => {
+  const { duel, run, hp } = setup({ teams: { host: 0, p2: 0 } });
+  duel();
+  run(2, { hostFiring: true });
+  assert.equal(hp("p2"), 100);
 });
 
 test("not holding the trigger does nothing", () => {

@@ -33,13 +33,15 @@ export function sanitizeSettings(raw) {
 
 export class MatchState {
   constructor() {
-    this.scores = new Map(); // id -> { id, name, kills, deaths }
+    this.scores = new Map(); // id -> { id, name, kills, deaths, team }
+    this.teamKills = [0, 0]
     this.start(DEFAULT_SETTINGS);
   }
 
   /** (Re)start the clock and zero everyone's kills/deaths. Keeps the roster. */
   start(settings) {
     this.settings = sanitizeSettings(settings);
+    this.modeId = settings?.modeId === "tdm" ? "tdm" : settings?.modeId === "1v1" ? "1v1" : this.modeId;
     this.remaining = this.settings.timeLimit > 0 ? this.settings.timeLimit * 60 : Infinity;
     this.over = false;
     this.reason = null;
@@ -47,15 +49,17 @@ export class MatchState {
       e.kills = 0;
       e.deaths = 0;
     }
+    this.teamKills = [0, 0];
   }
 
-  ensurePlayer(id, name) {
+  ensurePlayer(id, name, team = null) {
     let e = this.scores.get(id);
     if (!e) {
-      e = { id, name: cleanName(name), kills: 0, deaths: 0 };
+      e = { id, name: cleanName(name), kills: 0, deaths: 0, team: team === 0 || team === 1 ? team : null };
       this.scores.set(id, e);
-    } else if (name) {
-      e.name = cleanName(name, e.name);
+    } else {
+      if (name) e.name = cleanName(name, e.name);
+      if (team === 0 || team === 1) e.team = team;
     }
     return e;
   }
@@ -74,7 +78,10 @@ export class MatchState {
     const victim = this.scores.get(victimId);
     const attacker = this.scores.get(attackerId);
     if (victim) victim.deaths++;
-    if (attacker && attackerId !== victimId) attacker.kills++;
+    if (attacker && attackerId !== victimId) {
+      attacker.kills++;
+      if ((this.modeId === "tdm") && (attacker.team === 0 || attacker.team === 1)) this.teamKills[attacker.team]++;
+    }
     return true;
   }
 
@@ -94,7 +101,8 @@ export class MatchState {
     if (this.over) return null;
     const limit = this.settings.scoreLimit;
     if (limit > 0) {
-      for (const e of this.scores.values()) if (e.kills >= limit) return "score";
+      if (this.modeId === "tdm") { if (Math.max(...this.teamKills) >= limit) return "score"; }
+      else for (const e of this.scores.values()) if (e.kills >= limit) return "score";
     }
     if (Number.isFinite(this.remaining) && this.remaining <= 0) return "time";
     return null;
@@ -112,8 +120,18 @@ export class MatchState {
     );
   }
 
+  winnerTeam() {
+    if (this.modeId !== "tdm") return null;
+    if (this.teamKills[0] === this.teamKills[1]) return null;
+    return this.teamKills[0] > this.teamKills[1] ? 0 : 1;
+  }
+
   /** The winner, or null for a tie / empty match. */
   winner() {
+    if (this.modeId === "tdm") {
+      const team = this.winnerTeam();
+      return team == null ? null : this.ranking().find((e) => e.team === team) ?? null;
+    }
     const r = this.ranking();
     if (!r.length) return null;
     if (r.length > 1 && r[0].kills === r[1].kills && r[0].deaths === r[1].deaths) return null;
@@ -130,7 +148,8 @@ export class MatchState {
   /** JSON-safe copy (Infinity isn't valid JSON, so "no limit" is -1). */
   snapshot() {
     return {
-      entries: [...this.scores.values()].map(({ id, name, kills, deaths }) => ({ id, name, kills, deaths })),
+      entries: [...this.scores.values()].map(({ id, name, kills, deaths, team }) => ({ id, name, kills, deaths, team })),
+      teamKills: [...this.teamKills],
       remaining: Number.isFinite(this.remaining) ? this.remaining : -1,
       over: this.over,
       reason: this.reason,
@@ -143,10 +162,11 @@ export class MatchState {
     const count = (v) => (Number.isFinite(v) ? Math.min(100000, Math.max(0, Math.round(v))) : 0);
     for (const e of snap.entries.slice(0, MAX_SNAP_ENTRIES)) {
       if (typeof e?.id !== "string" || e.id.length > 16) continue;
-      const entry = this.ensurePlayer(e.id, typeof e.name === "string" ? e.name : undefined);
+      const entry = this.ensurePlayer(e.id, typeof e.name === "string" ? e.name : undefined, e.team);
       entry.kills = count(e.kills);
       entry.deaths = count(e.deaths);
     }
+    if (Array.isArray(snap.teamKills) && snap.teamKills.length === 2) this.teamKills = snap.teamKills.map(count);
     if (Number.isFinite(snap.remaining)) this.remaining = snap.remaining < 0 ? Infinity : Math.min(86400, snap.remaining);
     this.over = !!snap.over;
     this.reason = snap.reason === "score" || snap.reason === "time" ? snap.reason : null;

@@ -345,6 +345,9 @@ let hostId = null;
 let myId = null;
 let myName = "";
 let currentArena = null;
+let currentModeId = "1v1";
+let playerTeams = {};
+const myTeam = () => playerTeams[myId] ?? null;
 
 net.onData = (msg, fromId) => handleData(msg, fromId);
 
@@ -352,7 +355,8 @@ let matchStarting = false;
 let pendingHostStart = null; // { code } while a private host is on the settings screen
 let botManager = null;       // host only
 
-net.onPeerConnected = async (id) => {
+net.onPeerConnected = async (id, team = null) => {
+  if (team === 0 || team === 1) playerTeams[id] = team;
   // matchActive only flips true *after* the async arena build finishes —
   // if two peers connect close together, both could see matchActive still
   // false and both call beginMatch(), corrupting arenaObjects/wallBoxes
@@ -367,6 +371,7 @@ net.onPeerConnected = async (id) => {
     await beginMatch(selectedArenaId);
   }
   addOrUpdatePlayer(id, "Player");
+  players.get(id)?.setTeam(playerTeams[id], myTeam(), currentModeId === "tdm");
   net.broadcast({ t: "hello", name: myName, look: myLook });
   if (net.isHost) net.broadcast({ t: "sync", forId: id, settings: match.settings, snap: match.snapshot() });
   hideRoomCodeBanner();
@@ -754,8 +759,10 @@ async function doJoin(code, statusEl) {
     myId = net.myId;
     myName = getPlayerName();
 
+    playerTeams = result.teams || {};
+    currentModeId = "1v1";
     match.scores.clear();
-    applyMatchSettings(DEFAULT_MATCH_RULES); // replaced by the host's rules a moment later ("sync")
+    applyMatchSettings(DEFAULT_MATCH_RULES, "1v1"); // private rooms use the standard rules
     if (!isValidArenaId(result.arenaId)) throw new Error("Bad arena");
     await beginMatch(result.arenaId);
     for (const id of result.peers) addOrUpdatePlayer(id, "Player");
@@ -798,7 +805,7 @@ const mmEls = {
   load: document.getElementById("mm-stage-load"),
 };
 const mm = {
-  modeId: "deathmatch",
+  modeId: "1v1",
   searching: false,
   startedAt: 0,
   fillEndsAt: null, // when the queue will stop waiting for more players
@@ -971,15 +978,22 @@ async function enterMatchmadeGame(found) {
   document.getElementById("mm-load-status").textContent = "Loading the map…";
   mmShow("load");
 
+  playerTeams = found.teams || {};
+  currentModeId = found.mode;
+  match.scores.clear();
   if (found.isHost) {
     matchStarting = true;
-    applyMatchSettings(found.settings); // the mode's rules
+    applyMatchSettings(found.settings, found.mode); // the mode's rules
     await beginMatch(found.arenaId);
+    match.ensurePlayer(myId, myName, myTeam());
+    for (const id of Object.keys(playerTeams)) { if (id !== myId) { match.ensurePlayer(id, "Player", playerTeams[id]); players.get(id)?.setTeam(playerTeams[id], myTeam(), currentModeId === "tdm"); } }
     net.broadcast({ t: "match_ready" }); // the server lets the other players in now
   } else {
-    applyMatchSettings(DEFAULT_MATCH_RULES); // replaced by the host's rules a moment later ("sync")
+    applyMatchSettings(DEFAULT_MATCH_RULES, found.mode); // replaced by the host's rules a moment later ("sync")
     await beginMatch(found.arenaId);
+    match.ensurePlayer(myId, myName, myTeam());
     for (const id of found.peers) addOrUpdatePlayer(id, "Player");
+    for (const id of Object.keys(playerTeams)) { match.ensurePlayer(id, "Player", playerTeams[id]); players.get(id)?.setTeam(playerTeams[id], myTeam(), currentModeId === "tdm"); }
     net.broadcast({ t: "hello", name: myName, look: myLook });
   }
 }
@@ -1572,7 +1586,7 @@ async function beginMatch(arenaId) {
   scene.add(laser);
   applyLocalLook();
 
-  match.ensurePlayer(myId, myName);
+  match.ensurePlayer(myId, myName, myTeam());
   refreshHud(true);
 
   matchActive = true;
@@ -1582,12 +1596,13 @@ async function beginMatch(arenaId) {
 }
 
 function addOrUpdatePlayer(id, name) {
-  match.ensurePlayer(id, name);
+  match.ensurePlayer(id, name, playerTeams[id]);
   if (players.has(id)) {
     if (name) players.get(id).setName(name);
     return players.get(id);
   }
   const rp = new RemotePlayer(scene, colorForId(id), name || "Player");
+  rp.setTeam(playerTeams[id], myTeam(), currentModeId === "tdm");
   rp.spawn(spawnForId(id, currentArena));
   players.set(id, rp);
   return rp;
@@ -1634,14 +1649,17 @@ function playerColor(id) {
 }
 
 // New settings take effect for everyone: rules, clock, and what "full health" means.
-function applyMatchSettings(raw) {
-  match.start(raw);
+function applyMatchSettings(raw, modeId = currentModeId) {
+  currentModeId = modeId;
+  match.start({ ...raw, modeId });
   GAME.maxHp = match.settings.startingHealth;
 }
 
 function resetMatchUi() {
   match.scores.clear();
-  applyMatchSettings(DEFAULT_MATCH_RULES);
+  playerTeams = {};
+  currentModeId = "1v1";
+  applyMatchSettings(DEFAULT_MATCH_RULES, "1v1");
   deadUntil = 0;
   respawnOverlay.classList.add("hidden");
   tabBoard.classList.add("hidden");
@@ -1687,7 +1705,8 @@ function refreshHud(force = false) {
   hudTimerEl.classList.toggle("low", Number.isFinite(match.remaining) && match.remaining <= 30 && !match.over);
   const limit = match.settings.scoreLimit;
   const limitText = limit > 0 ? `First to ${limit}` : "No score limit";
-  if (hudLimitEl.textContent !== limitText) hudLimitEl.textContent = limitText;
+  const shownLimit = currentModeId === "tdm" ? `Team first to ${limit}` : limitText;
+  if (hudLimitEl.textContent !== shownLimit) hudLimitEl.textContent = shownLimit;
 
   const ranking = match.ranking();
   const key = ranking.map((e) => `${e.id}:${e.name}:${e.kills}`).join("|") + "#" + myId;
@@ -1695,7 +1714,7 @@ function refreshHud(force = false) {
     hudKey = key;
     hudPlayersEl.replaceChildren(...ranking.slice(0, 8).map((e, i) => playerChip(e, i === 0 && e.kills > 0)));
     const me = match.scores.get(myId);
-    hudScoreEl.textContent = me ? `${me.kills} kills · ${me.deaths} deaths` : "";
+    hudScoreEl.textContent = me ? (currentModeId === "tdm" ? `Team ${me.team === 0 ? "Blue" : "Red"}: ${match.teamKills[me.team] ?? 0} · ${me.kills} kills` : `${me.kills} kills · ${me.deaths} deaths`) : "";
   }
   if (!tabBoard.classList.contains("hidden")) renderBoard(tabBoardContent, ranking);
 }
@@ -1760,9 +1779,9 @@ function showResults() {
   refreshHud(true);
 
   const winner = match.winner();
-  document.getElementById("results-winner").textContent = winner
-    ? winner.id === myId ? "You win!" : `${winner.name} wins!`
-    : "It's a draw";
+  document.getElementById("results-winner").textContent = currentModeId === "tdm"
+    ? (match.winnerTeam() == null ? "It's a draw" : match.winnerTeam() === myTeam() ? "Your team wins!" : `Team ${match.winnerTeam() === 0 ? "Blue" : "Red"} wins!`)
+    : winner ? winner.id === myId ? "You win!" : `${winner.name} wins!` : "It's a draw";
   document.getElementById("results-reason").textContent =
     match.reason === "score" ? "SCORE LIMIT REACHED" : match.reason === "time" ? "TIME'S UP" : "";
   renderBoard(document.getElementById("scoreboard-content"), match.ranking(), winner?.id ?? null);

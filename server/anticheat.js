@@ -275,8 +275,9 @@ export class RoomGuard {
    *   `arena` lets tests pass a hand-made arena. With `enforce: false` nothing is
    *   corrected or refused for movement/bot hits; it is only reported via onReject.
    */
-  constructor({ arenaId, hostId, arena, enforce = true, onReject = () => {} }) {
+  constructor({ arenaId, hostId, arena, enforce = true, onReject = () => {}, teams = {} }) {
     this.hostId = hostId;
+    this.teams = new Map(Object.entries(teams));
     this.geo = arenaGeometry(arenaId, arena);
     this.enforce = enforce;
     this.report = onReject;
@@ -562,6 +563,7 @@ export class RoomGuard {
     let bestDist = Infinity;
     for (const c of this.actors.values()) {
       if (c === shooter) continue;
+      if (this.teams.has(shooter.id) && this.teams.get(shooter.id) === this.teams.get(c.id)) continue;
       if (c.isBot ? !this.#botAlive(c, now) : !c.alive) continue;
       const r = this.#rayVsTarget(ox, oy, oz, dx, dy, dz, c, now);
       if (r.pass && r.dist < bestDist) {
@@ -585,6 +587,12 @@ export class RoomGuard {
     victim.hpDirty = false;
     victim.respawnAt = now + this.respawnDelay * 1000;
     this.#announceHealth(victim);
+    const attacker = this.actors.get(attackerId);
+    if (attacker && !attacker.isBot && attacker.alive) {
+      attacker.hp = this.maxHp;
+      attacker.hpDirty = false;
+      this.#announceHealth(attacker);
+    }
     this.#emit("all", { t: "kill", attackerId, victimId: victim.id });
   }
 

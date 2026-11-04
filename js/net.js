@@ -97,7 +97,7 @@ export class Net {
           this.hostId = msg.hostId;
           this.isHost = false;
           this._wire();
-          resolve({ arenaId: msg.arenaId, peers: msg.peers, hostId: msg.hostId });
+          resolve({ arenaId: msg.arenaId, peers: msg.peers, hostId: msg.hostId, teams: msg.teams && typeof msg.teams === "object" ? msg.teams : {} });
         } else if (msg.t === "join_error") {
           this._settled = true;
           clearTimeout(this._timeout);
@@ -151,6 +151,7 @@ export class Net {
       const ms = (v) => (Number.isFinite(v) ? Math.max(0, Math.min(120000, v)) : null);
       const arenaList = (a) => (Array.isArray(a) ? [...new Set(a.filter(isValidArenaId))].slice(0, 6) : []);
       const text = (v) => String(v ?? "").slice(0, 200);
+      const cleanTeams = (v) => { const out = {}; if (v && typeof v === "object" && !Array.isArray(v)) for (const [id, team] of Object.entries(v)) if (isValidId(id) && (team === 0 || team === 1)) out[id] = team; return out; };
       const adopt = (id, hostId, isHost) => {
         this._settled = true;
         clearTimeout(this._timeout);
@@ -192,9 +193,9 @@ export class Net {
               if (msg.role === "host") {
                 if (!isValidCode(msg.code) || !isValidId(msg.id)) break;
                 adopt(msg.id, msg.id, true);
-                finish(() => resolve({ isHost: true, arenaId: msg.arenaId, hostId: msg.id, peers: [], mode: msg.mode, settings: msg.settings, code: msg.code }));
+                finish(() => resolve({ isHost: true, arenaId: msg.arenaId, hostId: msg.id, peers: [], mode: msg.mode, settings: msg.settings, code: msg.code, teams: cleanTeams(msg.teams) }));
               } else {
-                found = { arenaId: msg.arenaId, mode: msg.mode };
+                found = { arenaId: msg.arenaId, mode: msg.mode, teams: cleanTeams(msg.teams) };
                 hooks.onLoading?.(found);
               }
               break;
@@ -203,7 +204,7 @@ export class Net {
               const peers = Array.isArray(msg.peers) ? msg.peers : null;
               if (!found || !isValidId(msg.id) || !isValidId(msg.hostId) || !isValidArenaId(msg.arenaId) || !peers || peers.length > 8 || !peers.every(isValidId)) break;
               adopt(msg.id, msg.hostId, false);
-              finish(() => resolve({ isHost: false, arenaId: msg.arenaId, hostId: msg.hostId, peers, mode: found.mode, settings: null }));
+              finish(() => resolve({ isHost: false, arenaId: msg.arenaId, hostId: msg.hostId, peers, mode: found.mode, settings: null, teams: cleanTeams(msg.teams || found.teams) }));
               break;
             }
             case "match_cancelled":
@@ -320,7 +321,7 @@ export class Net {
           // "from". Anything else with these types is a player pretending.
           if (msg.from !== undefined || !isValidId(msg.id)) return;
           if (msg.t === "peer_joined") {
-            if (this.onPeerConnected) this.onPeerConnected(msg.id);
+            if (this.onPeerConnected) this.onPeerConnected(msg.id, msg.team === 0 || msg.team === 1 ? msg.team : null);
           } else if (this.onPeerDisconnected) {
             this.onPeerDisconnected(msg.id);
           }

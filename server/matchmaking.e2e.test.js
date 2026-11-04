@@ -85,8 +85,8 @@ test("the relay requires an explicit guest or Firebase authentication handshake 
   ws.close();
 });
 
-test("four players: search, vote, host loads the map, everyone is let in", async () => {
-  const ps = await search(["p1", "p2", "p3", "p4"], "blitz");
+test("eight players: TDM search, vote, host loads the map, everyone is let in", async () => {
+  const ps = await search(["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8"], "tdm");
   await Promise.all(ps.map((p) => p.waitFor("vote_start")));
   const { options } = ps[0].last("vote_start");
   assert.equal(options.length, 3);
@@ -94,14 +94,17 @@ test("four players: search, vote, host loads the map, everyone is let in", async
   // everybody votes for the same map; the live tally reaches everyone
   for (const p of ps) p.send({ t: "vote", arenaId: options[1] });
   const found = await Promise.all(ps.map((p) => p.waitFor("match_found")));
-  assert.equal(ps[3].last("vote_update").tally[options[1]], 4);
-  assert.ok(found.every((f) => f.arenaId === options[1] && f.mode === "blitz"));
+  assert.equal(ps[7].last("vote_update").tally[options[1]], 8);
+  assert.ok(found.every((f) => f.arenaId === options[1] && f.mode === "tdm"));
 
   // exactly one host: whoever searched first, and they get the room code and the mode's rules
-  assert.deepEqual(found.map((f) => f.role), ["host", "player", "player", "player"]);
+  assert.deepEqual(found.map((f) => f.role), ["host", ...Array(7).fill("player")]);
   assert.match(found[0].code, /^\d{6}$/);
-  assert.equal(found[0].settings.timeLimit, 5);
-  assert.equal(found[0].settings.scoreLimit, 10);
+  assert.equal(found[0].settings.timeLimit, 10);
+  assert.equal(found[0].settings.scoreLimit, 50);
+  assert.equal(Object.keys(found[0].teams).length, 8);
+  assert.equal(Object.values(found[0].teams).filter((team) => team === 0).length, 4);
+  assert.equal(Object.values(found[0].teams).filter((team) => team === 1).length, 4);
 
   // nobody else is let in until the host says the map is built
   await sleep(300);
@@ -109,7 +112,8 @@ test("four players: search, vote, host loads the map, everyone is let in", async
   ps[0].send({ t: "match_ready" });
   const joined = await Promise.all(ps.slice(1).map((p) => p.waitFor("room_joined")));
   assert.ok(joined.every((j) => j.code === found[0].code && j.hostId === ps[0].id && j.arenaId === options[1]));
-  assert.equal(ps[0].of("peer_joined").length, 3);
+  assert.ok(joined.every((j) => JSON.stringify(j.teams) === JSON.stringify(found[0].teams)));
+  assert.equal(ps[0].of("peer_joined").length, 7);
 
   // and it's a normal room from here: gameplay messages are relayed
   ps[0].send({ t: "state", x: 0, y: 1.4, z: 0, yaw: 0, pitch: 0, hp: 100, firing: false, tp: 0 });
@@ -119,26 +123,26 @@ test("four players: search, vote, host loads the map, everyone is let in", async
 });
 
 test("different game modes are matched separately", async () => {
-  const dm = await search(["a", "b"], "deathmatch");
-  const vamp = await search(["c", "d"], "vampire");
+  const dm = await search(["a", "b"], "1v1");
+  const vamp = await search(["c", "d"], "tdm");
   await Promise.all([...dm, ...vamp].map((p) => p.waitFor("vote_start", 8000)));
-  assert.equal(dm[0].last("vote_start").mode, "deathmatch");
-  assert.equal(vamp[0].last("vote_start").mode, "vampire");
+  assert.equal(dm[0].last("vote_start").mode, "1v1");
+  assert.equal(vamp[0].last("vote_start").mode, "tdm");
   assert.equal(dm[0].last("vote_start").players, 2);
   await closeAll([...dm, ...vamp]);
 });
 
 test("two players start after the fill window, and nobody voting still picks a map", async () => {
-  const ps = await search(["a", "b"], "titan");
+  const ps = await search(["a", "b"], "1v1");
   const found = await Promise.all(ps.map((p) => p.waitFor("match_found", 12000)));
   const options = ps[0].last("vote_start").options;
   assert.ok(options.includes(found[0].arenaId));
-  assert.equal(found[0].settings.startingHealth, 300);
+  assert.equal(found[0].settings.startingHealth, 100);
   await closeAll(ps);
 });
 
 test("a host who never loads the map: the others go back to searching", async () => {
-  const ps = await search(["host", "x", "y"], "marathon");
+  const ps = await search(["host", "x", "y"], "tdm");
   await Promise.all(ps.map((p) => p.waitFor("match_found", 12000)));
   // the host never sends match_ready; after the timeout (2s here) everyone is told
   const cancelled = await Promise.all(ps.slice(1).map((p) => p.waitFor("match_cancelled", 6000)));
@@ -151,7 +155,7 @@ test("a host who never loads the map: the others go back to searching", async ()
 });
 
 test("a host who leaves while the map loads: the others are put back in line at once", async () => {
-  const ps = await search(["host", "x", "y"], "glass-cannon");
+  const ps = await search(["host", "x", "y"], "tdm");
   await Promise.all(ps.map((p) => p.waitFor("match_found", 12000)));
   ps[0].ws.close();
   const cancelled = await ps[1].waitFor("match_cancelled", 3000);
@@ -163,7 +167,7 @@ test("a host who leaves while the map loads: the others are put back in line at 
 });
 
 test("cancelling a search takes you out of the queue", async () => {
-  const ps = await search(["a", "b", "c"], "blitz");
+  const ps = await search(["a", "b", "c"], "tdm");
   await sleep(100);
   assert.equal(ps[0].last("queue").players, 3);
   ps[2].send({ t: "cancel_search" });
@@ -178,10 +182,10 @@ test("bad requests do nothing: unknown mode, searching twice, voting when not vo
   p.send({ t: "find_match", mode: "not-a-mode" });
   assert.match((await p.waitFor("search_error")).error, /Unknown/);
   p.send({ t: "vote", arenaId: "classic" });         // not in a vote: ignored
-  p.send({ t: "find_match", mode: "blitz" });
+  p.send({ t: "find_match", mode: "tdm" });
   await p.waitFor("queue");
-  p.send({ t: "find_match", mode: "blitz" });         // already searching: ignored
-  p.send({ t: "find_match", mode: "vampire" });
+  p.send({ t: "find_match", mode: "tdm" });         // already searching: ignored
+  p.send({ t: "find_match", mode: "1v1" });
   await sleep(300);
   assert.equal(p.of("queue").length, 1);
   await closeAll([p]);
@@ -190,7 +194,7 @@ test("bad requests do nothing: unknown mode, searching twice, voting when not vo
 test("a player who is searching isn't thrown out as idle, and nothing they send can start a game", async () => {
   const p = player("p");
   await p.open;
-  p.send({ t: "find_match", mode: "blitz" });
+  p.send({ t: "find_match", mode: "tdm" });
   await p.waitFor("queue");
   p.send({ t: "create_room", arenaId: "classic", isPublic: true });   // ignored: they aren't in a room
   p.send({ t: "match_ready" });                                       // ignored: not a host

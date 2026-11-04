@@ -224,7 +224,7 @@ async function handleAuthHttp(req, res, url) {
     return authJson(res, 500, { error: "Account request failed. Try again later." });
   }
 }
-const MAX_PLAYERS = 4;
+const MAX_PLAYERS = 4; // manual/public rooms remain capped at four
 const MAX_ROOMS = 500;
 const MAX_CONNECTIONS = 1000;
 const MAX_CONNECTIONS_PER_IP = 8;
@@ -398,7 +398,9 @@ function makeRoom(code, host, arenaId, isPublic, extra = {}) {
     arenaId,
     isPublic,
     members: new Map([[host.id, host]]),
-    guard: new RoomGuard({ arenaId, hostId: host.id, enforce: ANTICHEAT === "enforce", onReject: noteReject }),
+    guard: new RoomGuard({ arenaId, hostId: host.id, enforce: ANTICHEAT === "enforce", onReject: noteReject, teams: extra.teams ?? {} }),
+    maxPlayers: extra.maxPlayers ?? MAX_PLAYERS,
+    teams: extra.teams ?? {},
     ...extra,
   };
   room.guard.addMember(host.id);
@@ -414,9 +416,9 @@ function admitToRoom(room, code, ws) {
   ws.room = code;
   ws.searching = false;
   ws.pendingRoom = null;
-  send(ws, { t: "room_joined", code, id: ws.id, arenaId: room.arenaId, hostId: room.hostId, peers: peerIds });
+  send(ws, { t: "room_joined", code, id: ws.id, arenaId: room.arenaId, hostId: room.hostId, peers: peerIds, teams: room.teams });
   for (const [id, peer] of room.members) {
-    if (id !== ws.id) send(peer, { t: "peer_joined", id: ws.id });
+    if (id !== ws.id) send(peer, { t: "peer_joined", id: ws.id, team: room.teams[ws.id] ?? null });
   }
 }
 
@@ -459,17 +461,18 @@ function startMatchRoom({ modeId, arenaId, players, entries }) {
   }
   const mode = getMode(modeId);
   const [host, ...joiners] = here;
+  const teams = mode.teamMode ? Object.fromEntries([...here].sort((a, b) => a.id.localeCompare(b.id)).map((p, i) => [p.id, i % 2])) : {};
   const room = makeRoom(code, host, arenaId, false, {
-    modeId,
+    modeId, maxPlayers: mode.maxPlayers, teams,
     pending: { joiners, entries: entries.filter((e) => here.includes(e.player)), deadline: now + MATCH_READY_TIMEOUT_MS },
   });
   room.guard.onRestart(mode.settings, now); // the room's rules (health etc.) are known from the start
   host.searching = false;
   console.log(`[matchmaking] ${here.length} players, ${mode.id} on ${arenaId}`);
-  send(host, { t: "match_found", role: "host", code, id: host.id, arenaId, mode: modeId, settings: mode.settings, players: here.length });
+  send(host, { t: "match_found", role: "host", code, id: host.id, arenaId, mode: modeId, settings: mode.settings, players: here.length, teams });
   for (const j of joiners) {
     j.pendingRoom = code;
-    send(j, { t: "match_found", role: "player", arenaId, mode: modeId, players: here.length });
+    send(j, { t: "match_found", role: "player", arenaId, mode: modeId, players: here.length, teams });
   }
 }
 
@@ -589,8 +592,8 @@ async function handleMessage(ws, raw, isBinary) {
       ws.listing = true;
       const lobbies = [];
       for (const [code, room] of rooms) {
-        if (room.isPublic && room.members.size < MAX_PLAYERS) {
-          lobbies.push({ code, arenaId: room.arenaId, playerCount: room.members.size, maxPlayers: MAX_PLAYERS });
+        if (room.isPublic && room.members.size < room.maxPlayers) {
+          lobbies.push({ code, arenaId: room.arenaId, playerCount: room.members.size, maxPlayers: room.maxPlayers });
           if (lobbies.length >= 50) break;
         }
       }
@@ -610,8 +613,8 @@ async function handleMessage(ws, raw, isBinary) {
         send(ws, { t: "join_error", error: "Room not found." });
         return;
       }
-      if (room.members.size >= MAX_PLAYERS) {
-        send(ws, { t: "join_error", error: "Room is full (4/4)." });
+      if (room.members.size >= room.maxPlayers) {
+        send(ws, { t: "join_error", error: `Room is full (${room.maxPlayers}/${room.maxPlayers}).` });
         return;
       }
       admitToRoom(room, msg.code, ws);
@@ -650,7 +653,7 @@ async function handleMessage(ws, raw, isBinary) {
       room.pending = null;
       let admitted = 0;
       for (const j of joiners) {
-        if (j.readyState !== j.OPEN || j.room || room.members.size >= MAX_PLAYERS) continue;
+        if (j.readyState !== j.OPEN || j.room || room.members.size >= room.maxPlayers) continue;
         admitToRoom(room, ws.room, j);
         admitted++;
       }
