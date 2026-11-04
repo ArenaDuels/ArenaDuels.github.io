@@ -6,7 +6,7 @@
 //   pattern    id from PATTERNS
 //   accessory  id from ACCESSORIES
 
-import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
+import * as THREE from "../vendor/three/three.module.min.js";
 
 export const COLORS = [0xffffff, 0xff4d6a, 0x39ff88, 0xffd166, 0x9b5de5, 0x4cc9f0, 0xff8c42];
 

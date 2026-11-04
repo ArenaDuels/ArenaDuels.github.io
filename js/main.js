@@ -1,4 +1,4 @@
-import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
+import * as THREE from "../vendor/three/three.module.min.js";
 import { ARENA_LIST, getArena } from "./arenas.js";
 import { PlayerController, RemotePlayer, makeLaserMesh, aimLaser, setLaserColor, GAME } from "./player.js";
 import { Net } from "./net.js";
@@ -10,6 +10,7 @@ import { MatchState, DEFAULT_SETTINGS as DEFAULT_MATCH_RULES, sanitizeSettings }
 import { iconSvg } from "./icons.js";
 import { createLookPreview } from "./look-preview.js";
 import { cleanName, cleanRelay, isBotId, isValidArenaId, isValidId, SERVER_ID, SERVER_ONLY } from "./validate.js";
+import { GAME_MODES, getMode, isValidModeId } from "./modes.js";
 
 /* =========================================================
    SETTINGS — persisted to localStorage. Sensitivity uses the same
@@ -211,6 +212,7 @@ const screens = {
   hostWait: document.getElementById("screen-host-wait"),
   joining: document.getElementById("screen-joining"),
   browse: document.getElementById("screen-browse"),
+  matchmaking: document.getElementById("screen-matchmaking"),
 };
 const hud = document.getElementById("hud");
 const hudHpCorner = document.getElementById("hud-hp-corner");
@@ -783,6 +785,258 @@ document.getElementById("btn-cancel-join").addEventListener("click", () => {
   net.destroy();
   showScreen("menu");
 });
+
+/* ---- MATCHMAKING ----
+   You search for one game mode. The server puts you with whoever else is searching for it (first
+   come, first matched: no skill rating of any kind), everyone votes on the map, and the server
+   makes a room and picks the host. We take part through net.findMatch(). */
+const MODE_STORAGE_KEY = "arenaduels.mode";
+const mmEls = {
+  select: document.getElementById("mm-stage-select"),
+  search: document.getElementById("mm-stage-search"),
+  vote: document.getElementById("mm-stage-vote"),
+  load: document.getElementById("mm-stage-load"),
+};
+const mm = {
+  modeId: "deathmatch",
+  searching: false,
+  startedAt: 0,
+  fillEndsAt: null, // when the queue will stop waiting for more players
+  voteEndsAt: 0,
+  options: [],
+  tally: {},
+  votedFor: null,
+  decided: null,    // the winning map, once the vote is over
+  clock: null,
+};
+try {
+  const saved = localStorage.getItem(MODE_STORAGE_KEY);
+  if (isValidModeId(saved)) mm.modeId = saved;
+} catch { /* storage unavailable: fine */ }
+
+function mmShow(stage) {
+  for (const key in mmEls) mmEls[key].classList.toggle("hidden", key !== stage);
+}
+function mmElement(tag, className, text) {
+  const e = document.createElement(tag);
+  if (className) e.className = className;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+const mmMinutes = (n) => `${Math.floor(n / 60)}:${String(Math.floor(n % 60)).padStart(2, "0")}`;
+
+function modeRuleChips(settings) {
+  const chips = [settings.timeLimit > 0 ? `${settings.timeLimit} min` : "No time limit"];
+  chips.push(settings.scoreLimit > 0 ? `${settings.scoreLimit} kills` : "No kill limit");
+  chips.push(`${settings.startingHealth} HP`);
+  if (settings.healthSteal > 0) chips.push(`${settings.healthSteal}% health steal`);
+  return chips;
+}
+
+function renderModes() {
+  const grid = document.getElementById("mode-grid");
+  grid.replaceChildren(...GAME_MODES.map((mode) => {
+    const card = mmElement("button", "mode-card" + (mode.id === mm.modeId ? " selected" : ""));
+    card.type = "button";
+    card.append(mmElement("span", "mode-name", mode.name), mmElement("span", "mode-tagline", mode.tagline), mmElement("span", "mode-desc", mode.description));
+    const rules = mmElement("span", "mode-rules");
+    for (const chip of modeRuleChips(mode.settings)) rules.append(mmElement("span", "tag-chip", chip));
+    card.append(rules);
+    card.addEventListener("click", () => {
+      mm.modeId = mode.id;
+      try { localStorage.setItem(MODE_STORAGE_KEY, mode.id); } catch { /* fine */ }
+      for (const c of grid.children) c.classList.toggle("selected", c === card);
+    });
+    return card;
+  }));
+}
+
+function renderVote() {
+  const grid = document.getElementById("vote-grid");
+  grid.replaceChildren(...mm.options.map((id) => {
+    const arena = getArena(id);
+    const card = mmElement("button", "vote-card");
+    card.type = "button";
+    card.dataset.arena = id;
+    const thumb = mmElement("div", "vote-thumb");
+    thumb.style.backgroundImage = `url("${arena.thumb}")`;
+    const info = mmElement("div", "vote-info");
+    info.append(mmElement("span", "vote-name", arena.name), mmElement("span", "vote-tagline", arena.tagline ?? ""));
+    const tags = mmElement("div", "vote-tags");
+    for (const t of arena.tags ?? []) tags.append(mmElement("span", "tag-chip", t));
+    info.append(tags);
+    card.append(thumb, info, mmElement("span", "vote-badge", "0"));
+    card.addEventListener("click", () => {
+      if (mm.decided) return;
+      mm.votedFor = id;
+      net.vote(id);
+      paintVote();
+    });
+    return card;
+  }));
+  paintVote();
+}
+
+// Vote counts, "your vote", and (once the vote is over) the winner.
+function paintVote() {
+  for (const card of document.getElementById("vote-grid").children) {
+    const id = card.dataset.arena;
+    card.querySelector(".vote-badge").textContent = String(mm.tally[id] ?? 0);
+    card.classList.toggle("mine", !mm.decided && mm.votedFor === id);
+    card.classList.toggle("won", mm.decided === id);
+    card.classList.toggle("lost", !!mm.decided && mm.decided !== id);
+  }
+}
+
+function startMmClock() {
+  stopMmClock();
+  mm.clock = setInterval(() => {
+    const now = performance.now();
+    document.getElementById("mm-search-time").textContent = mmMinutes((now - mm.startedAt) / 1000);
+    if (mm.fillEndsAt != null) {
+      const left = Math.max(0, Math.ceil((mm.fillEndsAt - now) / 1000));
+      document.getElementById("mm-search-status").textContent = `Match starts in ${left}s — more players can still join`;
+    }
+    if (mm.voteEndsAt) {
+      const left = Math.max(0, Math.ceil((mm.voteEndsAt - now) / 1000));
+      document.getElementById("mm-vote-time").textContent = mm.decided ? "Map chosen" : `${left}s left`;
+    }
+  }, 250);
+}
+function stopMmClock() {
+  clearInterval(mm.clock);
+  mm.clock = null;
+}
+
+function mmBackToSearching(notice) {
+  mm.options = [];
+  mm.tally = {};
+  mm.votedFor = null;
+  mm.decided = null;
+  mm.voteEndsAt = 0;
+  mm.fillEndsAt = null;
+  mmShow("search");
+  document.getElementById("mm-search-status").textContent = notice || "Looking for players…";
+}
+
+const matchmakingHooks = {
+  onQueue({ players, max, startsInMs }) {
+    mmShow("search");
+    document.getElementById("mm-count-num").textContent = String(players);
+    document.getElementById("mm-count-max").textContent = String(max);
+    mm.fillEndsAt = startsInMs != null ? performance.now() + startsInMs : null;
+    if (startsInMs == null) {
+      document.getElementById("mm-search-status").textContent = players < 2 ? "Looking for players…" : "Waiting for more players…";
+    }
+  },
+  onVoteStart({ mode, options, endsInMs, players }) {
+    mm.options = options;
+    mm.tally = {};
+    mm.votedFor = null;
+    mm.decided = null;
+    mm.fillEndsAt = null;
+    mm.voteEndsAt = performance.now() + endsInMs;
+    document.getElementById("mm-vote-mode").textContent = getMode(mode).name;
+    document.getElementById("mm-vote-count").textContent = `0 of ${players} voted`;
+    document.getElementById("mm-vote-time").textContent = "";
+    renderVote();
+    mmShow("vote");
+  },
+  onVoteUpdate({ tally, voted, players }) {
+    mm.tally = tally;
+    document.getElementById("mm-vote-count").textContent = `${voted} of ${players} voted`;
+    paintVote();
+  },
+  onVoteResult({ arenaId }) {
+    mm.decided = arenaId;
+    paintVote();
+    document.getElementById("mm-load-map").textContent = getArena(arenaId).name;
+  },
+  onLoading({ arenaId }) {
+    document.getElementById("mm-load-map").textContent = getArena(arenaId).name;
+    document.getElementById("mm-load-status").textContent = "Waiting for the host to load the match…";
+    mmShow("load");
+  },
+  onNotice(text) {
+    mmBackToSearching(text);
+  },
+};
+
+async function enterMatchmadeGame(found) {
+  hostId = found.hostId;
+  myId = net.myId;
+  myName = getPlayerName();
+  match.scores.clear();
+  document.getElementById("mm-load-map").textContent = getArena(found.arenaId).name;
+  document.getElementById("mm-load-status").textContent = "Loading the map…";
+  mmShow("load");
+
+  if (found.isHost) {
+    matchStarting = true;
+    applyMatchSettings(found.settings); // the mode's rules
+    await beginMatch(found.arenaId);
+    net.broadcast({ t: "match_ready" }); // the server lets the other players in now
+  } else {
+    applyMatchSettings(DEFAULT_MATCH_RULES); // replaced by the host's rules a moment later ("sync")
+    await beginMatch(found.arenaId);
+    for (const id of found.peers) addOrUpdatePlayer(id, "Player");
+    net.broadcast({ t: "hello", name: myName, look: myLook });
+  }
+}
+
+async function startSearch() {
+  if (mm.searching) return;
+  mm.searching = true;
+  document.getElementById("mm-error").textContent = "";
+  document.getElementById("mm-search-mode").textContent = getMode(mm.modeId).name;
+  document.getElementById("mm-count-num").textContent = "1";
+  document.getElementById("mm-search-time").textContent = "0:00";
+  mm.startedAt = performance.now();
+  mmBackToSearching("Connecting…");
+  startMmClock();
+  try {
+    const found = await net.findMatch(mm.modeId, matchmakingHooks);
+    stopMmClock();
+    await enterMatchmadeGame(found);
+    mm.searching = false;
+  } catch (err) {
+    stopMmClock();
+    mm.searching = false;
+    if (err.cancelled) return; // the player backed out; the screen has already changed
+    net.destroy();
+    matchStarting = false;
+    mmShow("select");
+    showScreen("matchmaking");
+    document.getElementById("mm-error").textContent = err.message || "Couldn't find a match. Try again.";
+  }
+}
+
+function cancelSearch() {
+  net.cancelSearch();
+  mm.searching = false;
+  stopMmClock();
+  mmShow("select");
+}
+
+// A matchmade game that fell through after we'd already built it as host (the others left, or took too long).
+net.onMatchCancelled = (reason) => {
+  leaveMatch();
+  matchStarting = false;
+  mmShow("select");
+  showScreen("matchmaking");
+  document.getElementById("mm-error").textContent = reason || "The match was cancelled.";
+};
+
+document.getElementById("btn-find-match").addEventListener("click", () => {
+  document.getElementById("mm-error").textContent = "";
+  renderModes();
+  mmShow("select");
+  showScreen("matchmaking");
+});
+document.getElementById("btn-mm-search").addEventListener("click", startSearch);
+document.getElementById("btn-mm-back").addEventListener("click", () => showScreen("menu"));
+document.getElementById("btn-mm-cancel").addEventListener("click", cancelSearch);
+document.getElementById("btn-mm-leave").addEventListener("click", cancelSearch);
 
 /* ---- BROWSE PUBLIC LOBBIES ---- */
 const lobbyListEl = document.getElementById("lobby-list");

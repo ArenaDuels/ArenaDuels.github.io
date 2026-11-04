@@ -6,6 +6,7 @@
 <title>Arena Duels — Free Browser Arena Shooter</title>
 <meta name="description" content="Play Arena Duels, a free browser-based arena shooter. Choose an arena, customize your player, fight bots, or host and join multiplayer matches with friends.">
 <link rel="canonical" href="https://arenaduels.github.io/">
+<link rel="modulepreload" href="vendor/three/three.module.min.js">
 <meta name="robots" content="index, follow, max-image-preview:large">
 <meta name="theme-color" content="#0a0a0d">
 <meta property="og:type" content="website">
@@ -63,8 +64,9 @@
           <button class="visibility-option" data-public="true"><span class="vis-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c3.2 3.2 3.2 14.8 0 18M12 3c-3.2 3.2-3.2 14.8 0 18"/></svg></span>Public (listed)</button>
         </div>
 
+        <button id="btn-find-match" class="btn btn-primary btn-big find-match-btn">Find Match</button>
         <div class="menu-actions hero-actions">
-          <button id="btn-host" class="btn btn-primary btn-big">Host Match</button>
+          <button id="btn-host" class="btn btn-secondary btn-big">Host Match</button>
           <button id="btn-join" class="btn btn-secondary btn-big">Join Match</button>
         </div>
         <button id="btn-browse" class="btn btn-secondary browse-btn">Browse Public Lobbies</button>
@@ -328,6 +330,53 @@
         <p class="status-text">Loading...</p>
       </div>
       <button id="btn-cancel-browse" class="btn btn-secondary">Back</button>
+    </div>
+  </div>
+
+  <!-- ===================== MATCHMAKING ===================== -->
+  <div id="screen-matchmaking" class="screen hidden">
+    <div class="menu-panel mm-panel">
+
+      <!-- 1. pick a game mode -->
+      <div id="mm-stage-select">
+        <p class="eyebrow">Find a Match</p>
+        <p class="mm-lead">Pick a game mode. You're matched with whoever else is searching for it, in the order you arrive (skill and stats aren't used), then everyone votes on the map.</p>
+        <div id="mode-grid" class="mode-grid"></div>
+        <p id="mm-error" class="status-text mm-error"></p>
+        <div class="menu-actions">
+          <button id="btn-mm-search" class="btn btn-primary">Search</button>
+          <button id="btn-mm-back" class="btn btn-secondary">Back</button>
+        </div>
+      </div>
+
+      <!-- 2. waiting for players -->
+      <div id="mm-stage-search" class="hidden">
+        <p class="eyebrow">Searching</p>
+        <h2 id="mm-search-mode" class="mm-title"></h2>
+        <div class="mm-count"><span id="mm-count-num">1</span><span class="mm-count-of">of <span id="mm-count-max">4</span> players</span></div>
+        <div class="mm-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+        <p id="mm-search-status" class="status-text">Looking for players…</p>
+        <p id="mm-search-time" class="mm-time">0:00</p>
+        <button id="btn-mm-cancel" class="btn btn-secondary">Cancel</button>
+      </div>
+
+      <!-- 3. vote for a map -->
+      <div id="mm-stage-vote" class="hidden">
+        <p class="eyebrow">Vote for a map</p>
+        <h2 id="mm-vote-mode" class="mm-title"></h2>
+        <div id="vote-grid" class="vote-grid"></div>
+        <p class="status-text"><span id="mm-vote-count"></span> · <span id="mm-vote-time"></span></p>
+        <button id="btn-mm-leave" class="btn btn-secondary">Leave</button>
+      </div>
+
+      <!-- 4. the map is chosen; the match is loading -->
+      <div id="mm-stage-load" class="hidden">
+        <p class="eyebrow">Match found</p>
+        <h2 id="mm-load-map" class="mm-title"></h2>
+        <div class="mm-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+        <p id="mm-load-status" class="status-text">Loading the map…</p>
+      </div>
+
     </div>
   </div>
 

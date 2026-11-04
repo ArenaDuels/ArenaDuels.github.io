@@ -1,7 +1,7 @@
 // A small spinning preview of your player in the Customize menu — in first
 // person you never see your own body, so this is the only way to check it.
 
-import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
+import * as THREE from "../vendor/three/three.module.min.js";
 import { RemotePlayer } from "./player.js";
 
 export function createLookPreview(canvas) {

@@ -1,4 +1,4 @@
-import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
+import * as THREE from "../vendor/three/three.module.min.js";
 import { applyBodyLook, buildAccessory, disposeGroup } from "./customization.js";
 import { cleanBody, cleanName } from "./validate.js";
 

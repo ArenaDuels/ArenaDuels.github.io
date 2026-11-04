@@ -1252,3 +1252,137 @@ html, body {
   opacity: 0.55;
   cursor: wait;
 }
+
+/* ===== Matchmaking ===== */
+.find-match-btn { width: 100%; margin-bottom: 10px; }
+
+.mm-panel { width: min(760px, 94vw); }
+.mm-lead {
+  margin: 0 auto 22px;
+  max-width: 560px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+.mm-title {
+  margin: 4px 0 18px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 26px;
+  letter-spacing: 0.4px;
+}
+.mm-error { min-height: 18px; color: var(--red); }
+
+/* game modes */
+.mode-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 14px;
+  text-align: left;
+}
+.mode-card {
+  background: rgba(16, 16, 24, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 14px;
+  padding: 14px 14px 12px;
+  cursor: pointer;
+  color: var(--mint);
+  font-family: inherit;
+  text-align: left;
+  transition: border-color 0.15s, transform 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.mode-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--accent-blue);
+  background: rgba(26, 26, 36, 0.95);
+  box-shadow: 0 8px 24px rgba(76, 201, 240, 0.12);
+}
+.mode-card.selected {
+  border-color: var(--brand);
+  background: rgba(26, 26, 32, 1);
+  box-shadow: 0 0 0 2px var(--brand), 0 8px 24px rgba(106, 168, 255, 0.18);
+}
+.mode-name {
+  display: block;
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.3px;
+}
+.mode-tagline { display: block; margin-top: 3px; font-size: 11px; color: var(--accent-blue); }
+.mode-desc { display: block; margin-top: 8px; font-size: 11px; line-height: 1.5; color: #b8b8c2; min-height: 50px; }
+.mode-rules { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+.mode-rules .tag-chip { font-size: 9px; padding: 3px 8px; }
+
+/* searching */
+.mm-count { display: flex; align-items: baseline; justify-content: center; gap: 10px; margin-bottom: 6px; }
+#mm-count-num {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 64px;
+  font-weight: 700;
+  line-height: 1;
+  background: linear-gradient(135deg, var(--brand), var(--brand-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.mm-count-of { font-size: 13px; color: var(--text-dim); }
+.mm-time { margin: 6px 0 20px; font-size: 13px; color: var(--text-dim); letter-spacing: 1px; }
+.mm-dots { display: flex; justify-content: center; gap: 8px; margin: 10px 0 14px; }
+.mm-dots span {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--brand);
+  animation: mm-pulse 1.2s ease-in-out infinite;
+}
+.mm-dots span:nth-child(2) { animation-delay: 0.2s; }
+.mm-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes mm-pulse { 0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); } 40% { opacity: 1; transform: scale(1.15); } }
+
+/* map vote */
+.vote-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.vote-card {
+  position: relative;
+  background: rgba(16, 16, 24, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 16px;
+  padding: 0;
+  overflow: hidden;
+  cursor: pointer;
+  color: var(--mint);
+  font-family: inherit;
+  text-align: left;
+  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+}
+.vote-card:hover { transform: translateY(-3px); border-color: var(--accent-blue); }
+.vote-card.mine {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 2px var(--brand), 0 8px 24px rgba(106, 168, 255, 0.2);
+}
+.vote-card.won { border-color: #5be37d; box-shadow: 0 0 0 2px #5be37d, 0 8px 28px rgba(91, 227, 125, 0.25); }
+.vote-card.lost { opacity: 0.35; }
+.vote-thumb { height: 110px; background-color: #24242c; background-size: cover; background-position: center; }
+.vote-info { padding: 10px 12px 12px; }
+.vote-name { display: block; font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 14px; }
+.vote-tagline { display: block; margin-top: 2px; font-size: 10px; color: var(--text-dim); }
+.vote-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.vote-tags .tag-chip { font-size: 9px; padding: 3px 8px; }
+.vote-badge {
+  position: absolute; top: 8px; right: 8px;
+  min-width: 30px; padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(10, 10, 13, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 14px;
+  text-align: center;
+}
+
+@media (max-width: 720px) {
+  .mode-grid, .vote-grid { grid-template-columns: 1fr; }
+  .vote-thumb { height: 80px; }
+  .mode-desc { min-height: 0; }
+}

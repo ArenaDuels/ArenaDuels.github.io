@@ -17,7 +17,7 @@
 // Bots shoot with the same kind of ray players do (from the eye along their
 // actual aim direction), so they only hit if they're really aimed at you.
 
-import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
+import * as THREE from "../vendor/three/three.module.min.js";
 import { MOVE, dirFromYawPitch } from "./player.js";
 import { NAME_WORDS } from "./names.js";
 
