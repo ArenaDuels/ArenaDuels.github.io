@@ -81,6 +81,15 @@ test("aiming somewhere else does nothing", () => {
   assert.equal(hp("p2"), 100);
 });
 
+test("the beam does not hit outside the actual target radius", () => {
+  const { duel, put, run, hp } = setup();
+  duel();
+  // Offset the target laterally by 1m while the shooter continues aiming straight.
+  put("p2", 10, 1, FACE_MINUS_X);
+  run(1, { hostFiring: true });
+  assert.equal(hp("p2"), 100);
+});
+
 test("walls stop the beam", () => {
   const { duel, run, hp } = setup({ arena: PILLAR_ARENA });
   duel();

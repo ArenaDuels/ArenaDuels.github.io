@@ -39,8 +39,8 @@ export const TUNING = Object.freeze({
   EYE_HEIGHT: 1.0,
   RADIUS: 0.5,
   HALF_SEGMENT: 0.6,
-  AIM_SLACK: 0.75,
-  AIM_SLACK_PER_M: 0.04,
+  AIM_SLACK: 0,             // no extra hit forgiveness beyond the target capsule
+  AIM_SLACK_PER_M: 0,       // no distance-based expansion of the hit area
   WALL_SHRINK: 0.12,
   RANGE_MARGIN: 12,
   // --- history (lag tolerance) ---
