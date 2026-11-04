@@ -282,7 +282,7 @@ function makeFirstPersonGun(color) {
 // capsule body, positioned like it's held out in front, rotates with
 // whichever way the capsule is facing since it's a child of that mesh.
 function makeHeldGun(color) {
-  const { group } = makeGunModel(color);
+  const { group, muzzle } = makeGunModel(color);
   // Capsule radius is 0.5 — the attachment point has to clear that or the
   // gun renders embedded in the body instead of held beside it.
   group.position.set(0.62, 0.05, -0.15);
@@ -294,7 +294,9 @@ function makeHeldGun(color) {
       o.receiveShadow = true;
     }
   });
-  return group;
+  // Keep the muzzle as a real child of the held weapon so the remote beam
+  // starts at the barrel after both yaw and pitch have been applied.
+  return { group, muzzle };
 }
 
 // ===== The beam. A hot white core, a coloured glow around it, a soft outer
@@ -732,7 +734,9 @@ export class RemotePlayer {
 
     // Visible to everyone else, unlike the local player's own first-person
     // viewmodel — attached to the capsule body so it turns with them.
-    this.heldGun = makeHeldGun(color);
+    const heldWeapon = makeHeldGun(color);
+    this.heldGun = heldWeapon.group;
+    this.gunMuzzle = heldWeapon.muzzle;
     this.mesh.add(this.heldGun);
 
     this.name = name;
@@ -847,6 +851,9 @@ export class RemotePlayer {
     const t = Math.min(1, dt * 12);
     this.mesh.position.lerp(this.targetPos, t);
     this.mesh.rotation.y += (this.targetYaw - this.mesh.rotation.y) * t;
+    // The remote weapon is a separate child of the body. Apply the networked
+    // camera pitch to it too; otherwise the body turns but the gun stays level.
+    this.heldGun.rotation.x += (this.targetPitch - this.heldGun.rotation.x) * t;
 
     if (this.visible && this.hp > 0) {
       this.hpBar.position.copy(this.mesh.position);
@@ -857,8 +864,10 @@ export class RemotePlayer {
       this.nameSprite.position.y += 1.85;
 
       if (this.firing) {
-        const origin = this.mesh.position.clone();
-        origin.y += MOVE.EYE_HEIGHT - 1.4; // mesh position is feet-ish; eye is higher
+        // Read the actual barrel muzzle in world space. This includes the
+        // body yaw, weapon pitch, weapon offset and weapon scale.
+        const origin = new THREE.Vector3();
+        this.gunMuzzle.getWorldPosition(origin);
         const dir = dirFromYawPitch(this.targetYaw, this.targetPitch);
         const end = origin.clone().addScaledVector(dir, 50);
         aimLaser(this.laser, origin, end, false);
