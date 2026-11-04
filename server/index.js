@@ -20,10 +20,12 @@ import { promisify } from "node:util";
 import { initializeApp, applicationDefault } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
-import { cleanRelay, HOST_ONLY, isBotId, isValidArenaId, isValidCode, MAX_MESSAGE_BYTES, SERVER_ID, SERVER_ONLY } from "./validate.js";
+import { ARENA_IDS, cleanRelay, HOST_ONLY, isBotId, isValidArenaId, isValidCode, MAX_MESSAGE_BYTES, SERVER_ID, SERVER_ONLY } from "./validate.js";
 import { RoomGuard } from "./anticheat.js";
 import { canonicalName, isLegacyName, randomName } from "./names.js";
 import { createNameTickets } from "./nameTickets.js";
+import { Matchmaker, MATCHMAKING } from "./matchmaker.js";
+import { MODE_IDS, getMode, isValidModeId } from "./modes.js";
 
 const PORT = process.env.PORT || 8080;
 const scrypt = promisify(crypto.scrypt);
@@ -336,7 +338,7 @@ wss.on("connection", (ws, req) => {
 
   // Someone who connects and never joins/creates a room doesn't get to sit here forever.
   const idleTimer = setTimeout(() => {
-    if (!ws.room && ws.listing !== true) ws.close(1008, "Idle");
+    if (!ws.room && ws.listing !== true && !ws.searching) ws.close(1008, "Idle");
   }, NO_ROOM_TIMEOUT_MS);
 
   ws.on("error", () => {}); // e.g. oversized frame — the socket is closed for us; just don't crash
@@ -356,8 +358,16 @@ wss.on("connection", (ws, req) => {
     if (n <= 0) connectionsByIp.delete(ip);
     else connectionsByIp.set(ip, n);
 
+    // Matchmaking: leave the queue / map vote, or the match that was waiting for the host to load.
+    runMatchmaker(matchmaker.cancel(ws, Date.now()));
+    leavePendingMatch(ws);
+
     const room = ws.room && rooms.get(ws.room);
     if (!room) return;
+    if (room.pending && room.hostId === ws.id) {
+      abandonMatch(ws.room, "The host left before the match started.");
+      return;
+    }
     room.members.delete(ws.id);
     room.guard.removeMember(ws.id);
     for (const peer of room.members.values()) send(peer, { t: "peer_left", id: ws.id });
@@ -365,6 +375,139 @@ wss.on("connection", (ws, req) => {
     // If the host left, the match is over for everyone; clients already treat that via peer_left.
   });
 });
+
+// ---- rooms: shared by "create a room", "join by code" and matchmaking ----
+
+function newRoomCode() {
+  if (rooms.size >= MAX_ROOMS) return null;
+  let code = randomCode();
+  for (let tries = 0; rooms.has(code) && tries < 10; tries++) code = randomCode();
+  return rooms.has(code) ? null : code;
+}
+
+function makeRoom(code, host, arenaId, isPublic, extra = {}) {
+  const room = {
+    hostId: host.id,
+    arenaId,
+    isPublic,
+    members: new Map([[host.id, host]]),
+    guard: new RoomGuard({ arenaId, hostId: host.id, enforce: ANTICHEAT === "enforce", onReject: noteReject }),
+    ...extra,
+  };
+  room.guard.addMember(host.id);
+  rooms.set(code, room);
+  host.room = code;
+  return room;
+}
+
+function admitToRoom(room, code, ws) {
+  const peerIds = [...room.members.keys()];
+  room.members.set(ws.id, ws);
+  room.guard.addMember(ws.id);
+  ws.room = code;
+  ws.searching = false;
+  ws.pendingRoom = null;
+  send(ws, { t: "room_joined", code, id: ws.id, arenaId: room.arenaId, hostId: room.hostId, peers: peerIds });
+  for (const [id, peer] of room.members) {
+    if (id !== ws.id) send(peer, { t: "peer_joined", id: ws.id });
+  }
+}
+
+// ---- matchmaking ----
+// Players search for a game mode, vote on a map, and are put in a room together (matchmaker.js
+// has the rules; there is no skill-based matching). The first player in line becomes the host.
+// Everyone else is let in only once the host's browser has built the map ("match_ready"), so
+// nobody joins a half-loaded game.
+
+// Timings can be changed in the host's settings: MATCH_FILL_SECONDS (how long to wait for more players
+// once two are searching, default 10), MATCH_VOTE_SECONDS (map vote, default 15) and
+// MATCH_READY_TIMEOUT_SECONDS (how long the host has to load the map, default 30).
+const envMs = (name, fallbackMs) => {
+  const seconds = Number(process.env[name]);
+  return Number.isFinite(seconds) && seconds >= 1 && seconds <= 300 ? seconds * 1000 : fallbackMs;
+};
+const matchmaker = new Matchmaker({
+  modeIds: MODE_IDS,
+  arenaIds: ARENA_IDS,
+  random: (n) => crypto.randomInt(n),
+  config: { FILL_MS: envMs("MATCH_FILL_SECONDS", MATCHMAKING.FILL_MS), VOTE_MS: envMs("MATCH_VOTE_SECONDS", MATCHMAKING.VOTE_MS) },
+});
+const MATCH_READY_TIMEOUT_MS = envMs("MATCH_READY_TIMEOUT_SECONDS", 30_000);
+
+function runMatchmaker(outputs) {
+  for (const o of outputs) {
+    if (o.action === "match") startMatchRoom(o);
+    else for (const p of o.to) send(p, o.msg);
+  }
+}
+
+function startMatchRoom({ modeId, arenaId, players, entries }) {
+  const now = Date.now();
+  const here = players.filter((p) => p.readyState === p.OPEN);
+  const code = newRoomCode();
+  if (here.length < MATCHMAKING.MIN_PLAYERS || !code) {
+    // Someone dropped between the vote and now (or the server is full): back in line for the rest.
+    runMatchmaker(matchmaker.requeue(entries.filter((e) => e.player.readyState === e.player.OPEN), modeId, now));
+    return;
+  }
+  const mode = getMode(modeId);
+  const [host, ...joiners] = here;
+  const room = makeRoom(code, host, arenaId, false, {
+    modeId,
+    pending: { joiners, entries: entries.filter((e) => here.includes(e.player)), deadline: now + MATCH_READY_TIMEOUT_MS },
+  });
+  room.guard.onRestart(mode.settings, now); // the room's rules (health etc.) are known from the start
+  host.searching = false;
+  console.log(`[matchmaking] ${here.length} players, ${mode.id} on ${arenaId}`);
+  send(host, { t: "match_found", role: "host", code, id: host.id, arenaId, mode: modeId, settings: mode.settings, players: here.length });
+  for (const j of joiners) {
+    j.pendingRoom = code;
+    send(j, { t: "match_found", role: "player", arenaId, mode: modeId, players: here.length });
+  }
+}
+
+// A matchmade room that never got going (the host left or never finished loading): close it and
+// put everyone who was waiting for it back in line, ahead of anyone who started searching since.
+function abandonMatch(code, reason) {
+  const room = rooms.get(code);
+  if (!room || !room.pending) return;
+  const { joiners, entries } = room.pending;
+  room.pending = null;
+  rooms.delete(code);
+  const host = room.members.get(room.hostId);
+  if (host) {
+    host.room = null;
+    send(host, { t: "match_cancelled", reason });
+  }
+  const waiting = joiners.filter((j) => j.readyState === j.OPEN);
+  for (const j of waiting) {
+    j.pendingRoom = null;
+    send(j, { t: "match_cancelled", reason: `${reason} Searching again…`, requeued: true });
+  }
+  runMatchmaker(matchmaker.requeue(entries.filter((e) => waiting.includes(e.player)), room.modeId, Date.now()));
+}
+
+// A player walking away from a match that is waiting for its host.
+function leavePendingMatch(ws) {
+  if (!ws.pendingRoom) return;
+  const room = rooms.get(ws.pendingRoom);
+  ws.pendingRoom = null;
+  if (!room?.pending) return;
+  room.pending.joiners = room.pending.joiners.filter((j) => j !== ws);
+  room.pending.entries = room.pending.entries.filter((e) => e.player !== ws);
+}
+
+setInterval(() => {
+  const now = Date.now();
+  try {
+    runMatchmaker(matchmaker.tick(now));
+    for (const [code, room] of rooms) {
+      if (room.pending && now > room.pending.deadline) abandonMatch(code, "The host took too long to load the match.");
+    }
+  } catch (err) {
+    console.error("[matchmaking] tick failed:", err.message);
+  }
+}, 250).unref();
 
 function handleMessage(ws, raw, isBinary) {
   if (isBinary) return;
@@ -385,19 +528,10 @@ function handleMessage(ws, raw, isBinary) {
 
   switch (msg.t) {
     case "create_room": {
-      if (ws.room || rooms.size >= MAX_ROOMS || !isValidArenaId(msg.arenaId)) return;
-      let code = randomCode();
-      for (let tries = 0; rooms.has(code) && tries < 10; tries++) code = randomCode();
-      if (rooms.has(code)) return;
-      rooms.set(code, {
-        hostId: ws.id,
-        arenaId: msg.arenaId,
-        isPublic: msg.isPublic === true,
-        members: new Map([[ws.id, ws]]),
-        guard: new RoomGuard({ arenaId: msg.arenaId, hostId: ws.id, enforce: ANTICHEAT === "enforce", onReject: noteReject }),
-      });
-      rooms.get(code).guard.addMember(ws.id);
-      ws.room = code;
+      if (ws.room || ws.searching || rooms.size >= MAX_ROOMS || !isValidArenaId(msg.arenaId)) return;
+      const code = newRoomCode();
+      if (!code) return;
+      makeRoom(code, ws, msg.arenaId, msg.isPublic === true);
       send(ws, { t: "room_created", code, id: ws.id });
       return;
     }
@@ -416,7 +550,7 @@ function handleMessage(ws, raw, isBinary) {
     }
 
     case "join_room": {
-      if (ws.room) return;
+      if (ws.room || ws.searching) return; // (someone searching for a match can't also be elsewhere)
       if (!joinAllowed(ws.ip)) {
         send(ws, { t: "join_error", error: "Too many attempts. Wait a minute and try again." });
         return;
@@ -431,21 +565,47 @@ function handleMessage(ws, raw, isBinary) {
         send(ws, { t: "join_error", error: "Room is full (4/4)." });
         return;
       }
-      const peerIds = [...room.members.keys()];
-      room.members.set(ws.id, ws);
-      room.guard.addMember(ws.id);
-      ws.room = msg.code;
-      send(ws, {
-        t: "room_joined",
-        code: msg.code,
-        id: ws.id,
-        arenaId: room.arenaId,
-        hostId: room.hostId,
-        peers: peerIds,
-      });
-      for (const [id, peer] of room.members) {
-        if (id !== ws.id) send(peer, { t: "peer_joined", id: ws.id });
+      admitToRoom(room, msg.code, ws);
+      return;
+    }
+
+    // ---- matchmaking ----
+    case "find_match": {
+      if (ws.room || matchmaker.isSearching(ws)) return;
+      if (!isValidModeId(msg.mode)) {
+        send(ws, { t: "search_error", error: "Unknown game mode." });
+        return;
       }
+      ws.searching = true;
+      runMatchmaker(matchmaker.enqueue(ws, msg.mode, Date.now()));
+      return;
+    }
+
+    case "cancel_search": {
+      runMatchmaker(matchmaker.cancel(ws, Date.now()));
+      leavePendingMatch(ws);
+      ws.searching = false;
+      return;
+    }
+
+    case "vote": {
+      runMatchmaker(matchmaker.vote(ws, msg.arenaId, Date.now()));
+      return;
+    }
+
+    // The host's browser has built the map: let the other players in.
+    case "match_ready": {
+      const room = ws.room && rooms.get(ws.room);
+      if (!room || room.hostId !== ws.id || !room.pending) return;
+      const { joiners } = room.pending;
+      room.pending = null;
+      let admitted = 0;
+      for (const j of joiners) {
+        if (j.readyState !== j.OPEN || j.room || room.members.size >= MAX_PLAYERS) continue;
+        admitToRoom(room, ws.room, j);
+        admitted++;
+      }
+      if (admitted === 0) send(ws, { t: "match_cancelled", reason: "The other players left before the match started." });
       return;
     }
 

@@ -1,0 +1,180 @@
+// Starts the real relay server and plays through matchmaking with simulated players.
+// Run with:  cd server && npm test      (takes about 20 seconds: the server needs a few to start)
+import test, { before, after } from "node:test";
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import net from "node:net";
+import { WebSocket } from "ws";
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let server;
+let port;
+
+before(async () => {
+  port = await new Promise((resolve) => { const s = net.createServer().listen(0, () => { const p = s.address().port; s.close(() => resolve(p)); }); });
+  server = spawn(process.execPath, ["index.js"], {
+    cwd: new URL(".", import.meta.url).pathname,
+    env: { ...process.env, PORT: String(port), MATCH_FILL_SECONDS: "1", MATCH_VOTE_SECONDS: "4", MATCH_READY_TIMEOUT_SECONDS: "2" },
+    stdio: "ignore",
+  });
+  for (let i = 0; i < 80; i++) {
+    try { await fetch(`http://localhost:${port}/`); return; } catch { await sleep(250); }
+  }
+  throw new Error("the server didn't start");
+});
+after(() => server?.kill());
+
+let nextAddress = 1;
+function player(name) {
+  // each simulated player comes from their own address, like real people (the server limits connections per address)
+  const n = nextAddress++;
+  const ws = new WebSocket(`ws://localhost:${port}`, { headers: { Origin: "https://arenaduels.github.io", "X-Forwarded-For": `10.77.${n >> 8}.${n & 255}` } });
+  const p = { name, ws, got: [], id: null };
+  ws.on("message", (raw) => {
+    const m = JSON.parse(raw);
+    p.got.push(m);
+    if (m.t === "match_found" && m.role === "host") p.id = m.id;
+    if (m.t === "room_joined") p.id = m.id;
+  });
+  p.open = new Promise((r) => ws.on("open", r));
+  p.send = (o) => ws.send(JSON.stringify(o));
+  p.of = (t) => p.got.filter((m) => m.t === t);
+  p.last = (t) => p.of(t).at(-1);
+  p.waitFor = async (t, ms = 6000) => {
+    for (let waited = 0; waited < ms; waited += 25) { const m = p.of(t); if (m.length) return m.at(-1); await sleep(25); }
+    throw new Error(`${name} never got "${t}" (got: ${p.got.map((m) => m.t).join(", ")})`);
+  };
+  return p;
+}
+async function search(names, mode) {
+  const ps = names.map(player);
+  for (const p of ps) {
+    await p.open;
+    p.send({ t: "find_match", mode });
+    await sleep(60);        // arrive in a known order
+  }
+  return ps;
+}
+const closeAll = async (ps) => {
+  await Promise.all(ps.map((p) => new Promise((resolve) => {
+    if (p.ws.readyState === WebSocket.CLOSED) return resolve();
+    p.ws.once("close", resolve);
+    p.ws.close();
+  })));
+  await sleep(150);      // let the server notice, so the next test starts from an empty queue
+};
+
+test("four players: search, vote, host loads the map, everyone is let in", async () => {
+  const ps = await search(["p1", "p2", "p3", "p4"], "blitz");
+  await Promise.all(ps.map((p) => p.waitFor("vote_start")));
+  const { options } = ps[0].last("vote_start");
+  assert.equal(options.length, 3);
+
+  // everybody votes for the same map; the live tally reaches everyone
+  for (const p of ps) p.send({ t: "vote", arenaId: options[1] });
+  const found = await Promise.all(ps.map((p) => p.waitFor("match_found")));
+  assert.equal(ps[3].last("vote_update").tally[options[1]], 4);
+  assert.ok(found.every((f) => f.arenaId === options[1] && f.mode === "blitz"));
+
+  // exactly one host: whoever searched first, and they get the room code and the mode's rules
+  assert.deepEqual(found.map((f) => f.role), ["host", "player", "player", "player"]);
+  assert.match(found[0].code, /^\d{6}$/);
+  assert.equal(found[0].settings.timeLimit, 5);
+  assert.equal(found[0].settings.scoreLimit, 10);
+
+  // nobody else is let in until the host says the map is built
+  await sleep(300);
+  assert.equal(ps[1].of("room_joined").length, 0);
+  ps[0].send({ t: "match_ready" });
+  const joined = await Promise.all(ps.slice(1).map((p) => p.waitFor("room_joined")));
+  assert.ok(joined.every((j) => j.code === found[0].code && j.hostId === ps[0].id && j.arenaId === options[1]));
+  assert.equal(ps[0].of("peer_joined").length, 3);
+
+  // and it's a normal room from here: gameplay messages are relayed
+  ps[0].send({ t: "state", x: 0, y: 1.4, z: 0, yaw: 0, pitch: 0, hp: 100, firing: false, tp: 0 });
+  const relayed = await ps[2].waitFor("state");
+  assert.equal(relayed.from, ps[0].id);
+  await closeAll(ps);
+});
+
+test("different game modes are matched separately", async () => {
+  const dm = await search(["a", "b"], "deathmatch");
+  const vamp = await search(["c", "d"], "vampire");
+  await Promise.all([...dm, ...vamp].map((p) => p.waitFor("vote_start", 8000)));
+  assert.equal(dm[0].last("vote_start").mode, "deathmatch");
+  assert.equal(vamp[0].last("vote_start").mode, "vampire");
+  assert.equal(dm[0].last("vote_start").players, 2);
+  await closeAll([...dm, ...vamp]);
+});
+
+test("two players start after the fill window, and nobody voting still picks a map", async () => {
+  const ps = await search(["a", "b"], "titan");
+  const found = await Promise.all(ps.map((p) => p.waitFor("match_found", 12000)));
+  const options = ps[0].last("vote_start").options;
+  assert.ok(options.includes(found[0].arenaId));
+  assert.equal(found[0].settings.startingHealth, 300);
+  await closeAll(ps);
+});
+
+test("a host who never loads the map: the others go back to searching", async () => {
+  const ps = await search(["host", "x", "y"], "marathon");
+  await Promise.all(ps.map((p) => p.waitFor("match_found", 12000)));
+  // the host never sends match_ready; after the timeout (2s here) everyone is told
+  const cancelled = await Promise.all(ps.slice(1).map((p) => p.waitFor("match_cancelled", 6000)));
+  assert.ok(cancelled.every((c) => c.requeued === true && /too long/.test(c.reason)));
+  await ps[0].waitFor("match_cancelled");
+  // x and y are searching again, together
+  await sleep(300);
+  assert.equal(ps[1].last("queue").players, 2);
+  await closeAll(ps);
+});
+
+test("a host who leaves while the map loads: the others are put back in line at once", async () => {
+  const ps = await search(["host", "x", "y"], "glass-cannon");
+  await Promise.all(ps.map((p) => p.waitFor("match_found", 12000)));
+  ps[0].ws.close();
+  const cancelled = await ps[1].waitFor("match_cancelled", 3000);
+  assert.equal(cancelled.requeued, true);
+  assert.match(cancelled.reason, /host left/);
+  await sleep(300);
+  assert.equal(ps[2].last("queue").players, 2);
+  await closeAll(ps);
+});
+
+test("cancelling a search takes you out of the queue", async () => {
+  const ps = await search(["a", "b", "c"], "blitz");
+  await sleep(100);
+  assert.equal(ps[0].last("queue").players, 3);
+  ps[2].send({ t: "cancel_search" });
+  await sleep(200);
+  assert.equal(ps[0].last("queue").players, 2);
+  await closeAll(ps);
+});
+
+test("bad requests do nothing: unknown mode, searching twice, voting when not voting", async () => {
+  const [p] = [player("p")];
+  await p.open;
+  p.send({ t: "find_match", mode: "not-a-mode" });
+  assert.match((await p.waitFor("search_error")).error, /Unknown/);
+  p.send({ t: "vote", arenaId: "classic" });         // not in a vote: ignored
+  p.send({ t: "find_match", mode: "blitz" });
+  await p.waitFor("queue");
+  p.send({ t: "find_match", mode: "blitz" });         // already searching: ignored
+  p.send({ t: "find_match", mode: "vampire" });
+  await sleep(300);
+  assert.equal(p.of("queue").length, 1);
+  await closeAll([p]);
+});
+
+test("a player who is searching isn't thrown out as idle, and nothing they send can start a game", async () => {
+  const p = player("p");
+  await p.open;
+  p.send({ t: "find_match", mode: "blitz" });
+  await p.waitFor("queue");
+  p.send({ t: "create_room", arenaId: "classic", isPublic: true });   // ignored: they aren't in a room
+  p.send({ t: "match_ready" });                                       // ignored: not a host
+  await sleep(300);
+  assert.equal(p.of("room_created").length, 0);
+  assert.equal(p.ws.readyState, WebSocket.OPEN);
+  await closeAll([p]);
+});

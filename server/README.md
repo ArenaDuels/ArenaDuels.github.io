@@ -129,6 +129,33 @@ Once a minute the server prints a line like
 The browser and the server must be deployed together: an older cached copy of the
 game doesn't understand the server's health and respawn messages.
 
+## Matchmaking (matchmaker.js, modes.js)
+
+**Find Match** on the main menu: pick a game mode, search, vote on the map, play.
+
+- **Game modes** (`js/modes.js`): Deathmatch, Blitz, Vampire, Glass Cannon, Titan and Marathon.
+  Each is a preset of the match rules the host of a private game can already change (time limit,
+  kills to win, health, health steal, respawn delay). To add or tweak one, edit the list in
+  `modes.js` and copy it to `js/modes.js` / `server/modes.js` (identical copies; a test checks).
+- **No skill-based matchmaking.** Everyone searching the same mode is in one queue, and the queue
+  knows nothing about anyone's kills, wins, rank or account. First come, first matched.
+- **Forming a match:** with two players waiting, the queue holds for 10 seconds so more can join
+  (up to four). A fourth player starts it at once. Searches that find nobody for 10 minutes end.
+- **Map vote:** three random maps are offered for 15 seconds, with live vote counts. The most
+  votes wins; ties and empty ballots are settled at random. It ends early once everyone has voted.
+- **Starting the game:** the server makes a private room. The player who has waited longest is the
+  host (their browser runs the clock and scores, as in any match). The others are let in only
+  once the host's browser has finished building the map, so nobody joins a half-loaded game. If
+  the host never gets ready (30 seconds) or leaves, everyone else is put back in line, ahead of
+  anyone who started searching since. If a player leaves mid-vote and fewer than two remain, the
+  vote is called off and the rest go back to searching.
+
+Settings (all optional): `MATCH_FILL_SECONDS` (default 10), `MATCH_VOTE_SECONDS` (default 15),
+`MATCH_READY_TIMEOUT_SECONDS` (default 30).
+
+Rooms are for up to four players, so matches are 2 to 4 people. Games already running don't take
+new players from the queue.
+
 ## Account names (names.js, nameTickets.js)
 
 Every name the game hands out is **Adjective + Noun + two digits**, like `SwiftViper42`
