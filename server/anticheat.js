@@ -491,6 +491,7 @@ export class RoomGuard {
         a = new Actor(b.id, true, now);
         this.actors.set(b.id, a);
       }
+      if (b.team === 0 || b.team === 1) this.teams.set(b.id, b.team); // a player's beam passes through a teammate bot
       a.push({ t: now, x: b.x, y: b.y, z: b.z, yaw: b.yaw, pitch: b.pitch ?? 0, firing: b.firing === true, hp: b.hp });
       if (b.hp > 0) {
         if (a.wasDead) {

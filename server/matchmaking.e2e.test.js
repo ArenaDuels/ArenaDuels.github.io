@@ -122,6 +122,58 @@ test("eight players: TDM search, vote, host loads the map, everyone is let in", 
   await closeAll(ps);
 });
 
+test("custom match: Free For All holds five, a locked lobby hides its code, private is never listed", async () => {
+  const host = player("host");
+  await host.open;
+  host.send({ t: "create_room", arenaId: "classic", isPublic: true, requireCode: true, modeId: "ffa", settings: { timeLimit: 5, scoreLimit: 10, startingHealth: 100, healthSteal: 0, respawnDelay: 2 } });
+  const created = await host.waitFor("room_created");
+  assert.equal(created.mode, "ffa");
+
+  const hidden = player("hidden");
+  await hidden.open;
+  hidden.send({ t: "create_room", arenaId: "neon", isPublic: false, modeId: "1v1" });
+  await hidden.waitFor("room_created");
+
+  const watcher = player("watcher");
+  await watcher.open;
+  watcher.send({ t: "list_lobbies" });
+  const list = (await watcher.waitFor("lobby_list")).lobbies;
+  assert.equal(list.length, 1, "the private match isn't listed");
+  assert.equal(list[0].locked, true);
+  assert.equal(list[0].code, null, "a locked lobby's code isn't shared");
+  assert.equal(list[0].mode, "ffa");
+  assert.equal(list[0].maxPlayers, 5);
+
+  const joiners = [];
+  for (let i = 0; i < 4; i++) { const p = player(`j${i}`); await p.open; p.send({ t: "join_room", code: created.code }); await p.waitFor("room_joined"); joiners.push(p); }
+  assert.equal(joiners[0].last("room_joined").mode, "ffa");
+  const sixth = player("sixth");
+  await sixth.open;
+  sixth.send({ t: "join_room", code: created.code });
+  assert.match((await sixth.waitFor("join_error")).error, /full/i);
+  await closeAll([host, hidden, watcher, sixth, ...joiners]);
+});
+
+test("custom match: Team Deathmatch rooms balance late joiners across teams", async () => {
+  const host = player("thost");
+  await host.open;
+  host.send({ t: "create_room", arenaId: "classic", isPublic: true, requireCode: false, modeId: "tdm" });
+  const created = await host.waitFor("room_created");
+  assert.deepEqual(Object.values(created.teams), [0]);
+  const joiners = [];
+  for (let i = 0; i < 3; i++) { const p = player(`t${i}`); await p.open; p.send({ t: "join_room", code: created.code }); await p.waitFor("room_joined"); joiners.push(p); }
+  const teams = joiners.at(-1).last("room_joined").teams;
+  assert.equal(Object.values(teams).filter((x) => x === 0).length, 2);
+  assert.equal(Object.values(teams).filter((x) => x === 1).length, 2);
+  const watcher = player("w2");
+  await watcher.open;
+  watcher.send({ t: "list_lobbies" });
+  const lobby = (await watcher.waitFor("lobby_list")).lobbies[0];
+  assert.equal(lobby.locked, false);
+  assert.equal(lobby.code, created.code);
+  await closeAll([host, watcher, ...joiners]);
+});
+
 test("different game modes are matched separately", async () => {
   const dm = await search(["a", "b"], "1v1");
   const vamp = await search(["c", "d"], "tdm");

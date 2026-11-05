@@ -133,7 +133,7 @@ game doesn't understand the server's health and respawn messages.
 
 **Find Match** on the main menu: pick a game mode, search, vote on the map, play.
 
-- **Game modes** (`js/modes.js`): Deathmatch, Blitz, Vampire, Glass Cannon, Titan and Marathon.
+- **Game modes** (`js/modes.js`): 1v1, Free For All (2 to 5 players) and Team Deathmatch.
   Each is a preset of the match rules the host of a private game can already change (time limit,
   kills to win, health, health steal, respawn delay). To add or tweak one, edit the list in
   `modes.js` and copy it to `js/modes.js` / `server/modes.js` (identical copies; a test checks).
@@ -153,7 +153,7 @@ game doesn't understand the server's health and respawn messages.
 Settings (all optional): `MATCH_FILL_SECONDS` (default 10), `MATCH_VOTE_SECONDS` (default 15),
 `MATCH_READY_TIMEOUT_SECONDS` (default 30).
 
-Rooms are for up to four players, so matches are 2 to 4 people. Games already running don't take
+Each mode has its own player cap (1v1 two, Free For All five, Team Deathmatch eight). Games already running don't take
 new players from the queue.
 
 ## Account names (names.js, nameTickets.js)
@@ -227,3 +227,15 @@ There is no email-based password recovery in this version. If a password is lost
 - Add a Render environment variable named `TURNSTILE_SECRET_KEY` with the widget's **secret key**. Never commit the secret key to GitHub or put it in browser code.
 - The server validates every registration token against Cloudflare Siteverify and checks that the returned hostname is `arenaduels.github.io`. Login and guest play do not require a challenge.
 - If you recreate the Turnstile widget or change hostnames, update the site key and server-side hostname check accordingly.
+
+
+## Custom matches
+
+**Custom Match** on the main menu is one settings screen: game mode, rules, bots, public or private,
+whether a code is needed, and the map. **Create Match** sends all of it in one `create_room` message
+and the host is in the game straight away.
+
+- Public matches are listed in **Browse Public Lobbies**. If a code is required, the list shows a
+  lock and does not include the code.
+- Private matches are never listed and always need the code.
+- In Team Deathmatch you choose the bots' team (Balanced, Blue or Red; the host is always Blue). Bots never fight their own team.

@@ -45,6 +45,18 @@ test("production queues cap 1v1 at two and TDM at eight", () => {
   assert.equal(out.find((o) => o.msg?.t === "vote_start")?.msg.players, 8);
 });
 
+test("Free For All fills at five players and never takes a sixth", () => {
+  const mm = new Matchmaker({ modeIds: MODE_IDS, arenaIds: ARENAS, random: () => 0 });
+  assert.equal(getMode("ffa").maxPlayers, 5);
+  assert.equal(getMode("ffa").teamMode, undefined);
+  const out = [];
+  for (let i = 0; i < 6; i++) out.push(...mm.enqueue(player(`f${i}`), "ffa", 1000));
+  const starts = out.filter((o) => o.msg?.t === "vote_start");
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0].msg.players, 5);
+  assert.equal(mm.stats().queued.ffa, 1);
+});
+
 // ------------------------------------------------------------------------- forming a group
 
 test("one player on their own just waits", () => {
@@ -322,7 +334,7 @@ test("someone disconnecting while searching, or never searching, is harmless", (
 // ------------------------------------------------------------------------------ the modes
 
 test("every game mode is well formed and its rules are inside the game's limits", () => {
-  assert.equal(GAME_MODES.length, 2);
+  assert.equal(GAME_MODES.length, 3);
   assert.equal(new Set(MODE_IDS).size, MODE_IDS.length, "ids are unique");
   const limits = { timeLimit: [0, 60], scoreLimit: [0, 200], startingHealth: [10, 500], healthSteal: [0, 100], respawnDelay: [0, 10] };
   for (const m of GAME_MODES) {

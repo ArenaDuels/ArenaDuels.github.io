@@ -409,14 +409,26 @@ function makeRoom(code, host, arenaId, isPublic, extra = {}) {
   return room;
 }
 
+// Team modes: a late joiner goes to whichever team has fewer players right now.
+function assignTeam(room, ws) {
+  if (!room.modeId || !getMode(room.modeId).teamMode || room.teams[ws.id] === 0 || room.teams[ws.id] === 1) return;
+  const counts = [0, 0];
+  for (const id of room.members.keys()) { const t = room.teams[id]; if (t === 0 || t === 1) counts[t]++; }
+  for (const [id, t] of room.guard.teams) if (isBotId(id) && (t === 0 || t === 1)) counts[t]++; // the host's bots count too
+  const team = counts[1] < counts[0] ? 1 : 0;
+  room.teams[ws.id] = team;
+  room.guard.teams.set(ws.id, team);
+}
+
 function admitToRoom(room, code, ws) {
+  assignTeam(room, ws);
   const peerIds = [...room.members.keys()];
   room.members.set(ws.id, ws);
   room.guard.addMember(ws.id);
   ws.room = code;
   ws.searching = false;
   ws.pendingRoom = null;
-  send(ws, { t: "room_joined", code, id: ws.id, arenaId: room.arenaId, hostId: room.hostId, peers: peerIds, teams: room.teams });
+  send(ws, { t: "room_joined", code, id: ws.id, arenaId: room.arenaId, hostId: room.hostId, peers: peerIds, teams: room.teams, mode: room.modeId ?? null });
   for (const [id, peer] of room.members) {
     if (id !== ws.id) send(peer, { t: "peer_joined", id: ws.id, team: room.teams[ws.id] ?? null });
   }
@@ -583,8 +595,19 @@ async function handleMessage(ws, raw, isBinary) {
       if (ws.room || ws.searching || rooms.size >= MAX_ROOMS || !isValidArenaId(msg.arenaId)) return;
       const code = newRoomCode();
       if (!code) return;
-      makeRoom(code, ws, msg.arenaId, msg.isPublic === true);
-      send(ws, { t: "room_created", code, id: ws.id });
+      // Custom match: the host chose the mode, rules, and who can get in before creating it.
+      const mode = isValidModeId(msg.modeId) ? getMode(msg.modeId) : null;
+      const isPublic = msg.isPublic === true;
+      const requireCode = !isPublic || msg.requireCode === true; // a match that isn't listed can only be reached by its code
+      const room = makeRoom(code, ws, msg.arenaId, isPublic, {
+        modeId: mode ? mode.id : null,
+        maxPlayers: mode ? mode.maxPlayers : MAX_PLAYERS,
+        requireCode,
+        teams: mode?.teamMode ? { [ws.id]: 0 } : {},
+      });
+      const rules = cleanRelay({ t: "restart", settings: msg.settings });
+      if (rules) room.guard.onRestart(rules.settings, Date.now());
+      send(ws, { t: "room_created", code, id: ws.id, teams: room.teams, mode: room.modeId });
       return;
     }
 
@@ -593,7 +616,7 @@ async function handleMessage(ws, raw, isBinary) {
       const lobbies = [];
       for (const [code, room] of rooms) {
         if (room.isPublic && room.members.size < room.maxPlayers) {
-          lobbies.push({ code, arenaId: room.arenaId, playerCount: room.members.size, maxPlayers: room.maxPlayers });
+          lobbies.push({ code: room.requireCode ? null : code, locked: !!room.requireCode, mode: room.modeId ?? null, arenaId: room.arenaId, playerCount: room.members.size, maxPlayers: room.maxPlayers });
           if (lobbies.length >= 50) break;
         }
       }

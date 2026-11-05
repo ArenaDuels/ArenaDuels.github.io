@@ -21,7 +21,7 @@
 export const MATCHMAKING = Object.freeze({
   MIN_PLAYERS: 2,
   MAX_PLAYERS: 4,
-  MODE_MAX_PLAYERS: { "1v1": 2, tdm: 8 },
+  MODE_MAX_PLAYERS: { "1v1": 2, ffa: 5, tdm: 8 },
   FILL_MS: 10_000,         // with 2+ waiting, wait this long for more before starting
   VOTE_MS: 15_000,         // time to vote on the map
   VOTE_LOCK_MS: 1_500,     // once everyone has voted, keep the result on screen this long
