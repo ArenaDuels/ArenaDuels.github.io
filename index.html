@@ -253,7 +253,15 @@
           <div class="setting-label"><span>Bot skill</span><span id="bot-skill-value" class="setting-value">Normal</span></div>
           <input id="bot-skill-slider" type="range" min="1" max="3" step="1" value="2" class="slider">
         </div>
-          <p id="bot-note" class="status-text hidden">Bots aren't available in Team Deathmatch.</p>
+
+          <div id="bot-team-row" class="hidden">
+            <p class="field-label">Bot team</p>
+            <div class="visibility-toggle" id="bot-team-toggle">
+              <button type="button" class="bot-team-option selected" data-team="auto">Balanced</button>
+              <button type="button" class="bot-team-option" data-team="0">Blue (yours)</button>
+              <button type="button" class="bot-team-option" data-team="1">Red</button>
+            </div>
+          </div>
 
           <p class="field-label">Who can join</p>
           <div class="visibility-toggle" id="visibility-toggle">

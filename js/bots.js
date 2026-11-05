@@ -47,6 +47,7 @@ class Bot {
   constructor(id, name, skill) {
     this.id = id;
     this.name = name;
+    this.team = null; // 0 or 1 in Team Deathmatch, otherwise null
     this.s = BOT_SKILLS[skill] || BOT_SKILLS[2];
 
     this.pos = new THREE.Vector3();
@@ -92,6 +93,7 @@ class Bot {
     return {
       id: this.id,
       name: this.name,
+      team: this.team,
       x: this.pos.x,
       y: this.pos.y,
       z: this.pos.z,
@@ -239,7 +241,7 @@ class Bot {
     let bestD = Infinity;
     let bestSeen = false;
     for (const e of mgr.enemies) {
-      if (e.id === this.id) continue;
+      if (e.id === this.id || mgr.sameTeam(e.id, this.id)) continue;
       const d = this.pos.distanceTo(e.pos);
       const seen = d < 60 && !mgr.segmentBlocked(eye, e.pos);
       if ((seen && !bestSeen) || (seen === bestSeen && d < bestD)) {
@@ -442,7 +444,13 @@ export class BotManager {
     if (b) b.kills++;
   }
 
-  spawnBots(count, skill) {
+  // Team Deathmatch: teammates are never targeted and never take damage from each other.
+  sameTeam(a, b) {
+    const ta = this.ctx.getTeam?.(a);
+    return (ta === 0 || ta === 1) && ta === this.ctx.getTeam?.(b);
+  }
+
+  spawnBots(count, skill, teamFor = null) {
     this.ctx.scene.updateMatrixWorld(true); // arena was just built; make sure rays see it
     const pool = NAME_WORDS.filter((w) => w.length <= 6);
     for (let i = pool.length - 1; i > 0; i--) {
@@ -453,6 +461,8 @@ export class BotManager {
       const id = `bot-${i + 1}`;
       const name = `Bot ${pool[i % pool.length]}`;
       const bot = new Bot(id, name, skill);
+      const team = teamFor ? teamFor(id) : null;
+      bot.team = team === 0 || team === 1 ? team : null;
       this.bots.set(id, bot);
       this.ctx.addPlayer(id, name);
       this.refreshEnemies();
@@ -518,7 +528,7 @@ export class BotManager {
     this.ray.far = 80;
 
     const objs = [];
-    for (const e of this.enemies) if (e.id !== bot.id) objs.push(e.mesh);
+    for (const e of this.enemies) if (e.id !== bot.id && !this.sameTeam(e.id, bot.id)) objs.push(e.mesh);
     for (const o of this.ctx.getSolids()) objs.push(o);
 
     const hit = this.ray.intersectObjects(objs, false)[0];
@@ -535,6 +545,7 @@ export class BotManager {
   // Single entry point for "something took damage" — routes to a bot, the
   // host's own player, or a remote human over the network.
   damage(targetId, attackerId, amount) {
+    if (this.sameTeam(targetId, attackerId)) return; // no friendly fire
     const bot = this.bots.get(targetId);
     if (bot) {
       this.damageBot(bot, attackerId, amount);

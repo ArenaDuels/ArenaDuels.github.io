@@ -183,7 +183,7 @@ export function cleanRelay(msg) {
       for (const b of msg.bots) {
         const body = cleanBody(b);
         if (!body || !isBotId(b.id)) return null;
-        bots.push({ id: b.id, name: cleanName(b.name, "Bot"), ...body });
+        bots.push({ id: b.id, name: cleanName(b.name, "Bot"), team: b.team === 0 || b.team === 1 ? b.team : null, ...body });
       }
       return { t: "bots", bots };
     }

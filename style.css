@@ -1498,3 +1498,18 @@ html, body {
   .custom-body { grid-template-columns: 1fr; }
   .custom-modes { grid-template-columns: 1fr; }
 }
+
+.bot-team-option {
+  flex: 1;
+  padding: 10px 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.bot-team-option.selected { background: var(--brand); color: #071433; }

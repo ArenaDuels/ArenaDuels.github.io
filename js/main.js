@@ -437,6 +437,7 @@ function handleData(rawMsg, fromId) {
     // Host-simulated bots: show them like any other remote player.
     for (const b of msg.bots) {
       if (!players.has(b.id) && players.size >= MAX_REMOTE_PLAYERS) break;
+      if (b.team === 0 || b.team === 1) playerTeams[b.id] = b.team;
       const rp = players.get(b.id) || addOrUpdatePlayer(b.id, b.name);
       rp.applyNetState(b);
     }
@@ -575,7 +576,7 @@ document.getElementById("btn-customization-close").addEventListener("click", clo
 /* ---- CUSTOM MATCH ----
    Everything is chosen on this screen (mode, rules, bots, who can join, map). "Create Match"
    then makes the room and puts you straight in; nothing can be changed after that. */
-const matchSettings = { botCount: 0, botSkill: 2, ...DEFAULT_MATCH_RULES };
+const matchSettings = { botCount: 0, botSkill: 2, botTeam: "auto", ...DEFAULT_MATCH_RULES };
 const custom = { modeId: "1v1", isPublic: false, requireCode: true, creating: false };
 const botCountSlider = document.getElementById("bot-count-slider");
 const botCountValue = document.getElementById("bot-count-value");
@@ -621,16 +622,17 @@ function selectCustomMode(modeId) {
   const mode = getMode(modeId);
   Object.assign(matchSettings, mode.settings);
   paintRuleSliders();
-  const noBots = !!mode.teamMode;
-  botCountSlider.disabled = botSkillSlider.disabled = noBots;
-  document.getElementById("bot-note").classList.toggle("hidden", !noBots);
-  if (noBots) {
-    matchSettings.botCount = 0;
-    botCountSlider.value = 0;
-    botCountValue.textContent = "Off";
-  }
   for (const c of customModeGrid.children) c.classList.toggle("selected", c.dataset.id === modeId);
+  document.getElementById("bot-team-row").classList.toggle("hidden", !mode.teamMode);
 }
+
+// Team Deathmatch: which team the bots play on (you are always Blue).
+document.querySelectorAll(".bot-team-option").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    matchSettings.botTeam = btn.dataset.team === "auto" ? "auto" : parseInt(btn.dataset.team, 10);
+    document.querySelectorAll(".bot-team-option").forEach((b) => b.classList.toggle("selected", b === btn));
+  });
+});
 for (const mode of GAME_MODES) {
   const card = document.createElement("button");
   card.type = "button";
@@ -750,11 +752,24 @@ function startBots() {
       net.broadcast({ t: "hit", targetId, attackerId, damage: amount }),
     // A bot died — tell everyone so the scoreboard and kill feed stay in step.
     onBotKilled: (attackerId, victimId) => announceKill(attackerId, victimId),
+    getTeam: (id) => playerTeams[id] ?? null,
     getMaxHp: () => GAME.maxHp,
     getHealthSteal: () => match.settings.healthSteal,
     getRespawnDelay: () => match.settings.respawnDelay,
   });
-  botManager.spawnBots(matchSettings.botCount, matchSettings.botSkill);
+  // Team Deathmatch: each bot joins the team chosen in Custom Match, or whichever has fewer players on Balanced.
+  const teamFor = currentModeId === "tdm" ? (id) => {
+    if (matchSettings.botTeam === 0 || matchSettings.botTeam === 1) {
+      playerTeams[id] = matchSettings.botTeam;
+      return matchSettings.botTeam;
+    }
+    const n = [0, 0];
+    for (const t of Object.values(playerTeams)) if (t === 0 || t === 1) n[t]++;
+    const team = n[1] < n[0] ? 1 : 0;
+    playerTeams[id] = team;
+    return team;
+  } : null;
+  botManager.spawnBots(matchSettings.botCount, matchSettings.botSkill, teamFor);
 }
 
 /* ---- JOIN FLOW (shared by manual code entry and the lobby browser) ---- */
