@@ -128,7 +128,6 @@ function leaveMatch() {
   net.destroy();
   botManager?.dispose();
   botManager = null;
-  pendingHostStart = null;
   players.forEach((rp) => rp.dispose());
   players.clear();
   resetMatchUi();
@@ -209,8 +208,7 @@ function lockPointer() {
 ========================================================= */
 const screens = {
   menu: document.getElementById("screen-menu"),
-  hostWait: document.getElementById("screen-host-wait"),
-  joining: document.getElementById("screen-joining"),
+  custom: document.getElementById("screen-custom"),
   browse: document.getElementById("screen-browse"),
   matchmaking: document.getElementById("screen-matchmaking"),
 };
@@ -308,18 +306,6 @@ arenaGrid.firstElementChild.classList.add("selected");
 renderArenaDetail(ARENA_LIST[0]);
 
 /* =========================================================
-   PUBLIC / PRIVATE TOGGLE
-========================================================= */
-let isPublicLobby = false;
-document.querySelectorAll(".visibility-option").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".visibility-option").forEach((b) => b.classList.remove("selected"));
-    btn.classList.add("selected");
-    isPublicLobby = btn.dataset.public === "true";
-  });
-});
-
-/* =========================================================
    COLOR / SPAWN ASSIGNMENT — deterministic from peer id.
 ========================================================= */
 const PALETTE_NONHOST = [0xff4d6a, 0x39ff88, 0xffd166, 0x9b5de5, 0x4cc9f0, 0xff8c42];
@@ -352,7 +338,6 @@ const myTeam = () => playerTeams[myId] ?? null;
 net.onData = (msg, fromId) => handleData(msg, fromId);
 
 let matchStarting = false;
-let pendingHostStart = null; // { code } while a private host is on the settings screen
 let botManager = null;       // host only
 
 net.onPeerConnected = async (id, team = null) => {
@@ -363,10 +348,7 @@ net.onPeerConnected = async (id, team = null) => {
   // with an interleaved double-build (this was the missing-walls bug).
   // matchStarting closes that race by being set synchronously, before any
   // await, so the second caller sees it immediately.
-  if (pendingHostStart) {
-    // Host was still on the settings screen — start with whatever is set now.
-    await startPendingHost();
-  } else if (!matchActive && !matchStarting) {
+  if (!matchActive && !matchStarting) {
     matchStarting = true;
     await beginMatch(selectedArenaId);
   }
@@ -469,56 +451,8 @@ function handleServerLost() {
   net.destroy();
   botManager?.dispose();
   botManager = null;
-  pendingHostStart = null;
   resetMatchUi();
   showScreen("menu");
-}
-
-/* ---- HOST FLOW ---- */
-async function attemptHost() {
-  document.getElementById("btn-retry-host").classList.add("hidden");
-  document.getElementById("btn-start-host").classList.add("hidden");
-  document.getElementById("host-code-display").textContent = "------";
-  document.getElementById("host-status").textContent = "Getting a code...";
-  pendingHostStart = null;
-
-  // Render's free tier can take 30-60s to wake up from sleep on the first
-  // connection in a while — if it's taking more than a few seconds, let
-  // the player know what's actually happening instead of leaving them
-  // staring at a generic loading message.
-  const wakeupTimer = setTimeout(() => {
-    document.getElementById("host-status").textContent =
-      "Server is waking up — this can take up to a minute on the first connection...";
-  }, 3000);
-
-  try {
-    const code = await net.host(selectedArenaId, isPublicLobby);
-    clearTimeout(wakeupTimer);
-    hostId = net.hostId;
-    myId = net.myId;
-    myName = getPlayerName();
-
-    if (isPublicLobby) {
-      // Public lobbies drop straight into the arena — the room code follows
-      // as an in-game banner until someone joins.
-      matchStarting = true;
-      match.scores.clear();
-      applyMatchSettings(DEFAULT_MATCH_RULES);
-      await beginMatch(selectedArenaId);
-      showRoomCodeBanner(code);
-    } else {
-      // Private matches stop at the settings screen first (bots live there).
-      pendingHostStart = { code };
-      document.getElementById("host-code-display").textContent = code;
-      document.getElementById("host-status").textContent =
-        "Open Match Settings to add bots, then start. Friends can join with this code.";
-      document.getElementById("btn-start-host").classList.remove("hidden");
-    }
-  } catch (err) {
-    clearTimeout(wakeupTimer);
-    document.getElementById("host-status").textContent = "Failed to host match.";
-    document.getElementById("btn-retry-host").classList.remove("hidden");
-  }
 }
 
 const roomCodeBanner = document.getElementById("room-code-banner");
@@ -529,21 +463,6 @@ function showRoomCodeBanner(code) {
 function hideRoomCodeBanner() {
   roomCodeBanner.classList.add("hidden");
 }
-
-document.getElementById("btn-host").addEventListener("click", () => {
-  showScreen("hostWait");
-  attemptHost();
-});
-document.getElementById("btn-retry-host").addEventListener("click", () => {
-  net.destroy();
-  attemptHost();
-});
-document.getElementById("btn-cancel-host").addEventListener("click", () => {
-  net.destroy();
-  pendingHostStart = null;
-  document.getElementById("btn-start-host").classList.add("hidden");
-  showScreen("menu");
-});
 
 /* ---- PLAYER CUSTOMIZATION ---- */
 let myLook = loadLook();
@@ -653,9 +572,11 @@ buildLookPickers();
 document.getElementById("btn-customization-open").addEventListener("click", openCustomization);
 document.getElementById("btn-customization-close").addEventListener("click", closeCustomization);
 
-/* ---- PRIVATE MATCH SETTINGS (bots) ---- */
+/* ---- CUSTOM MATCH ----
+   Everything is chosen on this screen (mode, rules, bots, who can join, map). "Create Match"
+   then makes the room and puts you straight in; nothing can be changed after that. */
 const matchSettings = { botCount: 0, botSkill: 2, ...DEFAULT_MATCH_RULES };
-const matchSettingsModal = document.getElementById("match-settings-modal");
+const custom = { modeId: "1v1", isPublic: false, requireCode: true, creating: false };
 const botCountSlider = document.getElementById("bot-count-slider");
 const botCountValue = document.getElementById("bot-count-value");
 const botSkillSlider = document.getElementById("bot-skill-slider");
@@ -678,39 +599,133 @@ const RULE_SLIDERS = [
   ["health-steal", "healthSteal", (v) => v],
   ["respawn-delay", "respawnDelay", (v) => (v === 0 ? "Instant" : v)],
 ];
+function paintRuleSliders() {
+  for (const [base, key, fmt] of RULE_SLIDERS) {
+    document.getElementById(`${base}-slider`).value = matchSettings[key];
+    document.getElementById(`${base}-value`).textContent = fmt(matchSettings[key]);
+  }
+}
 for (const [base, key, fmt] of RULE_SLIDERS) {
   const slider = document.getElementById(`${base}-slider`);
   const label = document.getElementById(`${base}-value`);
-  slider.value = matchSettings[key];
-  label.textContent = fmt(matchSettings[key]);
   slider.addEventListener("input", () => {
     matchSettings[key] = parseFloat(slider.value);
     label.textContent = fmt(matchSettings[key]);
   });
 }
 
-document.getElementById("btn-match-settings-open").addEventListener("click", () => {
-  matchSettingsModal.classList.remove("hidden");
-});
-document.getElementById("btn-match-settings-close").addEventListener("click", () => {
-  matchSettingsModal.classList.add("hidden");
-  startPendingHost();
-});
-document.getElementById("btn-start-host").addEventListener("click", startPendingHost);
-
-async function startPendingHost() {
-  if (!pendingHostStart || matchStarting || matchActive) return;
-  const { code } = pendingHostStart;
-  pendingHostStart = null;
-  matchSettingsModal.classList.add("hidden");
-  document.getElementById("btn-start-host").classList.add("hidden");
-  matchStarting = true;
-  match.scores.clear();
-  applyMatchSettings(matchSettings);
-  await beginMatch(selectedArenaId);
-  startBots();
-  showRoomCodeBanner(code);
+// Game mode cards. Picking a mode loads its preset rules into the sliders; you can still change them.
+const customModeGrid = document.getElementById("custom-mode-grid");
+function selectCustomMode(modeId) {
+  custom.modeId = modeId;
+  const mode = getMode(modeId);
+  Object.assign(matchSettings, mode.settings);
+  paintRuleSliders();
+  const noBots = !!mode.teamMode;
+  botCountSlider.disabled = botSkillSlider.disabled = noBots;
+  document.getElementById("bot-note").classList.toggle("hidden", !noBots);
+  if (noBots) {
+    matchSettings.botCount = 0;
+    botCountSlider.value = 0;
+    botCountValue.textContent = "Off";
+  }
+  for (const c of customModeGrid.children) c.classList.toggle("selected", c.dataset.id === modeId);
 }
+for (const mode of GAME_MODES) {
+  const card = document.createElement("button");
+  card.type = "button";
+  card.className = "mode-card";
+  card.dataset.id = mode.id;
+  const name = document.createElement("span");
+  name.className = "mode-name";
+  name.textContent = mode.name;
+  const tag = document.createElement("span");
+  tag.className = "mode-tagline";
+  tag.textContent = mode.tagline;
+  card.append(name, tag);
+  card.addEventListener("click", () => selectCustomMode(mode.id));
+  customModeGrid.appendChild(card);
+}
+
+// Public (listed) or private (not listed); a code can be required for either.
+const requireCodeBox = document.getElementById("require-code");
+const codeHint = document.getElementById("code-hint");
+function paintVisibility() {
+  document.querySelectorAll(".visibility-option").forEach((b) => b.classList.toggle("selected", (b.dataset.public === "true") === custom.isPublic));
+  requireCodeBox.checked = custom.requireCode;
+  requireCodeBox.disabled = !custom.isPublic;
+  codeHint.textContent = !custom.isPublic
+    ? "Private matches can only be joined with their code."
+    : custom.requireCode
+      ? "Shown in the lobby list with a lock. Players need your code to get in."
+      : "Anyone can join from the lobby list.";
+}
+document.querySelectorAll(".visibility-option").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    custom.isPublic = btn.dataset.public === "true";
+    custom.requireCode = custom.isPublic ? false : true;
+    paintVisibility();
+  });
+});
+requireCodeBox.addEventListener("change", () => {
+  custom.requireCode = custom.isPublic ? requireCodeBox.checked : true;
+  paintVisibility();
+});
+
+selectCustomMode(custom.modeId);
+paintVisibility();
+
+const customStatus = document.getElementById("custom-status");
+const createBtn = document.getElementById("btn-custom-create");
+
+document.getElementById("btn-custom").addEventListener("click", () => {
+  customStatus.textContent = "";
+  showScreen("custom");
+});
+document.getElementById("btn-custom-back").addEventListener("click", () => {
+  net.destroy();
+  custom.creating = false;
+  createBtn.disabled = false;
+  showScreen("menu");
+});
+
+async function createCustomMatch() {
+  if (custom.creating || matchActive || matchStarting) return;
+  custom.creating = true;
+  createBtn.disabled = true;
+  customStatus.textContent = "Creating your match...";
+  const wakeupTimer = setTimeout(() => {
+    customStatus.textContent = "Server is waking up. This can take up to a minute on the first connection...";
+  }, 3000);
+  const arenaId = selectedArenaId;
+  const modeId = custom.modeId;
+  const rules = sanitizeSettings(matchSettings);
+  try {
+    const code = await net.host(arenaId, { isPublic: custom.isPublic, requireCode: custom.requireCode, modeId, settings: rules });
+    clearTimeout(wakeupTimer);
+    hostId = net.hostId;
+    myId = net.myId;
+    myName = getPlayerName();
+    playerTeams = { ...(net.roomTeams || {}) };
+    matchStarting = true;
+    match.scores.clear();
+    applyMatchSettings(rules, modeId);
+    await beginMatch(arenaId);
+    startBots();
+    showRoomCodeBanner(code);
+    custom.creating = false;
+    createBtn.disabled = false;
+    customStatus.textContent = "";
+  } catch (err) {
+    clearTimeout(wakeupTimer);
+    net.destroy();
+    matchStarting = false;
+    custom.creating = false;
+    createBtn.disabled = false;
+    customStatus.textContent = "Couldn't create the match. Try again.";
+  }
+}
+createBtn.addEventListener("click", createCustomMatch);
 
 function startBots() {
   botManager?.dispose();
@@ -748,7 +763,7 @@ async function doJoin(code, statusEl) {
 
   const wakeupTimer = setTimeout(() => {
     if (statusEl) {
-      statusEl.textContent = "Server is waking up — this can take up to a minute on the first connection...";
+      statusEl.textContent = "Server is waking up. This can take up to a minute on the first connection...";
     }
   }, 3000);
 
@@ -760,38 +775,24 @@ async function doJoin(code, statusEl) {
     myName = getPlayerName();
 
     playerTeams = result.teams || {};
-    currentModeId = "1v1";
+    currentModeId = result.mode || "1v1";
     match.scores.clear();
-    applyMatchSettings(DEFAULT_MATCH_RULES, "1v1"); // private rooms use the standard rules
+    applyMatchSettings(DEFAULT_MATCH_RULES, currentModeId); // replaced by the host's rules a moment later ("sync")
     if (!isValidArenaId(result.arenaId)) throw new Error("Bad arena");
     await beginMatch(result.arenaId);
     for (const id of result.peers) addOrUpdatePlayer(id, "Player");
     net.broadcast({ t: "hello", name: myName, look: myLook });
+    return true;
   } catch (err) {
     clearTimeout(wakeupTimer);
+    net.destroy();
     if (statusEl) {
-      statusEl.textContent = "Couldn't connect. Check the code and try again.";
+      const m = err && err.message;
+      statusEl.textContent = m && m !== "Bad arena" ? m : "Couldn't connect. Check the code and try again.";
     }
+    return false;
   }
 }
-
-document.getElementById("btn-join").addEventListener("click", () => {
-  showScreen("joining");
-  document.getElementById("join-status").textContent = "";
-});
-document.getElementById("btn-join-confirm").addEventListener("click", () => {
-  const code = document.getElementById("join-code-input").value.trim();
-  const statusEl = document.getElementById("join-status");
-  if (code.length !== 6) {
-    statusEl.textContent = "Enter the 6-digit code.";
-    return;
-  }
-  doJoin(code, statusEl);
-});
-document.getElementById("btn-cancel-join").addEventListener("click", () => {
-  net.destroy();
-  showScreen("menu");
-});
 
 /* ---- MATCHMAKING ----
    You search for one game mode. The server puts you with whoever else is searching for it (first
@@ -1079,41 +1080,83 @@ async function refreshLobbyList() {
 
 function renderLobbyList(lobbies) {
   if (lobbies.length === 0) {
-    lobbyListEl.innerHTML = `<p class="status-text">No public lobbies right now — host one!</p>`;
+    lobbyListEl.innerHTML = `<p class="status-text">No public lobbies right now. Create a custom match!</p>`;
     return;
   }
   lobbyListEl.innerHTML = "";
+  const lockSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9.5" rx="2.2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
   for (const lobby of lobbies) {
     const arena = getArena(lobby.arenaId);
+    const modeName = lobby.mode && isValidModeId(lobby.mode) ? getMode(lobby.mode).name : "Custom";
     const full = lobby.playerCount >= lobby.maxPlayers;
     const row = document.createElement("div");
     row.className = "lobby-row";
     row.innerHTML = `
       <div class="lobby-thumb" style="background-image:url('${arena.thumb}')"></div>
       <div class="lobby-info">
-        <span class="lobby-arena-name">${arena.name}</span>
+        <span class="lobby-arena-name"></span>
         <div class="lobby-player-row">
           <span class="lobby-dot ${full ? "full" : ""}"></span>
-          <span class="lobby-player-count">${lobby.playerCount}/${lobby.maxPlayers} players</span>
+          <span class="lobby-player-count"></span>
         </div>
       </div>
-      <button class="lobby-join-btn" ${full ? "disabled" : ""}>${full ? "Full" : "Join"}</button>
+      <button class="lobby-join-btn" ${full ? "disabled" : ""}></button>
     `;
+    row.querySelector(".lobby-arena-name").textContent = `${arena.name} · ${modeName}`;
+    row.querySelector(".lobby-player-count").textContent = `${lobby.playerCount}/${lobby.maxPlayers} players`;
+    const btn = row.querySelector(".lobby-join-btn");
+    if (lobby.locked) {
+      btn.innerHTML = `<span class="lock-icon">${lockSvg}</span>Code`;
+      if (full) btn.textContent = "Full";
+    } else {
+      btn.textContent = full ? "Full" : "Join";
+    }
     if (!full) {
-      row.querySelector(".lobby-join-btn").addEventListener("click", () => {
-        stopLobbyPolling();
-        doJoin(lobby.code, null);
+      btn.addEventListener("click", () => {
+        if (lobby.locked) {
+          joinStatusEl.textContent = "That lobby needs a code. Ask the host for it.";
+          joinCodeInput.focus();
+        } else {
+          joinFromBrowser(lobby.code);
+        }
       });
     }
     lobbyListEl.appendChild(row);
   }
 }
 
+const joinCodeInput = document.getElementById("join-code-input");
+const joinStatusEl = document.getElementById("join-status");
+
+async function joinFromBrowser(code) {
+  stopLobbyPolling();
+  const ok = await doJoin(code, joinStatusEl);
+  if (!ok && !screens.browse.classList.contains("hidden")) startLobbyPolling();
+}
+
+function startLobbyPolling() {
+  stopLobbyPolling();
+  lobbyPollTimer = setInterval(refreshLobbyList, 3000);
+}
+
 document.getElementById("btn-browse").addEventListener("click", () => {
   showScreen("browse");
+  joinStatusEl.textContent = "";
+  joinCodeInput.value = "";
   lobbyListEl.innerHTML = `<p class="status-text">Loading...</p>`;
   refreshLobbyList();
-  lobbyPollTimer = setInterval(refreshLobbyList, 3000);
+  startLobbyPolling();
+});
+document.getElementById("btn-join-confirm").addEventListener("click", () => {
+  const code = joinCodeInput.value.trim();
+  if (code.length !== 6) {
+    joinStatusEl.textContent = "Enter the 6-digit code.";
+    return;
+  }
+  joinFromBrowser(code);
+});
+joinCodeInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") document.getElementById("btn-join-confirm").click();
 });
 document.getElementById("btn-cancel-browse").addEventListener("click", () => {
   net.destroy();

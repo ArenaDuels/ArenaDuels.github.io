@@ -40,55 +40,36 @@
   <div id="screen-menu" class="screen menu-screen">
     <button id="btn-settings" class="settings-btn" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/><circle cx="12" cy="12" r="6.6"/></svg></button>
 
-    <div class="menu-layout">
-      <!-- left: identity + actions -->
-      <section class="hero">
-        <p class="hero-kicker"><span class="hero-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.6"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><path d="M12 1.5v4M12 18.5v4M1.5 12h4M18.5 12h4"/></svg></span>Browser arena shooter</p>
-        <h1 class="logo">ARENA<span>DUELS</span></h1>
-        <p class="tagline">Strafe, aim and out-duel your friends. Pick an arena, then host a match or drop into one.</p>
+    <div class="home">
+      <p class="hero-kicker"><span class="hero-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.6"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><path d="M12 1.5v4M12 18.5v4M1.5 12h4M18.5 12h4"/></svg></span>Browser arena shooter</p>
+      <h1 class="logo">ARENA<span>DUELS</span></h1>
+      <p class="tagline">Strafe, aim and out-duel your friends.</p>
 
-        <label class="field-label" for="player-name-input">Your name (generated)</label>
+      <div class="home-actions">
+        <button id="btn-find-match" class="btn btn-primary btn-big">Find Match</button>
+        <button id="btn-custom" class="btn btn-secondary btn-big">Custom Match</button>
+        <button id="btn-browse" class="btn btn-secondary btn-big">Browse Public Lobbies</button>
+      </div>
+
+      <div class="home-profile">
         <div class="name-row">
-          <input id="player-name-input" class="name-input" maxlength="16" placeholder="Random name" readonly aria-readonly="true">
+          <input id="player-name-input" class="name-input" maxlength="16" placeholder="Random name" readonly aria-readonly="true" aria-label="Your name">
           <button id="btn-random-name" class="dice-btn" title="Random guest name" aria-label="Random guest name"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3.5"/><circle cx="8.5" cy="8.5" r="1.1" fill="currentColor"/><circle cx="15.5" cy="8.5" r="1.1" fill="currentColor"/><circle cx="12" cy="12" r="1.1" fill="currentColor"/><circle cx="8.5" cy="15.5" r="1.1" fill="currentColor"/><circle cx="15.5" cy="15.5" r="1.1" fill="currentColor"/></svg></button>
         </div>
-
         <div class="account-strip">
           <span id="account-status" class="account-status">Playing as guest</span>
           <button id="btn-account" class="btn btn-secondary account-btn">Sign in / Create account</button>
           <button id="btn-account-signout" class="btn btn-secondary account-btn hidden">Sign out</button>
         </div>
+      </div>
 
-        <div class="visibility-toggle" id="visibility-toggle">
-          <button class="visibility-option selected" data-public="false"><span class="vis-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9.5" rx="2.2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></span>Private (code)</button>
-          <button class="visibility-option" data-public="true"><span class="vis-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c3.2 3.2 3.2 14.8 0 18M12 3c-3.2 3.2-3.2 14.8 0 18"/></svg></span>Public (listed)</button>
-        </div>
-
-        <button id="btn-find-match" class="btn btn-primary btn-big find-match-btn">Find Match</button>
-        <div class="menu-actions hero-actions">
-          <button id="btn-host" class="btn btn-secondary btn-big">Host Match</button>
-          <button id="btn-join" class="btn btn-secondary btn-big">Join Match</button>
-        </div>
-        <button id="btn-browse" class="btn btn-secondary browse-btn">Browse Public Lobbies</button>
-
-        <ul class="controls-hint" aria-label="Controls">
-          <li><kbd>WASD</kbd> move</li>
-          <li><kbd>Space</kbd> jump</li>
-          <li><kbd>Mouse</kbd> aim &amp; fire</li>
-          <li><kbd>Tab</kbd> scores</li>
-          <li><kbd>Esc</kbd> pause</li>
-        </ul>
-      </section>
-
-      <!-- right: arena picker -->
-      <section class="arena-section">
-        <div class="section-head">
-          <h2>Choose your arena</h2>
-          <span class="section-sub">Private hosts can add bots and set time / score limits</span>
-        </div>
-        <div id="arena-detail" class="arena-feature"></div>
-        <div id="arena-grid" class="arena-grid"></div>
-      </section>
+      <ul class="controls-hint" aria-label="Controls">
+        <li><kbd>WASD</kbd> move</li>
+        <li><kbd>Space</kbd> jump</li>
+        <li><kbd>Mouse</kbd> aim &amp; fire</li>
+        <li><kbd>Tab</kbd> scores</li>
+        <li><kbd>Esc</kbd> pause</li>
+      </ul>
     </div>
   </div>
 
@@ -106,7 +87,7 @@
         <label class="field-label" for="account-register-username">Generated username</label>
         <div class="name-row">
           <input id="account-register-username" class="name-input" maxlength="16" readonly aria-readonly="true">
-          <button id="account-reroll-name" type="button" class="dice-btn" title="Generate another username" aria-label="Generate another username">🎲</button>
+          <button id="account-reroll-name" type="button" class="dice-btn" title="Generate another username" aria-label="Generate another username"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3.5"/><circle cx="8.5" cy="8.5" r="1.1" fill="currentColor"/><circle cx="15.5" cy="8.5" r="1.1" fill="currentColor"/><circle cx="12" cy="12" r="1.1" fill="currentColor"/><circle cx="8.5" cy="15.5" r="1.1" fill="currentColor"/><circle cx="15.5" cy="15.5" r="1.1" fill="currentColor"/></svg></button>
         </div>
         <label class="field-label" for="account-register-password">Password (8–128 characters)</label>
         <input id="account-register-password" class="name-input account-input" type="password" minlength="8" maxlength="128" autocomplete="new-password" required>
@@ -150,71 +131,6 @@
       </div>
 
       <button id="btn-customization-close" class="btn btn-primary">Done</button>
-    </div>
-  </div>
-
-  <!-- ===================== MATCH SETTINGS MODAL ===================== -->
-  <div id="match-settings-modal" class="modal-overlay hidden">
-    <div class="modal-panel">
-      <p class="eyebrow">Match Settings</p>
-
-      <div class="setting-row">
-        <div class="setting-label">
-          <span>Time Limit (minutes)</span>
-          <span id="time-limit-value" class="setting-value">10</span>
-        </div>
-        <input id="time-limit-slider" type="range" min="0" max="30" step="1" value="10" class="slider">
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-label">
-          <span>Score Limit (kills)</span>
-          <span id="score-limit-value" class="setting-value">20</span>
-        </div>
-        <input id="score-limit-slider" type="range" min="0" max="100" step="5" value="20" class="slider">
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-label">
-          <span>Starting Health</span>
-          <span id="starting-health-value" class="setting-value">100</span>
-        </div>
-        <input id="starting-health-slider" type="range" min="50" max="200" step="10" value="100" class="slider">
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-label">
-          <span>Health Steal (%)</span>
-          <span id="health-steal-value" class="setting-value">0</span>
-        </div>
-        <input id="health-steal-slider" type="range" min="0" max="50" step="5" value="0" class="slider">
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-label">
-          <span>Respawn Delay (seconds)</span>
-          <span id="respawn-delay-value" class="setting-value">2</span>
-        </div>
-        <input id="respawn-delay-slider" type="range" min="0" max="10" step="0.5" value="2" class="slider">
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-label">
-          <span>Bots</span>
-          <span id="bot-count-value" class="setting-value">Off</span>
-        </div>
-        <input id="bot-count-slider" type="range" min="0" max="6" step="1" value="0" class="slider">
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-label">
-          <span>Bot Skill</span>
-          <span id="bot-skill-value" class="setting-value">Normal</span>
-        </div>
-        <input id="bot-skill-slider" type="range" min="1" max="3" step="1" value="2" class="slider">
-      </div>
-
-      <button id="btn-match-settings-close" class="btn btn-primary">Start Match</button>
     </div>
   </div>
 
@@ -284,34 +200,6 @@
     </div>
   </div>
 
-  <!-- ===================== HOST WAIT ===================== -->
-  <div id="screen-host-wait" class="screen hidden">
-    <div class="menu-panel">
-      <p class="eyebrow">Configure Your Match</p>
-      <div id="host-code-display" class="code-pills">------</div>
-      <button id="btn-match-settings-open" class="btn btn-primary">Match Settings</button>
-      <p id="host-status" class="status-text">Configure match settings and start...</p>
-      <div class="menu-actions">
-        <button id="btn-start-host" class="btn btn-primary hidden">Start Match</button>
-        <button id="btn-retry-host" class="btn btn-primary hidden">Retry</button>
-        <button id="btn-cancel-host" class="btn btn-secondary">Cancel</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- ===================== JOIN ===================== -->
-  <div id="screen-joining" class="screen hidden">
-    <div class="menu-panel">
-      <p class="eyebrow">Enter code</p>
-      <input id="join-code-input" class="code-input" maxlength="6" inputmode="numeric" placeholder="000000">
-      <p id="join-status" class="status-text"></p>
-      <div class="menu-actions">
-        <button id="btn-join-confirm" class="btn btn-primary">Connect</button>
-        <button id="btn-cancel-join" class="btn btn-secondary">Cancel</button>
-      </div>
-    </div>
-  </div>
-
   <!-- ===================== RECONNECT PROMPT ===================== -->
   <div id="reconnect-prompt" class="modal-overlay hidden">
     <div class="modal-panel reconnect-panel">
@@ -322,12 +210,93 @@
     </div>
   </div>
 
+  <!-- ===================== CUSTOM MATCH ===================== -->
+  <div id="screen-custom" class="screen hidden">
+    <div class="custom-layout">
+      <div class="custom-head">
+        <h2>Custom Match</h2>
+        <span class="section-sub">Set it up, then create it. You go straight in.</span>
+      </div>
+      <div class="custom-body">
+        <section class="custom-col">
+          <p class="field-label">Game mode</p>
+          <div id="custom-mode-grid" class="mode-grid custom-modes"></div>
+
+          <p class="field-label">Rules</p>
+        <div class="setting-row">
+          <div class="setting-label"><span>Time limit (minutes)</span><span id="time-limit-value" class="setting-value">10</span></div>
+          <input id="time-limit-slider" type="range" min="0" max="30" step="1" value="10" class="slider">
+        </div>
+        <div class="setting-row">
+          <div class="setting-label"><span>Score limit (kills)</span><span id="score-limit-value" class="setting-value">20</span></div>
+          <input id="score-limit-slider" type="range" min="0" max="100" step="5" value="20" class="slider">
+        </div>
+        <div class="setting-row">
+          <div class="setting-label"><span>Starting health</span><span id="starting-health-value" class="setting-value">100</span></div>
+          <input id="starting-health-slider" type="range" min="50" max="200" step="10" value="100" class="slider">
+        </div>
+        <div class="setting-row">
+          <div class="setting-label"><span>Health steal (%)</span><span id="health-steal-value" class="setting-value">0</span></div>
+          <input id="health-steal-slider" type="range" min="0" max="50" step="5" value="0" class="slider">
+        </div>
+        <div class="setting-row">
+          <div class="setting-label"><span>Respawn delay (seconds)</span><span id="respawn-delay-value" class="setting-value">2</span></div>
+          <input id="respawn-delay-slider" type="range" min="0" max="10" step="0.5" value="2" class="slider">
+        </div>
+
+          <p class="field-label">Bots</p>
+        <div class="setting-row">
+          <div class="setting-label"><span>Bots</span><span id="bot-count-value" class="setting-value">Off</span></div>
+          <input id="bot-count-slider" type="range" min="0" max="6" step="1" value="0" class="slider">
+        </div>
+        <div class="setting-row">
+          <div class="setting-label"><span>Bot skill</span><span id="bot-skill-value" class="setting-value">Normal</span></div>
+          <input id="bot-skill-slider" type="range" min="1" max="3" step="1" value="2" class="slider">
+        </div>
+          <p id="bot-note" class="status-text hidden">Bots aren't available in Team Deathmatch.</p>
+
+          <p class="field-label">Who can join</p>
+          <div class="visibility-toggle" id="visibility-toggle">
+            <button type="button" class="visibility-option" data-public="true"><span class="vis-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c3.2 3.2 3.2 14.8 0 18M12 3c-3.2 3.2-3.2 14.8 0 18"/></svg></span>Public (listed)</button>
+            <button type="button" class="visibility-option selected" data-public="false"><span class="vis-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9.5" rx="2.2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></span>Private (not listed)</button>
+          </div>
+          <label class="switch-row">
+            <span>Require a code to join</span>
+            <input id="require-code" type="checkbox" class="switch" checked disabled>
+          </label>
+          <p id="code-hint" class="status-text">Private matches can only be joined with their code.</p>
+        </section>
+
+        <section class="custom-col">
+          <p class="field-label">Map</p>
+          <div id="arena-detail" class="arena-feature"></div>
+          <div id="arena-grid" class="arena-grid"></div>
+        </section>
+      </div>
+      <div class="custom-foot">
+        <p id="custom-status" class="status-text"></p>
+        <div class="menu-actions">
+          <button id="btn-custom-back" class="btn btn-secondary">Back</button>
+          <button id="btn-custom-create" class="btn btn-primary">Create Match</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ===================== BROWSE PUBLIC LOBBIES ===================== -->
   <div id="screen-browse" class="screen hidden">
-    <div class="menu-panel">
+    <div class="menu-panel browse-panel">
       <p class="eyebrow">Public Lobbies</p>
       <div id="lobby-list" class="lobby-list">
         <p class="status-text">Loading...</p>
+      </div>
+      <div class="code-join">
+        <p class="field-label">Have a code?</p>
+        <div class="name-row">
+          <input id="join-code-input" class="code-input" maxlength="6" inputmode="numeric" placeholder="000000" aria-label="Room code">
+          <button id="btn-join-confirm" class="btn btn-primary">Join</button>
+        </div>
+        <p id="join-status" class="status-text"></p>
       </div>
       <button id="btn-cancel-browse" class="btn btn-secondary">Back</button>
     </div>

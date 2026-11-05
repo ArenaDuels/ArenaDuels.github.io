@@ -9,6 +9,14 @@ export const GAME_MODES = [
     settings: { timeLimit: 10, scoreLimit: 30, startingHealth: 100, healthSteal: 0, respawnDelay: 2 },
   },
   {
+    id: "ffa",
+    name: "Free For All",
+    tagline: "Up to 5 players · First to 20 · 10 minutes",
+    description: "Everyone for themselves. Up to five players, 100 health, first to 20 kills, or the highest score when time expires.",
+    maxPlayers: 5,
+    settings: { timeLimit: 10, scoreLimit: 20, startingHealth: 100, healthSteal: 0, respawnDelay: 2 },
+  },
+  {
     id: "tdm",
     name: "Team Deathmatch",
     tagline: "4v4 · First team to 50 · 10 minutes",

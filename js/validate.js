@@ -197,11 +197,15 @@ export function cleanLobbies(list) {
   if (!Array.isArray(list)) return [];
   const out = [];
   for (const l of list.slice(0, 50)) {
-    if (!isObj(l) || !isValidCode(l.code) || !isValidArenaId(l.arenaId)) continue;
-    const playerCount = clampNum(l.playerCount, 0, 4);
-    const maxPlayers = clampNum(l.maxPlayers, 1, 4);
+    if (!isObj(l) || !isValidArenaId(l.arenaId)) continue;
+    // Lobbies that need a code are listed without one: you have to be given it.
+    const locked = l.locked === true;
+    if (!locked && !isValidCode(l.code)) continue;
+    const playerCount = clampNum(l.playerCount, 0, 8);
+    const maxPlayers = clampNum(l.maxPlayers, 1, 8);
     if (playerCount === null || maxPlayers === null) continue;
-    out.push({ code: l.code, arenaId: l.arenaId, playerCount: Math.round(playerCount), maxPlayers: Math.round(maxPlayers) });
+    const mode = typeof l.mode === "string" && /^[a-z0-9]{2,8}$/.test(l.mode) ? l.mode : null;
+    out.push({ code: locked ? null : l.code, locked, mode, arenaId: l.arenaId, playerCount: Math.round(playerCount), maxPlayers: Math.round(maxPlayers) });
   }
   return out;
 }

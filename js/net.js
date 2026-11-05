@@ -28,10 +28,17 @@ export class Net {
     this._search = null;            // the matchmaking search in progress, if any
   }
 
-  /** Create a room for the given arena. Resolves with the 6-digit room code. */
-  host(arenaId, isPublic) {
+  /**
+   * Create a room. `opts`: { isPublic, requireCode, modeId, settings } — everything is decided
+   * up front. Resolves with the 6-digit room code (teams for a team mode are in this.roomTeams).
+   */
+  host(arenaId, opts = {}) {
+    if (typeof opts === "boolean") opts = { isPublic: opts }; // old call style
     return new Promise((resolve, reject) => {
-      const ws = this._connect(reject, () => ws.send(JSON.stringify({ t: "create_room", arenaId, isPublic: !!isPublic })));
+      const body = { t: "create_room", arenaId, isPublic: !!opts.isPublic, requireCode: !!opts.requireCode };
+      if (isValidModeId(opts.modeId)) body.modeId = opts.modeId;
+      if (opts.settings && typeof opts.settings === "object") body.settings = opts.settings;
+      const ws = this._connect(reject, () => ws.send(JSON.stringify(body)));
       ws.onmessage = (ev) => {
         const msg = this._parse(ev);
         if (!msg) return;
@@ -43,6 +50,10 @@ export class Net {
           this.myId = msg.id;
           this.hostId = msg.id;
           this.isHost = true;
+          this.roomTeams = {};
+          if (msg.teams && typeof msg.teams === "object" && !Array.isArray(msg.teams)) {
+            for (const [id, team] of Object.entries(msg.teams)) if (isValidId(id) && (team === 0 || team === 1)) this.roomTeams[id] = team;
+          }
           this._wire();
           resolve(msg.code);
         }
@@ -97,7 +108,7 @@ export class Net {
           this.hostId = msg.hostId;
           this.isHost = false;
           this._wire();
-          resolve({ arenaId: msg.arenaId, peers: msg.peers, hostId: msg.hostId, teams: msg.teams && typeof msg.teams === "object" ? msg.teams : {} });
+          resolve({ arenaId: msg.arenaId, peers: msg.peers, hostId: msg.hostId, mode: isValidModeId(msg.mode) ? msg.mode : "1v1", teams: msg.teams && typeof msg.teams === "object" ? msg.teams : {} });
         } else if (msg.t === "join_error") {
           this._settled = true;
           clearTimeout(this._timeout);

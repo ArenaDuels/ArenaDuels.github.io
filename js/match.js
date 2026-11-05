@@ -41,7 +41,7 @@ export class MatchState {
   /** (Re)start the clock and zero everyone's kills/deaths. Keeps the roster. */
   start(settings) {
     this.settings = sanitizeSettings(settings);
-    this.modeId = settings?.modeId === "tdm" ? "tdm" : settings?.modeId === "1v1" ? "1v1" : this.modeId;
+    this.modeId = settings?.modeId === "tdm" ? "tdm" : settings?.modeId === "ffa" ? "ffa" : settings?.modeId === "1v1" ? "1v1" : this.modeId;
     this.remaining = this.settings.timeLimit > 0 ? this.settings.timeLimit * 60 : Infinity;
     this.over = false;
     this.reason = null;
