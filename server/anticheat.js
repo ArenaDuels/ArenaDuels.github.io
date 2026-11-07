@@ -38,7 +38,7 @@ export const TUNING = Object.freeze({
   // --- geometry ---
   EYE_HEIGHT: 1.0,
   RADIUS: 0.5,             // keep the existing bot hit radius unchanged
-  PLAYER_HIT_RADIUS: 0.28, // tighter horizontal hit tolerance for human players
+  PLAYER_HIT_RADIUS: 0.42, // allow shots on the visible side of the player while remaining tighter than the full capsule
   HALF_SEGMENT: 0.6,
   AIM_SLACK: 0,             // no extra hit forgiveness beyond the target capsule
   AIM_SLACK_PER_M: 0,       // no distance-based expansion of the hit area
@@ -530,7 +530,7 @@ export class RoomGuard {
       sawRange = true;
 
       let miss = Infinity;
-      let horizontalMissAtBest = Infinity;
+      let playerCapsulePass = false;
       for (const off of [-T.HALF_SEGMENT, 0, T.HALF_SEGMENT]) {
         const vx = t.x - ox;
         const vy = t.y + off - oy;
@@ -541,15 +541,19 @@ export class RoomGuard {
         const ry = vy - clampedAlong * dy;
         const rz = vz - clampedAlong * dz;
         const candidateMiss = Math.hypot(rx, ry, rz);
-        if (candidateMiss < miss) {
-          miss = candidateMiss;
-          horizontalMissAtBest = Math.hypot(rx, rz);
+        miss = Math.min(miss, candidateMiss);
+        // Human players use separate vertical and horizontal limits. This lets
+        // a ray graze the visible side of the body without adding diagonal
+        // forgiveness outside the body's vertical extent.
+        if (!tgt.isBot && Math.hypot(rx, rz) <= T.PLAYER_HIT_RADIUS && Math.abs(ry) <= T.RADIUS) {
+          playerCapsulePass = true;
         }
       }
-      // Preserve vertical tolerance, but apply the same strict lateral tolerance
-      // to every target type. Bots must not keep the old wider horizontal hit area.
-      if (miss > T.RADIUS + T.AIM_SLACK + T.AIM_SLACK_PER_M * dist) continue;
-      if (horizontalMissAtBest > T.PLAYER_HIT_RADIUS) continue;
+      if (tgt.isBot) {
+        if (miss > T.RADIUS + T.AIM_SLACK + T.AIM_SLACK_PER_M * dist) continue;
+      } else if (!playerCapsulePass) {
+        continue;
+      }
       sawAim = true;
 
       for (const off of [0, T.HALF_SEGMENT, -T.HALF_SEGMENT]) {
