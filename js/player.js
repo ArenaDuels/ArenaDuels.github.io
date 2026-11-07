@@ -255,6 +255,161 @@ export function animateGun(group, firing, t, viewmodel = false) {
   }
 }
 
+
+// ===== The robot look other players see =====
+// rp.mesh stays the full-size capsule, but invisible: it is the hitbox every ray test uses
+// (and matches the server's), so the new look can't change who gets hit. The robot is built
+// as a child of it. Its overall height is the same 2.2, so what you see is what you can hit.
+const ROBOT = {
+  BODY_R: 0.5, BODY_LEN: 0.7, BODY_Y: -0.25, // pill: bottom at -1.1 (the feet), top at +0.6
+  NECK_Y: 0.66,                              // the head turns around this point
+  HEAD_W: 0.8, HEAD_H: 0.44, HEAD_D: 0.58,   // head top lands at +1.1, same as the old capsule
+  HEAD_PITCH_MAX: 1.1,
+};
+
+// A box with rounded, bevelled edges (three's core has no RoundedBox).
+function roundedBoxGeometry(w, h, d, r, bt) {
+  const iw = w - 2 * bt, ih = h - 2 * bt, id = Math.max(0.001, d - 2 * bt);
+  const rr = Math.max(0.001, Math.min(r - bt, iw / 2, ih / 2));
+  const x = -iw / 2, y = -ih / 2;
+  const sh = new THREE.Shape();
+  sh.moveTo(x + rr, y);
+  sh.lineTo(x + iw - rr, y);
+  sh.quadraticCurveTo(x + iw, y, x + iw, y + rr);
+  sh.lineTo(x + iw, y + ih - rr);
+  sh.quadraticCurveTo(x + iw, y + ih, x + iw - rr, y + ih);
+  sh.lineTo(x + rr, y + ih);
+  sh.quadraticCurveTo(x, y + ih, x, y + ih - rr);
+  sh.lineTo(x, y + rr);
+  sh.quadraticCurveTo(x, y, x + rr, y);
+  const geo = new THREE.ExtrudeGeometry(sh, {
+    depth: id, bevelEnabled: true, bevelThickness: bt, bevelSize: bt, bevelSegments: 3, curveSegments: 6,
+  });
+  geo.translate(0, 0, -id / 2);
+  return geo;
+}
+
+const _white = new THREE.Color(0xffffff);
+const eyeColorFor = (color) => new THREE.Color(color).lerp(_white, 0.78);
+
+function makeRobotModel(color) {
+  const root = new THREE.Group();
+  const bodyMat = new THREE.MeshPhysicalMaterial({
+    color, roughness: 0.15, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.1,
+  });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x14161c, roughness: 0.25, metalness: 0.3 });
+  const eyeMat = () => {
+    const c = eyeColorFor(color);
+    return new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 1.8, roughness: 0.3 });
+  };
+  const mk = (geo, mat, x = 0, y = 0, z = 0) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y, z);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    return m;
+  };
+
+  // pill body
+  const body = mk(new THREE.CapsuleGeometry(ROBOT.BODY_R, ROBOT.BODY_LEN, 8, 16), bodyMat, 0, ROBOT.BODY_Y, 0);
+  root.add(body);
+
+  // the little blue "hand" block the blaster rests on
+  root.add(mk(roundedBoxGeometry(0.3, 0.32, 0.36, 0.09, 0.04), bodyMat, 0.5, -0.14, 0.1));
+
+  // head: pivots at the neck so it can look up and down
+  const headPivot = new THREE.Group();
+  headPivot.position.y = ROBOT.NECK_Y;
+  root.add(headPivot);
+
+  const headCy = ROBOT.HEAD_H / 2;
+  const front = -ROBOT.HEAD_D / 2;
+  const headGeo = roundedBoxGeometry(ROBOT.HEAD_W, ROBOT.HEAD_H, ROBOT.HEAD_D, 0.11, 0.05);
+  const head = mk(headGeo, bodyMat, 0, headCy, 0);
+  headPivot.add(head);
+
+  // dark visor band with two glowing eyes
+  const visor = mk(roundedBoxGeometry(0.68, 0.28, 0.04, 0.07, 0.012), dark, 0, headCy, front - 0.005);
+  visor.castShadow = false;
+  headPivot.add(visor);
+  const eyeMats = [eyeMat(), eyeMat()];
+  [-0.15, 0.15].forEach((x, i) => {
+    const eye = mk(roundedBoxGeometry(0.11, 0.12, 0.03, 0.025, 0.008), eyeMats[i], x, headCy, front - 0.02);
+    eye.castShadow = false;
+    headPivot.add(eye);
+  });
+
+  // outlines drawn behind teammates (see setTeam)
+  const outlineMat = new THREE.MeshBasicMaterial({ color: 0x42a5ff, side: THREE.BackSide, transparent: true, opacity: 0.95, depthWrite: false });
+  const bodyOutline = new THREE.Mesh(new THREE.CapsuleGeometry(ROBOT.BODY_R + 0.025, ROBOT.BODY_LEN, 6, 12), outlineMat);
+  bodyOutline.position.y = ROBOT.BODY_Y;
+  bodyOutline.visible = false;
+  root.add(bodyOutline);
+  const headOutline = new THREE.Mesh(headGeo, outlineMat);
+  headOutline.position.y = headCy;
+  headOutline.scale.setScalar(1.07);
+  headOutline.visible = false;
+  headPivot.add(headOutline);
+
+  return { root, bodyMat, headPivot, eyeMats, bodyOutline, headOutline, outlineMat };
+}
+
+// The held blaster: same interface as makeGunModel (muzzle + userData.fx) so the shared
+// recolour / firing animation code keeps working. Black body, glowing strips, hex muzzle.
+function makeBlasterModel(color) {
+  const group = new THREE.Group();
+  const dark = new THREE.MeshStandardMaterial({ color: 0x1b1d23, roughness: 0.42, metalness: 0.25 });
+  const mid = new THREE.MeshStandardMaterial({ color: 0x2f333d, roughness: 0.4, metalness: 0.3 });
+  const glow = () =>
+    new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.9, roughness: 0.3, metalness: 0.1 });
+  const mats = [];
+  const accentMat = glow();
+  mats.push(accentMat);
+  const lensMat = glow();
+  lensMat.emissiveIntensity = 1.6;
+  mats.push(lensMat);
+
+  const add = (geo, mat, x, y, z, rx = 0, ry = 0, rz = 0) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y, z);
+    m.rotation.set(rx, ry, rz);
+    group.add(m);
+    return m;
+  };
+  const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
+  const hex = (r0, r1, len) => new THREE.CylinderGeometry(r0, r1, len, 8);
+
+  add(box(0.2, 0.3, 0.32), dark, 0, 0.05, 0.2);                 // rear housing
+  add(box(0.17, 0.19, 0.5), dark, 0, 0, -0.1);                  // receiver
+  add(box(0.12, 0.03, 0.4), mid, 0, 0.115, -0.1);               // top plate
+  add(box(0.075, 0.2, 0.1), dark, 0, -0.17, 0.12, 0.35, 0, 0);  // grip
+  add(hex(0.1, 0.11, 0.3), mid, 0, 0, -0.5, Math.PI / 2, 0, 0); // barrel shroud
+  add(hex(0.115, 0.115, 0.08), dark, 0, 0, -0.7, Math.PI / 2, 0, 0); // muzzle ring
+  add(box(0.012, 0.05, 0.3), accentMat, 0.09, 0, -0.12);        // glowing strips
+  add(box(0.012, 0.05, 0.3), accentMat, -0.09, 0, -0.12);
+  add(box(0.012, 0.06, 0.06), accentMat, 0.105, 0, -0.52);      // little squares by the muzzle
+  add(box(0.012, 0.06, 0.06), accentMat, -0.105, 0, -0.52);
+  add(box(0.06, 0.06, 0.02), lensMat, 0, 0, -0.742);            // emitter
+
+  const muzzle = new THREE.Object3D();
+  muzzle.position.set(0, 0, -0.78);
+  group.add(muzzle);
+
+  const flash = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: getGlowTexture(), color, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, fog: false,
+    })
+  );
+  flash.renderOrder = 1001;
+  flash.visible = false;
+  muzzle.add(flash);
+
+  group.userData.accentMat = accentMat;
+  group.userData.fx = { mats, coils: [], lensMat, accentMat, flash, baseZ: 0, baseRotX: 0, baseY: 0 };
+  return { group, muzzle };
+}
+
 // First-person viewmodel: fixed in the bottom-right of the screen, no
 // shadows (casting a shadow of your own gun onto your own view looks odd),
 // not affected by frustum culling so it never disappears at extreme angles.
@@ -282,12 +437,9 @@ function makeFirstPersonGun(color) {
 // capsule body, positioned like it's held out in front, rotates with
 // whichever way the capsule is facing since it's a child of that mesh.
 function makeHeldGun(color) {
-  const { group, muzzle } = makeGunModel(color);
-  // Capsule radius is 0.5 — the attachment point has to clear that or the
-  // gun renders embedded in the body instead of held beside it.
-  group.position.set(0.62, 0.05, -0.15);
-  group.rotation.y = -0.12;
-  group.scale.setScalar(1.25); // reads better at typical view distance
+  const { group, muzzle } = makeBlasterModel(color);
+  // Rests on the robot's hand block, just in front of its side.
+  group.position.set(0.47, -0.02, -0.2);
   group.traverse((o) => {
     if (o.isMesh) {
       o.castShadow = true;
@@ -723,13 +875,17 @@ export class PlayerController {
 export class RemotePlayer {
   constructor(scene, color = 0xff4444, name = "Player") {
     this.scene = scene;
+    // Invisible full-size capsule = the hitbox (see the ROBOT note above); the robot is its child.
     this.mesh = makeCapsuleMesh(color);
-    this.teamOutline = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.525, 1.225, 6, 12),
-      new THREE.MeshBasicMaterial({ color: 0x42a5ff, side: THREE.BackSide, transparent: true, opacity: 0.95, depthWrite: false })
-    );
-    this.teamOutline.visible = false;
-    this.mesh.add(this.teamOutline);
+    this.mesh.material.visible = false;
+    this.mesh.castShadow = false;
+    this.mesh.receiveShadow = false;
+    this.model = makeRobotModel(color);
+    this.bodyMat = this.model.bodyMat;
+    this.headPivot = this.model.headPivot;
+    this.teamOutline = this.model.bodyOutline;
+    this.headOutline = this.model.headOutline;
+    this.mesh.add(this.model.root);
     scene.add(this.mesh);
 
     // Visible to everyone else, unlike the local player's own first-person
@@ -767,7 +923,9 @@ export class RemotePlayer {
     const color = look.color ?? defaultColor;
     this.displayColor = color;
 
-    applyBodyLook(this.mesh.material, color, look.pattern);
+    applyBodyLook(this.bodyMat, color, look.pattern);
+    const eyeCol = eyeColorFor(color);
+    for (const m of this.model.eyeMats) { m.color.copy(eyeCol); m.emissive.copy(eyeCol); }
 
     setGunColor(this.heldGun, color);
     setLaserColor(this.laser, color);
@@ -775,19 +933,31 @@ export class RemotePlayer {
     const key = `${look.accessory}:${color}`;
     if (key !== this.accessoryKey) {
       if (this.accessory) {
-        this.mesh.remove(this.accessory);
+        this.headPivot.remove(this.accessory);
         disposeGroup(this.accessory);
         this.accessory = null;
       }
       this.accessory = buildAccessory(look.accessory, color);
-      if (this.accessory) this.mesh.add(this.accessory);
+      if (this.accessory) {
+        // Accessories are written relative to the capsule centre; the head turns around the neck,
+        // so shift them into head space and they tilt with it.
+        this.accessory.position.y = -ROBOT.NECK_Y;
+        if (look.accessory === "shades") {
+          // glasses go on the visor, not down on the chest
+          this.accessory.position.y = ROBOT.HEAD_H / 2 - 0.68; // eye height of the visor
+          this.accessory.position.z = 0.13;
+        }
+        this.headPivot.add(this.accessory);
+      }
       this.accessoryKey = key;
     }
   }
 
   setTeam(team, myTeam, isTdm = true) {
-    this.teamOutline.visible = isTdm && (team === 0 || team === 1) && team === myTeam;
-    this.teamOutline.material.color.setHex(0x42a5ff);
+    const on = isTdm && (team === 0 || team === 1) && team === myTeam;
+    this.teamOutline.visible = on;
+    this.headOutline.visible = on;
+    this.model.outlineMat.color.setHex(0x42a5ff);
   }
 
   setName(name) {
@@ -838,10 +1008,10 @@ export class RemotePlayer {
 
   dispose() {
     this.scene.remove(this.mesh, this.hpBar, this.nameSprite, this.laser);
-    this.teamOutline.geometry.dispose();
-    this.teamOutline.material.dispose();
+    disposeGroup(this.model.root);
+    disposeGroup(this.heldGun);
     if (this.accessory) {
-      this.mesh.remove(this.accessory);
+      this.headPivot.remove(this.accessory);
       disposeGroup(this.accessory);
       this.accessory = null;
     }
@@ -854,6 +1024,9 @@ export class RemotePlayer {
     // The remote weapon is a separate child of the body. Apply the networked
     // camera pitch to it too; otherwise the body turns but the gun stays level.
     this.heldGun.rotation.x += (this.targetPitch - this.heldGun.rotation.x) * t;
+    // The head looks up and down with the player's aim (positive pitch = up).
+    const headTarget = Math.max(-ROBOT.HEAD_PITCH_MAX, Math.min(ROBOT.HEAD_PITCH_MAX, this.targetPitch));
+    this.headPivot.rotation.x += (headTarget - this.headPivot.rotation.x) * t;
 
     if (this.visible && this.hp > 0) {
       this.hpBar.position.copy(this.mesh.position);
