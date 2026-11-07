@@ -37,7 +37,8 @@ export const TUNING = Object.freeze({
   TICK_MAX_DT: 0.1,          // beam: never integrate more than this per tick
   // --- geometry ---
   EYE_HEIGHT: 1.0,
-  RADIUS: 0.5,
+  RADIUS: 0.5,             // keep the existing bot hit radius unchanged
+  PLAYER_HIT_RADIUS: 0.28, // tighter horizontal hit tolerance for human players
   HALF_SEGMENT: 0.6,
   AIM_SLACK: 0,             // no extra hit forgiveness beyond the target capsule
   AIM_SLACK_PER_M: 0,       // no distance-based expansion of the hit area
@@ -529,15 +530,26 @@ export class RoomGuard {
       sawRange = true;
 
       let miss = Infinity;
+      let horizontalMissAtBest = Infinity;
       for (const off of [-T.HALF_SEGMENT, 0, T.HALF_SEGMENT]) {
         const vx = t.x - ox;
         const vy = t.y + off - oy;
         const vz = t.z - oz;
         const along = vx * dx + vy * dy + vz * dz;
-        const d2 = along <= 0 ? vx * vx + vy * vy + vz * vz : vx * vx + vy * vy + vz * vz - along * along;
-        miss = Math.min(miss, Math.sqrt(Math.max(0, d2)));
+        const clampedAlong = Math.max(0, along);
+        const rx = vx - clampedAlong * dx;
+        const ry = vy - clampedAlong * dy;
+        const rz = vz - clampedAlong * dz;
+        const candidateMiss = Math.hypot(rx, ry, rz);
+        if (candidateMiss < miss) {
+          miss = candidateMiss;
+          horizontalMissAtBest = Math.hypot(rx, rz);
+        }
       }
+      // Preserve the original vertical tolerance, but tighten lateral tolerance
+      // for human targets. Bot geometry remains exactly as it was.
       if (miss > T.RADIUS + T.AIM_SLACK + T.AIM_SLACK_PER_M * dist) continue;
+      if (!tgt.isBot && horizontalMissAtBest > T.PLAYER_HIT_RADIUS) continue;
       sawAim = true;
 
       for (const off of [0, T.HALF_SEGMENT, -T.HALF_SEGMENT]) {

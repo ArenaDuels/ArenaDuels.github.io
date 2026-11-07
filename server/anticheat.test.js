@@ -107,6 +107,14 @@ test("the beam does not hit outside the actual target radius", () => {
   assert.equal(hp("p2"), 100);
 });
 
+test("human-player hit detection rejects shots 0.4m to the side", () => {
+  const { duel, put, run, hp } = setup();
+  duel();
+  put("p2", 10, 0.4, FACE_MINUS_X);
+  run(1, { hostFiring: true });
+  assert.equal(hp("p2"), 100);
+});
+
 test("walls stop the beam", () => {
   const { duel, run, hp } = setup({ arena: PILLAR_ARENA });
   duel();
@@ -457,8 +465,9 @@ test("a player's beam on a bot is forwarded to the host as a hit", () => {
   const { g, put, clock, run } = setup();
   put("host", -10, 5, 0);
   put("p2", 10, 0, FACE_MINUS_X);
-  g.onBots([bot("bot-1", -10, 0, FACE_PLUS_X)], clock.now);
-  const events = run(1, { p2Firing: true, after: () => g.onBots([bot("bot-1", -10, 0, FACE_PLUS_X)], clock.now) });
+  // Bot hit geometry stays at the original 0.5m radius (0.2m lateral offset).
+  g.onBots([bot("bot-1", -10, 0.2, FACE_PLUS_X)], clock.now);
+  const events = run(1, { p2Firing: true, after: () => g.onBots([bot("bot-1", -10, 0.2, FACE_PLUS_X)], clock.now) });
   const hits = events.filter((e) => e.msg.t === "hit");
   assert.ok(hits.length > 20);
   assert.ok(hits.every((e) => e.to === "host" && e.msg.targetId === "bot-1" && e.msg.attackerId === "p2"));
