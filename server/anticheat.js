@@ -546,10 +546,10 @@ export class RoomGuard {
           horizontalMissAtBest = Math.hypot(rx, rz);
         }
       }
-      // Preserve the original vertical tolerance, but tighten lateral tolerance
-      // for human targets. Bot geometry remains exactly as it was.
+      // Preserve vertical tolerance, but apply the same strict lateral tolerance
+      // to every target type. Bots must not keep the old wider horizontal hit area.
       if (miss > T.RADIUS + T.AIM_SLACK + T.AIM_SLACK_PER_M * dist) continue;
-      if (!tgt.isBot && horizontalMissAtBest > T.PLAYER_HIT_RADIUS) continue;
+      if (horizontalMissAtBest > T.PLAYER_HIT_RADIUS) continue;
       sawAim = true;
 
       for (const off of [0, T.HALF_SEGMENT, -T.HALF_SEGMENT]) {

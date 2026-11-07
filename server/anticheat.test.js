@@ -465,7 +465,7 @@ test("a player's beam on a bot is forwarded to the host as a hit", () => {
   const { g, put, clock, run } = setup();
   put("host", -10, 5, 0);
   put("p2", 10, 0, FACE_MINUS_X);
-  // Bot hit geometry stays at the original 0.5m radius (0.2m lateral offset).
+  // A small lateral offset inside the shared strict hit tolerance still registers.
   g.onBots([bot("bot-1", -10, 0.2, FACE_PLUS_X)], clock.now);
   const events = run(1, { p2Firing: true, after: () => g.onBots([bot("bot-1", -10, 0.2, FACE_PLUS_X)], clock.now) });
   const hits = events.filter((e) => e.msg.t === "hit");
@@ -473,6 +473,16 @@ test("a player's beam on a bot is forwarded to the host as a hit", () => {
   assert.ok(hits.every((e) => e.to === "host" && e.msg.targetId === "bot-1" && e.msg.attackerId === "p2"));
   const total = hits.reduce((s, e) => s + e.msg.damage, 0);
   assert.ok(total > 35 && total < 45, `about 40 damage in a second, got ${total.toFixed(1)}`);
+});
+
+test("a player's beam rejects shots 0.4m to the side of a bot", () => {
+  const { g, clock, run } = setup();
+  g.onBots([bot("bot-1", -10, 0.4, FACE_PLUS_X)], clock.now);
+  const events = run(1, {
+    p2Firing: true,
+    after: () => g.onBots([bot("bot-1", -10, 0.4, FACE_PLUS_X)], clock.now),
+  });
+  assert.equal(events.filter((e) => e.to === "host" && e.msg.t === "hit" && e.msg.targetId === "bot-1").length, 0);
 });
 
 test("bots shooting a human: aim and line of sight are checked, damage is capped, and the server applies it", () => {
