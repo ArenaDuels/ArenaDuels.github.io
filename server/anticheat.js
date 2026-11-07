@@ -37,8 +37,7 @@ export const TUNING = Object.freeze({
   TICK_MAX_DT: 0.1,          // beam: never integrate more than this per tick
   // --- geometry ---
   EYE_HEIGHT: 1.0,
-  RADIUS: 0.5,             // keep the existing bot hit radius unchanged
-  PLAYER_HIT_RADIUS: 0.42, // allow shots on the visible side of the player while remaining tighter than the full capsule
+  RADIUS: 0.5,
   HALF_SEGMENT: 0.6,
   AIM_SLACK: 0,             // no extra hit forgiveness beyond the target capsule
   AIM_SLACK_PER_M: 0,       // no distance-based expansion of the hit area
@@ -530,30 +529,15 @@ export class RoomGuard {
       sawRange = true;
 
       let miss = Infinity;
-      let playerCapsulePass = false;
       for (const off of [-T.HALF_SEGMENT, 0, T.HALF_SEGMENT]) {
         const vx = t.x - ox;
         const vy = t.y + off - oy;
         const vz = t.z - oz;
         const along = vx * dx + vy * dy + vz * dz;
-        const clampedAlong = Math.max(0, along);
-        const rx = vx - clampedAlong * dx;
-        const ry = vy - clampedAlong * dy;
-        const rz = vz - clampedAlong * dz;
-        const candidateMiss = Math.hypot(rx, ry, rz);
-        miss = Math.min(miss, candidateMiss);
-        // Human players use separate vertical and horizontal limits. This lets
-        // a ray graze the visible side of the body without adding diagonal
-        // forgiveness outside the body's vertical extent.
-        if (!tgt.isBot && Math.hypot(rx, rz) <= T.PLAYER_HIT_RADIUS && Math.abs(ry) <= T.RADIUS) {
-          playerCapsulePass = true;
-        }
+        const d2 = along <= 0 ? vx * vx + vy * vy + vz * vz : vx * vx + vy * vy + vz * vz - along * along;
+        miss = Math.min(miss, Math.sqrt(Math.max(0, d2)));
       }
-      if (tgt.isBot) {
-        if (miss > T.RADIUS + T.AIM_SLACK + T.AIM_SLACK_PER_M * dist) continue;
-      } else if (!playerCapsulePass) {
-        continue;
-      }
+      if (miss > T.RADIUS + T.AIM_SLACK + T.AIM_SLACK_PER_M * dist) continue;
       sawAim = true;
 
       for (const off of [0, T.HALF_SEGMENT, -T.HALF_SEGMENT]) {
