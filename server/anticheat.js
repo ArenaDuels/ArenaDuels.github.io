@@ -46,8 +46,8 @@ export const TUNING = Object.freeze({
   // --- history (lag tolerance) ---
   SAMPLE_GAP_MS: 40,
   HISTORY_MS: 1200,
-  ATTACKER_WINDOW_MS: 350,
-  TARGET_WINDOW_MS: 900,
+  ATTACKER_WINDOW_MS: 150,
+  TARGET_WINDOW_MS: 150,
   MAX_STATE_AGE_MS: 2000,
   // --- movement rules (see client player.js: ground 16 m/s, air 10.5, jump 12, gravity 35) ---
   H_SPEED: 21,               // metres/second of horizontal travel we allow. Honest play in the replay test peaks at
