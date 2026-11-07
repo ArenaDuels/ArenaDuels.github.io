@@ -46,8 +46,9 @@ export const TUNING = Object.freeze({
   // --- history (lag tolerance) ---
   SAMPLE_GAP_MS: 40,
   HISTORY_MS: 1200,
-  ATTACKER_WINDOW_MS: 150,
-  TARGET_WINDOW_MS: 150,
+  ATTACKER_WINDOW_MS: 350,
+  TARGET_WINDOW_MS: 900,
+  BOT_TARGET_WINDOW_MS: 150, // bots strafe fast, so a long rewind lets shots land beside them
   MAX_STATE_AGE_MS: 2000,
   // --- movement rules (see client player.js: ground 16 m/s, air 10.5, jump 12, gravity 35) ---
   H_SPEED: 21,               // metres/second of horizontal travel we allow. Honest play in the replay test peaks at
@@ -522,7 +523,7 @@ export class RoomGuard {
 
     for (let j = tgt.hist.length - 1; j >= 0; j--) {
       const t = tgt.hist[j];
-      if (now - t.t > T.TARGET_WINDOW_MS) break;
+      if (now - t.t > (tgt.isBot ? T.BOT_TARGET_WINDOW_MS : T.TARGET_WINDOW_MS)) break;
 
       const dist = Math.hypot(t.x - ox, t.y - oy, t.z - oz);
       if (dist > maxRange) continue;
