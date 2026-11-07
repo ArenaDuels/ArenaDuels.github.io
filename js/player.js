@@ -314,9 +314,6 @@ function makeRobotModel(color) {
   const body = mk(new THREE.CapsuleGeometry(ROBOT.BODY_R, ROBOT.BODY_LEN, 8, 16), bodyMat, 0, ROBOT.BODY_Y, 0);
   root.add(body);
 
-  // the little blue "hand" block the blaster rests on
-  root.add(mk(roundedBoxGeometry(0.3, 0.32, 0.36, 0.09, 0.04), bodyMat, 0.5, -0.14, 0.1));
-
   // head: pivots at the neck so it can look up and down
   const headPivot = new THREE.Group();
   headPivot.position.y = ROBOT.NECK_Y;
@@ -354,62 +351,6 @@ function makeRobotModel(color) {
   return { root, bodyMat, headPivot, eyeMats, bodyOutline, headOutline, outlineMat };
 }
 
-// The held blaster: same interface as makeGunModel (muzzle + userData.fx) so the shared
-// recolour / firing animation code keeps working. Black body, glowing strips, hex muzzle.
-function makeBlasterModel(color) {
-  const group = new THREE.Group();
-  const dark = new THREE.MeshStandardMaterial({ color: 0x1b1d23, roughness: 0.42, metalness: 0.25 });
-  const mid = new THREE.MeshStandardMaterial({ color: 0x2f333d, roughness: 0.4, metalness: 0.3 });
-  const glow = () =>
-    new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.9, roughness: 0.3, metalness: 0.1 });
-  const mats = [];
-  const accentMat = glow();
-  mats.push(accentMat);
-  const lensMat = glow();
-  lensMat.emissiveIntensity = 1.6;
-  mats.push(lensMat);
-
-  const add = (geo, mat, x, y, z, rx = 0, ry = 0, rz = 0) => {
-    const m = new THREE.Mesh(geo, mat);
-    m.position.set(x, y, z);
-    m.rotation.set(rx, ry, rz);
-    group.add(m);
-    return m;
-  };
-  const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
-  const hex = (r0, r1, len) => new THREE.CylinderGeometry(r0, r1, len, 8);
-
-  add(box(0.2, 0.3, 0.32), dark, 0, 0.05, 0.2);                 // rear housing
-  add(box(0.17, 0.19, 0.5), dark, 0, 0, -0.1);                  // receiver
-  add(box(0.12, 0.03, 0.4), mid, 0, 0.115, -0.1);               // top plate
-  add(box(0.075, 0.2, 0.1), dark, 0, -0.17, 0.12, 0.35, 0, 0);  // grip
-  add(hex(0.1, 0.11, 0.3), mid, 0, 0, -0.5, Math.PI / 2, 0, 0); // barrel shroud
-  add(hex(0.115, 0.115, 0.08), dark, 0, 0, -0.7, Math.PI / 2, 0, 0); // muzzle ring
-  add(box(0.012, 0.05, 0.3), accentMat, 0.09, 0, -0.12);        // glowing strips
-  add(box(0.012, 0.05, 0.3), accentMat, -0.09, 0, -0.12);
-  add(box(0.012, 0.06, 0.06), accentMat, 0.105, 0, -0.52);      // little squares by the muzzle
-  add(box(0.012, 0.06, 0.06), accentMat, -0.105, 0, -0.52);
-  add(box(0.06, 0.06, 0.02), lensMat, 0, 0, -0.742);            // emitter
-
-  const muzzle = new THREE.Object3D();
-  muzzle.position.set(0, 0, -0.78);
-  group.add(muzzle);
-
-  const flash = new THREE.Sprite(
-    new THREE.SpriteMaterial({
-      map: getGlowTexture(), color, transparent: true, opacity: 0,
-      blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, fog: false,
-    })
-  );
-  flash.renderOrder = 1001;
-  flash.visible = false;
-  muzzle.add(flash);
-
-  group.userData.accentMat = accentMat;
-  group.userData.fx = { mats, coils: [], lensMat, accentMat, flash, baseZ: 0, baseRotX: 0, baseY: 0 };
-  return { group, muzzle };
-}
-
 // First-person viewmodel: fixed in the bottom-right of the screen, no
 // shadows (casting a shadow of your own gun onto your own view looks odd),
 // not affected by frustum culling so it never disappears at extreme angles.
@@ -437,9 +378,12 @@ function makeFirstPersonGun(color) {
 // capsule body, positioned like it's held out in front, rotates with
 // whichever way the capsule is facing since it's a child of that mesh.
 function makeHeldGun(color) {
-  const { group, muzzle } = makeBlasterModel(color);
-  // Rests on the robot's hand block, just in front of its side.
-  group.position.set(0.47, -0.02, -0.2);
+  const { group, muzzle } = makeGunModel(color);
+  // Capsule radius is 0.5 — the attachment point has to clear that or the
+  // gun renders embedded in the body instead of held beside it.
+  group.position.set(0.62, 0.05, -0.15);
+  group.rotation.y = -0.12;
+  group.scale.setScalar(1.25); // reads better at typical view distance
   group.traverse((o) => {
     if (o.isMesh) {
       o.castShadow = true;
