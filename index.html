@@ -49,6 +49,10 @@
         <button id="btn-find-match" class="btn btn-primary btn-big">Find Match</button>
         <button id="btn-custom" class="btn btn-secondary btn-big">Custom Match</button>
         <button id="btn-browse" class="btn btn-secondary btn-big">Browse Public Lobbies</button>
+        <div class="home-links">
+          <button id="btn-profile" class="btn btn-secondary">Profile</button>
+          <button id="btn-leaderboards" class="btn btn-secondary">Leaderboards</button>
+        </div>
       </div>
 
       <div class="home-profile">
@@ -105,6 +109,34 @@
       </form>
       <p id="account-message" class="account-message" role="status" aria-live="polite"></p>
       <button id="btn-account-close" class="btn btn-secondary account-submit" type="button">Close</button>
+    </div>
+  </div>
+
+  <!-- ===================== PROFILE + LEADERBOARDS ===================== -->
+  <div id="profile-modal" class="modal-overlay hidden">
+    <div class="modal-panel stats-panel">
+      <p class="eyebrow">Your profile</p>
+      <h2 id="profile-name" class="stats-title"></h2>
+      <p id="profile-note" class="stats-note"></p>
+      <div id="profile-grid" class="stats-grid hidden"></div>
+      <p id="profile-ranks" class="stats-note hidden"></p>
+      <p class="stats-foot">Only Find Match games count. Custom matches never change your stats.</p>
+      <button id="btn-profile-close" class="btn btn-secondary account-submit" type="button">Close</button>
+    </div>
+  </div>
+
+  <div id="leaderboard-modal" class="modal-overlay hidden">
+    <div class="modal-panel stats-panel">
+      <p class="eyebrow">Leaderboards</p>
+      <h2 class="stats-title">Top players</h2>
+      <div class="account-tabs">
+        <button id="lb-tab-kills" class="btn btn-primary" type="button">Most kills</button>
+        <button id="lb-tab-wins" class="btn btn-secondary" type="button">Most wins</button>
+      </div>
+      <p id="lb-note" class="stats-note"></p>
+      <ol id="lb-list" class="lb-list"></ol>
+      <p class="stats-foot">Signed-in players only. Find Match games only.</p>
+      <button id="btn-leaderboard-close" class="btn btn-secondary account-submit" type="button">Close</button>
     </div>
   </div>
 

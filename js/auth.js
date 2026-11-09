@@ -17,7 +17,7 @@ const firebaseConfig = {
   appId: "1:91423044307:web:08ce071648607e744c9a26"
 };
 
-const API_BASE = "https://arenaduels-relay.onrender.com";
+export const API_BASE = "https://arenaduels-relay.onrender.com";
 const ACCOUNT_NAME_KEY = "arenaduels-account-username";
 let activeFirebaseAuth = null;
 

@@ -1513,3 +1513,25 @@ html, body {
   transition: background 0.15s, color 0.15s;
 }
 .bot-team-option.selected { background: var(--brand); color: #071433; }
+
+
+/* ===== Profile + leaderboards ===== */
+.home-links { display: flex; gap: 12px; }
+.home-links .btn { flex: 1; width: auto; }
+.stats-panel { width: min(460px, 92vw); }
+.stats-title { margin: 4px 0 14px; font-family: 'Space Grotesk', sans-serif; font-size: 26px; overflow-wrap: anywhere; }
+.stats-note { margin: 0 0 14px; color: var(--text-dim); font-size: 13px; line-height: 1.5; }
+.stats-note.error { color: #ff8585; }
+.stats-foot { margin: 14px 0 4px; color: var(--text-dim); font-size: 11px; line-height: 1.5; }
+.stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+.stat-tile { padding: 12px 8px; text-align: center; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border); border-radius: 12px; }
+.stat-tile b { display: block; font-family: 'Space Grotesk', sans-serif; font-size: 24px; }
+.stat-tile span { display: block; margin-top: 2px; color: var(--text-dim); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+.lb-list { margin: 0 0 6px; padding: 0; list-style: none; max-height: 46vh; overflow-y: auto; }
+.lb-row { display: grid; grid-template-columns: 38px 1fr auto; gap: 8px; align-items: center; padding: 8px 10px; border-radius: 10px; font-size: 13px; }
+.lb-row:nth-child(odd) { background: rgba(255, 255, 255, 0.035); }
+.lb-row.me { background: rgba(106, 168, 255, 0.18); outline: 1px solid var(--brand); }
+.lb-rank { color: var(--text-dim); }
+.lb-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lb-score { font-weight: 600; }
+@media (max-width: 420px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }

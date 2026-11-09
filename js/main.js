@@ -4,6 +4,7 @@ import { PlayerController, RemotePlayer, makeLaserMesh, aimLaser, setLaserColor,
 import { Net } from "./net.js";
 import { randomName } from "./names.js";
 import { initializeAccountUi } from "./auth.js";
+import { initStatsUi } from "./stats-ui.js";
 import { BotManager, BOT_SKILLS } from "./bots.js";
 import { COLORS, PATTERNS, ACCESSORIES, loadLook, saveLook, sanitizeLook } from "./customization.js";
 import { MatchState, DEFAULT_SETTINGS as DEFAULT_MATCH_RULES, sanitizeSettings } from "./match.js";
@@ -242,6 +243,7 @@ function showGame() {
 const nameInput = document.getElementById("player-name-input");
 nameInput.value = randomName(); // Guests can play immediately with a generated name.
 initializeAccountUi(nameInput, randomName);
+initStatsUi(nameInput);
 
 document.getElementById("btn-random-name").addEventListener("click", () => {
   if (nameInput.readOnly && !document.getElementById("btn-account-signout").classList.contains("hidden")) return;

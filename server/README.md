@@ -239,3 +239,36 @@ and the host is in the game straight away.
   lock and does not include the code.
 - Private matches are never listed and always need the code.
 - In Team Deathmatch you choose the bots' team (Balanced, Blue or Red; the host is always Blue). Bots never fight their own team.
+
+
+## Stats and leaderboards (stats.js)
+
+Signed-in players get **kills, deaths, wins and losses**, shown on the **Profile** screen, plus two
+**leaderboards** (most kills, most wins). Both are on the main menu.
+
+- **Only Find Match games count.** The server makes a score-keeper (`MatchTally`) only when it builds a
+  matchmade room, so a custom match (public or private) never touches anyone's stats.
+- **Only accounts are saved.** A guest has no identity to keep numbers under. Guests still count in
+  the tally, so the winner is worked out from everyone who played.
+- **The server keeps score, not the host's browser.** Kills come from the same events that run the
+  fight. When the host says the game is over, the server only believes it if the score limit was really
+  reached, or the time limit really ran out (give or take a few seconds), and the match lasted at least
+  30 seconds. Otherwise the ending is ignored and nobody gets a win or loss (the log says
+  `[stats] ignored an "score" ending`). In matchmade rooms the host also can't change the rules: the
+  mode's own settings are always used.
+- **Who wins:** most kills, then fewest deaths. An exact tie at the top is a draw (no win or loss for
+  anyone). Team Deathmatch: the team with more kills wins; equal is a draw.
+- **Leaving loses.** Anyone who leaves a Find Match game that is still going gets a loss, even if they
+  were winning (their kills and deaths are saved too). If that leaves nobody to play against (a 1v1, the
+  last player in a free-for-all, a whole team), the players still in win, as long as the game had been
+  going for 30 seconds. Leaving after the game is over (on the scoreboard) is never a loss. If a match
+  never finishes for other reasons, kills and deaths are kept but nobody else gets a win or loss.
+- **Storage:** Firestore collection `arenaStats`, one document per account (`uid`, `username`, `kills`,
+  `deaths`, `wins`, `losses`, `matches`). Written by the server with increments, never by browsers, so
+  the "deny-all" client rules stay as they are. No new environment variables and no manual index.
+  Existing accounts start at zero.
+- **API (read-only):** `GET /api/leaderboard?board=kills|wins` (public, cached 30 s) and
+  `GET /api/stats/me` (needs the signed-in player's token). Both are rate limited per address.
+
+What this does *not* stop: two accounts queueing together to feed each other wins, and a player's connection
+dropping (that counts as leaving). Fixing those needs rating or reporting systems, not just counting.

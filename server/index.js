@@ -26,6 +26,7 @@ import { canonicalName, isLegacyName, randomName } from "./names.js";
 import { createNameTickets } from "./nameTickets.js";
 import { Matchmaker, MATCHMAKING } from "./matchmaker.js";
 import { MODE_IDS, getMode, isValidModeId } from "./modes.js";
+import { MatchTally, createStatsStore, BOARDS } from "./stats.js";
 
 const PORT = process.env.PORT || 8080;
 const scrypt = promisify(crypto.scrypt);
@@ -39,6 +40,8 @@ try {
 } catch (err) {
   console.error("[auth] Firebase Admin SDK unavailable; account endpoints will return 503:", err.message);
 }
+// Kills, deaths, wins and losses for Find Match games (stats.js). Custom matches never count.
+const stats = firestore ? createStatsStore({ firestore, FieldValue }) : null;
 const authAttempts = new Map();
 // Account names come only from the generator in names.js, and only with a ticket the server
 // signed when it offered that name (nameTickets.js) — so nobody can register a name of their own.
@@ -135,7 +138,7 @@ async function handleAuthHttp(req, res, url) {
     res.writeHead(204, {
       "Access-Control-Allow-Origin": "https://arenaduels.github.io",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
       "Access-Control-Max-Age": "600",
       "Vary": "Origin"
     });
@@ -224,6 +227,44 @@ async function handleAuthHttp(req, res, url) {
     return authJson(res, 500, { error: "Account request failed. Try again later." });
   }
 }
+// ---- stats and leaderboards (read-only; nothing here lets a browser change a number) ----
+const statsHits = new Map(); // ip -> { count, resetAt }
+function statsRateAllowed(ip) {
+  const now = Date.now();
+  const e = statsHits.get(ip);
+  if (!e || e.resetAt <= now) { statsHits.set(ip, { count: 1, resetAt: now + 60_000 }); return true; }
+  return ++e.count <= 60;
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, e] of statsHits) if (e.resetAt <= now) statsHits.delete(ip);
+}, 5 * 60_000).unref();
+
+async function handleStatsHttp(req, res, url) {
+  const origin = String(req.headers.origin || "").replace(/\/+$/, "").toLowerCase();
+  if (origin && !ALLOWED_ORIGINS.includes(origin)) return authJson(res, 403, { error: "Origin not allowed." });
+  if (req.method !== "GET") return authJson(res, 405, { error: "Method not allowed." });
+  if (!statsRateAllowed(clientIp(req))) return authJson(res, 429, { error: "Too many requests. Try again in a minute." });
+  if (!stats) return authJson(res, 503, { error: "Stats are not available right now." });
+
+  if (url.pathname === "/api/leaderboard") {
+    const board = url.searchParams.get("board") || "kills";
+    if (!BOARDS.includes(board)) return authJson(res, 400, { error: "Unknown leaderboard." });
+    return authJson(res, 200, { board, entries: await stats.leaderboard(board) });
+  }
+  // /api/stats/me: the signed-in player's own numbers, found from their verified Firebase token.
+  const header = String(req.headers.authorization || "");
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  if (token.length < 20 || token.length > 6000 || !firebaseAuth) return authJson(res, 401, { error: "Sign in to see your stats." });
+  let decoded;
+  try {
+    decoded = await firebaseAuth.verifyIdToken(token, true);
+  } catch {
+    return authJson(res, 401, { error: "Sign in again to see your stats." });
+  }
+  return authJson(res, 200, await stats.getStats(decoded.uid));
+}
+
 const MAX_PLAYERS = 4; // manual/public rooms remain capped at four
 const MAX_ROOMS = 500;
 const MAX_CONNECTIONS = 1000;
@@ -261,6 +302,15 @@ const httpServer = http.createServer(async (req, res) => {
       await handleAuthHttp(req, res, url);
     } catch (err) {
       console.error("[http] request failed:", err.message);
+      if (!res.writableEnded) authJson(res, 500, { error: "Server error." });
+    }
+    return;
+  }
+  if (url.pathname === "/api/leaderboard" || url.pathname === "/api/stats/me") {
+    try {
+      await handleStatsHttp(req, res, url);
+    } catch (err) {
+      console.error("[http] stats request failed:", err.message);
       if (!res.writableEnded) authJson(res, 500, { error: "Server error." });
     }
     return;
@@ -375,10 +425,14 @@ wss.on("connection", (ws, req) => {
       abandonMatch(ws.room, "The host left before the match started.");
       return;
     }
+    saveStats(room.tally?.markLeft(ws.id, Date.now())); // leaving a game that is still going is a loss
     room.members.delete(ws.id);
     room.guard.removeMember(ws.id);
     for (const peer of room.members.values()) send(peer, { t: "peer_left", id: ws.id });
-    if (room.members.size === 0) rooms.delete(ws.room);
+    if (room.members.size === 0) {
+      saveStats(room.tally?.partial()); // a match that never finished still keeps its kills and deaths
+      rooms.delete(ws.room);
+    }
     // If the host left, the match is over for everyone; clients already treat that via peer_left.
   });
 });
@@ -428,6 +482,7 @@ function admitToRoom(room, code, ws) {
   ws.room = code;
   ws.searching = false;
   ws.pendingRoom = null;
+  room.tally?.addPlayer(ws.id, { uid: ws.uid, name: ws.username || ws.publicName || "Player", team: room.teams[ws.id] });
   send(ws, { t: "room_joined", code, id: ws.id, arenaId: room.arenaId, hostId: room.hostId, peers: peerIds, teams: room.teams, mode: room.modeId ?? null });
   for (const [id, peer] of room.members) {
     if (id !== ws.id) send(peer, { t: "peer_joined", id: ws.id, team: room.teams[ws.id] ?? null });
@@ -479,6 +534,9 @@ function startMatchRoom({ modeId, arenaId, players, entries }) {
     pending: { joiners, entries: entries.filter((e) => here.includes(e.player)), deadline: now + MATCH_READY_TIMEOUT_MS },
   });
   room.guard.onRestart(mode.settings, now); // the room's rules (health etc.) are known from the start
+  // Find Match games count towards stats; this is the only place a tally is made, so custom matches never do.
+  room.tally = new MatchTally({ settings: mode.settings, teamMode: mode.teamMode === true, now });
+  room.tally.addPlayer(host.id, { uid: host.uid, name: host.username || host.publicName || "Player", team: teams[host.id] });
   host.searching = false;
   console.log(`[matchmaking] ${here.length} players, ${mode.id} on ${arenaId}`);
   send(host, { t: "match_found", role: "host", code, id: host.id, arenaId, mode: modeId, settings: mode.settings, players: here.length, teams });
@@ -674,6 +732,7 @@ async function handleMessage(ws, raw, isBinary) {
       if (!room || room.hostId !== ws.id || !room.pending) return;
       const { joiners } = room.pending;
       room.pending = null;
+      room.tally?.restart(Date.now()); // the match clock starts now, not while the host was loading
       let admitted = 0;
       for (const j of joiners) {
         if (j.readyState !== j.OPEN || j.room || room.members.size >= room.maxPlayers) continue;
@@ -760,9 +819,23 @@ function screen(room, ws, isHost, clean) {
       return true;
     }
     case "bots": guard.onBots(clean.bots, now); return true;
-    case "restart": guard.onRestart(clean.settings, now); return true;
-    case "sync": guard.onSync(clean.forId, clean.settings, now); return true;
-    case "end": guard.onEnd(); return true;
+    case "restart":
+      // In a Find Match game the rules are the mode's, whatever the host's browser says.
+      if (room.tally) {
+        saveStats(room.tally.partial()); // restarting a game nobody finished still keeps its kills and deaths
+        clean.settings = { ...clean.settings, ...getMode(room.modeId).settings };
+        room.tally.restart(now);
+      }
+      guard.onRestart(clean.settings, now);
+      return true;
+    case "sync":
+      if (room.tally) clean.settings = { ...clean.settings, ...getMode(room.modeId).settings };
+      guard.onSync(clean.forId, clean.settings, now);
+      return true;
+    case "end":
+      guard.onEnd();
+      finishCountedMatch(room, clean.reason, now);
+      return true;
     case "hit": {
       // The host says one of its bots shot a player. Check it, then apply it to
       // that player's health ourselves; the hit itself is never relayed.
@@ -788,9 +861,30 @@ function screen(room, ws, isHost, clean) {
   }
 }
 
+// Save results without ever letting a database problem touch the game.
+function saveStats(rows) {
+  if (!stats || !rows?.length) return;
+  stats.recordResults(rows).catch((err) => console.error("[stats] could not save results:", err.message));
+}
+
+// The host says a Find Match game is over. The server only believes it if the score limit was really
+// reached or the time really ran out (stats.js), and works out the winner from its own kill count.
+function finishCountedMatch(room, reason, now) {
+  const tally = room.tally;
+  if (!tally) return;
+  const legit = tally.endIsLegit(reason, now);
+  tally.hostEnded = true; // the game is over on everyone's screen, so leaving now is never a loss
+  if (!legit) {
+    console.log(`[stats] ignored an "${reason}" ending in ${room.modeId} (not a real finish)`);
+    return;
+  }
+  saveStats(tally.finish());
+}
+
 // Send what the guard queued (health updates, kills, respawns, hits on bots) as "from the server".
 function deliver(room, events) {
   for (const { to, msg, except } of events) {
+    if (msg.t === "kill") room.tally?.addKill(msg.attackerId, msg.victimId);
     const out = JSON.stringify({ ...msg, from: SERVER_ID });
     if (to === "all") {
       for (const [id, peer] of room.members) if (id !== except && peer.readyState === peer.OPEN) peer.send(out);
