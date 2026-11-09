@@ -502,6 +502,8 @@ export function aimLaser(beam, origin, end, hit = true, t = performance.now() / 
 // remote player's beam from their broadcasted state, since they don't have
 // a real camera object on our end. 'YXZ' matches our own camera hierarchy
 // (mesh yaw as the outer/parent rotation, pitch as the inner/child one).
+const _beamRay = new THREE.Raycaster();
+const _beamEye = new THREE.Vector3();
 const _scratchEuler = new THREE.Euler(0, 0, 0, "YXZ");
 export function dirFromYawPitch(yaw, pitch, out = new THREE.Vector3()) {
   _scratchEuler.set(pitch, yaw, 0, "YXZ");
@@ -954,7 +956,8 @@ export class RemotePlayer {
     }
   }
 
-  update(dt, camera) {
+  // `solids` = the arena's walls and floor. Beams stop at them, so you can't see a laser go through a wall.
+  update(dt, camera, solids = null) {
     const t = Math.min(1, dt * 12);
     this.mesh.position.lerp(this.targetPos, t);
     this.mesh.rotation.y += (this.targetYaw - this.mesh.rotation.y) * t;
@@ -979,8 +982,22 @@ export class RemotePlayer {
         const origin = new THREE.Vector3();
         this.gunMuzzle.getWorldPosition(origin);
         const dir = dirFromYawPitch(this.targetYaw, this.targetPitch);
-        const end = origin.clone().addScaledVector(dir, 50);
-        aimLaser(this.laser, origin, end, false);
+        let end = origin.clone().addScaledVector(dir, 50);
+        let hitWall = false;
+        if (solids && solids.length) {
+          // Same rule as your own beam: it runs from the gun to wherever the line of sight from the
+          // eyes first meets a wall, and stops there.
+          _beamEye.copy(this.mesh.position);
+          _beamEye.y += MOVE.EYE_HEIGHT;
+          _beamRay.set(_beamEye, dir);
+          _beamRay.far = 50;
+          const h = _beamRay.intersectObjects(solids, false)[0];
+          end = h ? h.point.clone() : _beamEye.clone().addScaledVector(dir, 50);
+          hitWall = !!h;
+        }
+        // A gun poking through a wall (someone hugging it) has nothing visible to shoot.
+        if (hitWall && end.clone().sub(origin).dot(dir) <= 0.05) this.laser.visible = false;
+        else aimLaser(this.laser, origin, end, hitWall);
       } else {
         this.laser.visible = false;
       }

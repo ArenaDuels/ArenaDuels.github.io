@@ -2055,7 +2055,7 @@ function loop() {
 
   if (match.over) {
     // Frozen after the final whistle; the arena keeps rendering behind the results.
-    for (const rp of players.values()) rp.update(dt, camera);
+    for (const rp of players.values()) rp.update(dt, camera, arenaObjects);
     renderer.render(scene, camera);
     return;
   }
@@ -2091,7 +2091,7 @@ function loop() {
   local.interpolateView(alpha);
   if (botManager) botManager.interpolate(alpha);
 
-  for (const rp of players.values()) rp.update(dt, camera);
+  for (const rp of players.values()) rp.update(dt, camera, arenaObjects);
 
   const targets = [];
   const targetIds = [];

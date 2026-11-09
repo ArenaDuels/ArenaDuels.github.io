@@ -37,12 +37,12 @@ export function initStatsUi(nameInput) {
 
     const token = await getCurrentFirebaseIdToken().catch(() => null);
     if (!token) {
-      note.textContent = "You're playing as a guest. Create an account (or sign in) to keep your kills, deaths, wins and losses.";
+      note.textContent = "Sign in or create an account to track your stats.";
       return;
     }
     try {
       const s = await getJson("/api/stats/me", token);
-      note.textContent = s.matches > 0 || s.kills > 0 ? "" : "No Find Match games yet. Play one and your stats will show up here.";
+      note.textContent = s.matches > 0 || s.kills > 0 ? "" : "No matches played yet.";
       const tiles = [
         ["Kills", s.kills], ["Deaths", s.deaths], ["K/D", ratio(s.kills, s.deaths)],
         ["Wins", s.wins], ["Losses", s.losses], ["Win rate", percent(s.wins, s.matches)],
@@ -85,7 +85,7 @@ export function initStatsUi(nameInput) {
     try {
       const data = await getJson(`/api/leaderboard?board=${which}`);
       if (mine !== loadToken) return;
-      note.textContent = data.entries.length ? "" : "Nobody is on this board yet. Win a Find Match game to be the first.";
+      note.textContent = data.entries.length ? "" : "No players on this board yet.";
       const me = nameInput.value;
       list.replaceChildren(...data.entries.map((e) => {
         const row = document.createElement("li");
