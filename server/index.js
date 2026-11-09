@@ -425,10 +425,12 @@ wss.on("connection", (ws, req) => {
       abandonMatch(ws.room, "The host left before the match started.");
       return;
     }
-    saveStats(room.tally?.markLeft(ws.id, Date.now())); // leaving a game that is still going is a loss
+    const leftAt = Date.now();
+    saveStats(room.tally?.markLeft(ws.id, leftAt)); // leaving a game that is still going is a loss
     room.members.delete(ws.id);
     room.guard.removeMember(ws.id);
     for (const peer of room.members.values()) send(peer, { t: "peer_left", id: ws.id });
+    finishIfLastPlayerOrTeam(room, leftAt);
     if (room.members.size === 0) {
       saveStats(room.tally?.partial()); // a match that never finished still keeps its kills and deaths
       rooms.delete(ws.room);
@@ -879,6 +881,38 @@ function finishCountedMatch(room, reason, now) {
     return;
   }
   saveStats(tally.finish());
+}
+
+// Find Match games also end when departures leave only one competitor, or only one
+// TDM team. Custom rooms have no MatchTally, so this rule cannot affect them.
+function finishIfLastPlayerOrTeam(room, now) {
+  const tally = room.tally;
+  if (!tally || tally.hostEnded || room.pending) return;
+  const remaining = [...tally.players.values()].filter((p) => !p.left);
+  const teamMode = room.modeId === "tdm";
+  const oneSideLeft = teamMode
+    ? remaining.length > 0 && remaining.every((p) => p.team === remaining[0].team)
+    : remaining.length === 1;
+  if (!oneSideLeft) return;
+
+  // markLeft already records the departing player's loss and, after the minimum
+  // match duration, the remaining players' wins. End the live match even if it
+  // was too short to qualify for ranked win/loss statistics.
+  tally.finished = true;
+  tally.hostEnded = true;
+  const elapsed = Math.max(0, now - tally.startedAt);
+  const remainingSeconds = tally.timeLimit > 0
+    ? Math.max(0, tally.timeLimit * 60 - elapsed / 1000)
+    : -1;
+  const snap = {
+    entries: [...tally.players.values()].map(({ id, name, kills, deaths, team }) => ({ id, name, kills, deaths, team })),
+    teamKills: [...tally.teamKills],
+    remaining: remainingSeconds,
+    over: true,
+    reason: "last-standing",
+  };
+  const out = JSON.stringify({ t: "end", reason: "last-standing", snap, from: SERVER_ID });
+  for (const peer of room.members.values()) if (peer.readyState === peer.OPEN) peer.send(out);
 }
 
 // Send what the guard queued (health updates, kills, respawns, hits on bots) as "from the server".

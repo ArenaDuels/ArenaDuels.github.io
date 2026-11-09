@@ -26,7 +26,7 @@ export const SERVER_ONLY = new Set(["hp", "health", "respawn", "correct"]);
 const ID_RE = /^[A-Za-z0-9_-]{1,16}$/;
 const BOT_ID_RE = /^bot-\d{1,2}$/;
 const CODE_RE = /^\d{6}$/;
-const END_REASONS = new Set(["score", "time"]);
+const END_REASONS = new Set(["score", "time", "last-standing"]);
 
 const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const clampNum = (v, lo, hi) => (typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : null);
@@ -80,6 +80,7 @@ function cleanSnap(v) {
       name: cleanName(e.name),
       kills: clampNum(e.kills, 0, 100000) ?? 0,
       deaths: clampNum(e.deaths, 0, 100000) ?? 0,
+      team: e.team === 0 || e.team === 1 ? e.team : null,
     });
   }
   return {

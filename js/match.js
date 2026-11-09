@@ -169,6 +169,6 @@ export class MatchState {
     if (Array.isArray(snap.teamKills) && snap.teamKills.length === 2) this.teamKills = snap.teamKills.map(count);
     if (Number.isFinite(snap.remaining)) this.remaining = snap.remaining < 0 ? Infinity : Math.min(86400, snap.remaining);
     this.over = !!snap.over;
-    this.reason = snap.reason === "score" || snap.reason === "time" ? snap.reason : null;
+    this.reason = snap.reason === "score" || snap.reason === "time" || snap.reason === "last-standing" ? snap.reason : null;
   }
 }

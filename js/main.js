@@ -382,7 +382,7 @@ function handleData(rawMsg, fromId) {
   // The relay server is the authority on health, deaths and respawns; its messages come "from" SERVER_ID.
   const fromServer = fromId === SERVER_ID;
   if (SERVER_ONLY.has(msg.t) && !fromServer) return;
-  if ((msg.t === "end" || msg.t === "restart" || msg.t === "sync" || msg.t === "clock" || msg.t === "bots") && !fromHost) return;
+  if ((msg.t === "end" || msg.t === "restart" || msg.t === "sync" || msg.t === "clock" || msg.t === "bots") && !fromHost && !(msg.t === "end" && fromServer)) return;
   if (!fromServer && !players.has(fromId) && players.size >= MAX_REMOTE_PLAYERS) return;
 
   if (msg.t === "hello") {
@@ -417,7 +417,9 @@ function handleData(rawMsg, fromId) {
       local.teleportTo(msg.x, msg.y, msg.z);
     }
   } else if (msg.t === "end") {
-    if (fromId !== hostId || match.over) return;
+    // The relay can end Find Match games when departures leave one player/team.
+    // Ordinary score/time endings still come from the host; custom rooms are unaffected.
+    if ((fromId !== hostId && !fromServer) || match.over) return;
     match.load(msg.snap);
     match.finish(msg.reason);
     showResults();
@@ -1848,7 +1850,7 @@ function showResults() {
     ? (match.winnerTeam() == null ? "It's a draw" : match.winnerTeam() === myTeam() ? "Your team wins!" : `Team ${match.winnerTeam() === 0 ? "Blue" : "Red"} wins!`)
     : winner ? winner.id === myId ? "You win!" : `${winner.name} wins!` : "It's a draw";
   document.getElementById("results-reason").textContent =
-    match.reason === "score" ? "SCORE LIMIT REACHED" : match.reason === "time" ? "TIME'S UP" : "";
+    match.reason === "score" ? "SCORE LIMIT REACHED" : match.reason === "time" ? "TIME'S UP" : match.reason === "last-standing" ? "LAST PLAYER / TEAM REMAINING" : "";
   renderBoard(document.getElementById("scoreboard-content"), match.ranking(), winner?.id ?? null);
   document.getElementById("btn-rematch").classList.toggle("hidden", !net.isHost);
   document.getElementById("results-wait").classList.toggle("hidden", net.isHost);
