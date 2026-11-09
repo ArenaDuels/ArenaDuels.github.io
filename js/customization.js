@@ -145,28 +145,33 @@ export function buildAccessory(id, color) {
     return m;
   };
 
+  // Everything below is in HEAD space (the origin is the neck, the head turns around it):
+  // the head is 0.8 wide, 0.58 deep and 0.44 tall, so its flat top is at y = T and the
+  // visor on its front is at y = 0.22, z = -0.29. Keep these in step with ROBOT in player.js.
+  const T = 0.44;
+
   switch (id) {
     case "tophat": {
       const black = std(0x15151a, { roughness: 0.35 });
-      add(new THREE.CylinderGeometry(0.46, 0.46, 0.05, 24), black, 0, 0.98, 0);
-      add(new THREE.CylinderGeometry(0.3, 0.3, 0.46, 24), black, 0, 1.2, 0);
-      add(new THREE.CylinderGeometry(0.31, 0.31, 0.09, 24), std(color), 0, 1.04, 0);
+      add(new THREE.CylinderGeometry(0.4, 0.4, 0.04, 24), black, 0, T + 0.02, 0);         // brim
+      add(new THREE.CylinderGeometry(0.26, 0.26, 0.4, 24), black, 0, T + 0.24, 0);        // crown
+      add(new THREE.CylinderGeometry(0.27, 0.27, 0.08, 24), std(color), 0, T + 0.08, 0); // band
       break;
     }
     case "crown": {
       const gold = std(0xffc83d, { metalness: 0.7, roughness: 0.3 });
-      add(new THREE.CylinderGeometry(0.3, 0.32, 0.14, 20), gold, 0, 1.06, 0);
+      add(new THREE.CylinderGeometry(0.26, 0.28, 0.12, 20), gold, 0, T + 0.05, 0);
       for (let i = 0; i < 5; i++) {
         const a = (i / 5) * Math.PI * 2;
-        add(new THREE.ConeGeometry(0.07, 0.22, 8), gold, Math.cos(a) * 0.27, 1.22, Math.sin(a) * 0.27);
+        add(new THREE.ConeGeometry(0.06, 0.2, 8), gold, Math.cos(a) * 0.23, T + 0.2, Math.sin(a) * 0.23);
       }
       break;
     }
     case "halo": {
       const m = add(
-        new THREE.TorusGeometry(0.32, 0.035, 8, 28),
+        new THREE.TorusGeometry(0.3, 0.032, 8, 28),
         new THREE.MeshBasicMaterial({ color: 0xffe066 }),
-        0, 1.45, 0
+        0, T + 0.28, 0
       );
       m.rotation.x = Math.PI / 2;
       m.castShadow = false;
@@ -174,32 +179,33 @@ export function buildAccessory(id, color) {
     }
     case "horns": {
       const red = std(0xd0222d, { roughness: 0.4 });
-      const l = add(new THREE.ConeGeometry(0.08, 0.36, 10), red, -0.28, 1.0, 0);
-      l.rotation.z = 0.5;
-      const r = add(new THREE.ConeGeometry(0.08, 0.36, 10), red, 0.28, 1.0, 0);
-      r.rotation.z = -0.5;
+      const l = add(new THREE.ConeGeometry(0.08, 0.34, 10), red, -0.27, T + 0.13, 0);
+      l.rotation.z = 0.45;
+      const r = add(new THREE.ConeGeometry(0.08, 0.34, 10), red, 0.27, T + 0.13, 0);
+      r.rotation.z = -0.45;
       break;
     }
     case "antenna": {
-      add(new THREE.CylinderGeometry(0.015, 0.015, 0.42, 8), std(0x9aa0aa, { metalness: 0.6 }), 0, 1.3, 0);
+      add(new THREE.CylinderGeometry(0.015, 0.015, 0.4, 8), std(0x9aa0aa, { metalness: 0.6 }), 0, T + 0.2, 0);
       add(
         new THREE.SphereGeometry(0.065, 12, 12),
         std(color, { emissive: color, emissiveIntensity: 0.8 }),
-        0, 1.54, 0
+        0, T + 0.42, 0
       );
       break;
     }
     case "shades": {
+      // a bar across the visor, just in front of the eyes
       add(
-        new THREE.BoxGeometry(0.62, 0.13, 0.12),
+        new THREE.BoxGeometry(0.72, 0.16, 0.08),
         std(0x0b0b0f, { roughness: 0.1, metalness: 0.5 }),
-        0, 0.68, -0.46
+        0, 0.22, -0.35
       );
       break;
     }
     case "party": {
-      add(new THREE.ConeGeometry(0.27, 0.6, 18), std(color), 0, 1.35, 0);
-      add(new THREE.SphereGeometry(0.07, 10, 10), std(0xffffff), 0, 1.68, 0);
+      add(new THREE.ConeGeometry(0.25, 0.55, 18), std(color), 0, T + 0.27, 0);
+      add(new THREE.SphereGeometry(0.07, 10, 10), std(0xffffff), 0, T + 0.57, 0);
       break;
     }
     default:

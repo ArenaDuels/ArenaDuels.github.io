@@ -883,14 +883,7 @@ export class RemotePlayer {
       }
       this.accessory = buildAccessory(look.accessory, color);
       if (this.accessory) {
-        // Accessories are written relative to the capsule centre; the head turns around the neck,
-        // so shift them into head space and they tilt with it.
-        this.accessory.position.y = -ROBOT.NECK_Y;
-        if (look.accessory === "shades") {
-          // glasses go on the visor, not down on the chest
-          this.accessory.position.y = ROBOT.HEAD_H / 2 - 0.68; // eye height of the visor
-          this.accessory.position.z = 0.13;
-        }
+        // Built in head space, so they sit on the head and tilt with it.
         this.headPivot.add(this.accessory);
       }
       this.accessoryKey = key;
