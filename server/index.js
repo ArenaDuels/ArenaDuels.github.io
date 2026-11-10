@@ -16,7 +16,6 @@
 import { WebSocketServer } from "ws";
 import http from "http";
 import crypto from "crypto";
-import { isIP } from "node:net";
 import { promisify } from "node:util";
 import { initializeApp, applicationDefault } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
@@ -28,6 +27,8 @@ import { createNameTickets } from "./nameTickets.js";
 import { Matchmaker, MATCHMAKING } from "./matchmaker.js";
 import { MODE_IDS, getMode, isValidModeId } from "./modes.js";
 import { MatchTally, createStatsStore, BOARDS } from "./stats.js";
+import { clientIpFrom, resolveTrustProxy } from "./clientip.js";
+import { uidBusyElsewhere, uidInRoom } from "./sessions.js";
 
 const PORT = process.env.PORT || 8080;
 const scrypt = promisify(crypto.scrypt);
@@ -284,7 +285,9 @@ const DEFAULT_ORIGINS = ["https://arenaduels.github.io"];
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
   .split(",").map((s) => s.trim().replace(/\/+$/, "").toLowerCase()).filter(Boolean);
 if (ALLOWED_ORIGINS.length === 0) ALLOWED_ORIGINS.push(...DEFAULT_ORIGINS);
-const TRUST_PROXY = process.env.TRUST_PROXY !== "0"; // Render/Railway/Fly sit behind a proxy
+// The Cloudflare IP header is trusted only on Render (or with TRUST_PROXY=1); see clientip.js.
+const TRUST_PROXY = resolveTrustProxy();
+console.log(`[net] client IP source: ${TRUST_PROXY ? "CF-Connecting-IP header" : "TCP peer address"}`);
 
 // The server is the authority on health, hits, deaths and respawns (anticheat.js).
 // ANTICHEAT only controls how strict it is about the two things it *checks*:
@@ -336,24 +339,7 @@ const joinFailsByIp = new Map(); // ip -> { count, resetAt }
 const randomCode = () => String(crypto.randomInt(100000, 1000000));
 const randomId = () => crypto.randomBytes(6).toString("hex"); // 12 chars, unguessable
 
-function clientIp(req) {
-  // Render routes requests through Cloudflare. Use Cloudflare's single-value
-  // client-IP header rather than X-Forwarded-For, whose entries can include
-  // values supplied by the original client. Validate it before using it for
-  // per-IP limits. If the trusted header is absent/invalid, fail closed to
-  // the actual TCP peer address instead of trusting an unverified header.
-  if (TRUST_PROXY) {
-    const forwardedIp = req.headers["cf-connecting-ip"];
-    if (typeof forwardedIp === "string") {
-      const candidate = forwardedIp.trim();
-      if (candidate.length <= 64 && isIP(candidate)) return candidate;
-    }
-  }
-  const remoteAddress = req.socket.remoteAddress;
-  return typeof remoteAddress === "string" && remoteAddress.length <= 64
-    ? remoteAddress
-    : "unknown";
-}
+const clientIp = (req) => clientIpFrom(req, TRUST_PROXY);
 
 function send(ws, obj) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
@@ -708,6 +694,10 @@ async function handleMessage(ws, raw, isBinary) {
         send(ws, { t: "join_error", error: "Room not found." });
         return;
       }
+      if (room.tally && uidInRoom(room, ws)) {
+        send(ws, { t: "join_error", error: "This account is already in that match." });
+        return;
+      }
       if (room.members.size >= room.maxPlayers) {
         send(ws, { t: "join_error", error: `Room is full (${room.maxPlayers}/${room.maxPlayers}).` });
         return;
@@ -719,6 +709,10 @@ async function handleMessage(ws, raw, isBinary) {
     // ---- matchmaking ----
     case "find_match": {
       if (ws.room || matchmaker.isSearching(ws)) return;
+      if (uidBusyElsewhere(wss.clients, ws)) {
+        send(ws, { t: "search_error", error: "This account is already searching or in a match on another tab." });
+        return;
+      }
       if (!isValidModeId(msg.mode)) {
         send(ws, { t: "search_error", error: "Unknown game mode." });
         return;

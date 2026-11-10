@@ -71,8 +71,11 @@ Optional environment variables:
   Defaults to `https://arenaduels.github.io` only. Connections from any other
   website (or with no Origin header) are refused. Add extra entries here if you
   need local testing, e.g. `https://arenaduels.github.io,http://localhost:5500`.
-- `TRUST_PROXY` — set to `0` if the server is NOT behind a proxy
-  (Render/Railway/Fly are; leave it alone there).
+- `TRUST_PROXY` — whether to believe Cloudflare's `CF-Connecting-IP` header for per-IP limits.
+  On Render it is on automatically (Render sets `RENDER=true`); everywhere else it is **off** and the
+  real connection address is used. Set `TRUST_PROXY=1` only on a host that is genuinely behind
+  Cloudflare (Railway and Fly.io are not), and `0` to force it off. Trusting the header on a host
+  that isn't behind Cloudflare lets anyone fake an address and bypass every per-IP limit.
 
 `server/validate.js` is an identical copy of `js/validate.js`. If you change
 the message rules, copy the file to both places.
@@ -269,6 +272,10 @@ Signed-in players get **kills, deaths, wins and losses**, shown on the **Profile
   Existing accounts start at zero.
 - **API (read-only):** `GET /api/leaderboard?board=kills|wins` (public, cached 30 s) and
   `GET /api/stats/me` (needs the signed-in player's token). Both are rate limited per address.
+
+One account can only be in one place at a time: a second tab signed in as the same account
+can't search while the first is searching, loading or in a room, and can't join that account's match
+by code (`sessions.js`).
 
 What this does *not* stop: two accounts queueing together to feed each other wins, and a player's connection
 dropping (that counts as leaving). Fixing those needs rating or reporting systems, not just counting.
