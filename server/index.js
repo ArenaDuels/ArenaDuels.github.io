@@ -16,6 +16,7 @@
 import { WebSocketServer } from "ws";
 import http from "http";
 import crypto from "crypto";
+import { isIP } from "node:net";
 import { promisify } from "node:util";
 import { initializeApp, applicationDefault } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
@@ -336,11 +337,22 @@ const randomCode = () => String(crypto.randomInt(100000, 1000000));
 const randomId = () => crypto.randomBytes(6).toString("hex"); // 12 chars, unguessable
 
 function clientIp(req) {
+  // Render routes requests through Cloudflare. Use Cloudflare's single-value
+  // client-IP header rather than X-Forwarded-For, whose entries can include
+  // values supplied by the original client. Validate it before using it for
+  // per-IP limits. If the trusted header is absent/invalid, fail closed to
+  // the actual TCP peer address instead of trusting an unverified header.
   if (TRUST_PROXY) {
-    const fwd = req.headers["x-forwarded-for"];
-    if (typeof fwd === "string" && fwd) return fwd.split(",").pop().trim().slice(0, 64);
+    const forwardedIp = req.headers["cf-connecting-ip"];
+    if (typeof forwardedIp === "string") {
+      const candidate = forwardedIp.trim();
+      if (candidate.length <= 64 && isIP(candidate)) return candidate;
+    }
   }
-  return req.socket.remoteAddress || "unknown";
+  const remoteAddress = req.socket.remoteAddress;
+  return typeof remoteAddress === "string" && remoteAddress.length <= 64
+    ? remoteAddress
+    : "unknown";
 }
 
 function send(ws, obj) {
@@ -391,9 +403,10 @@ wss.on("connection", (ws, req) => {
   ws.strikes = 0;
   ws.alive = true;
 
-  // Someone who connects and never joins/creates a room doesn't get to sit here forever.
+  // A lobby-list request is one-shot and must not exempt a socket from the
+  // no-room timeout. Matchmaking and active rooms are allowed to remain open.
   const idleTimer = setTimeout(() => {
-    if (!ws.room && ws.listing !== true && !ws.searching) ws.close(1008, "Idle");
+    if (!ws.room && !ws.searching) ws.close(1008, "Idle");
   }, NO_ROOM_TIMEOUT_MS);
 
   ws.on("error", () => {}); // e.g. oversized frame — the socket is closed for us; just don't crash
@@ -672,7 +685,6 @@ async function handleMessage(ws, raw, isBinary) {
     }
 
     case "list_lobbies": {
-      ws.listing = true;
       const lobbies = [];
       for (const [code, room] of rooms) {
         if (room.isPublic && room.members.size < room.maxPlayers) {
