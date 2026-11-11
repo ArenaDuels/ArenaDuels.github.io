@@ -25,7 +25,7 @@ import { RoomGuard } from "./anticheat.js";
 import { canonicalName, isLegacyName, randomName } from "./names.js";
 import { createNameTickets } from "./nameTickets.js";
 import { Matchmaker, MATCHMAKING } from "./matchmaker.js";
-import { MODE_IDS, getMode, isValidModeId } from "./modes.js";
+import { MODE_IDS, FEATURED_LOBBY, getMode, isValidModeId } from "./modes.js";
 import { MatchTally, createStatsStore, BOARDS } from "./stats.js";
 import { clientIpFrom, resolveTrustProxy } from "./clientip.js";
 import { uidBusyElsewhere, uidInRoom } from "./sessions.js";
@@ -424,6 +424,10 @@ wss.on("connection", (ws, req) => {
       abandonMatch(ws.room, "The host left before the match started.");
       return;
     }
+    if (room.featured && room.hostId === ws.id) {
+      closeFeaturedLobby(ws, room);
+      return;
+    }
     const leftAt = Date.now();
     saveStats(room.tally?.markLeft(ws.id, leftAt)); // leaving a game that is still going is a loss
     room.members.delete(ws.id);
@@ -462,6 +466,52 @@ function makeRoom(code, host, arenaId, isPublic, extra = {}) {
   rooms.set(code, room);
   host.room = code;
   return room;
+}
+
+// ---- the always-open lobby ----
+
+function findFeaturedCode() {
+  for (const [code, room] of rooms) if (room.featured) return code;
+  return null;
+}
+
+// Someone clicked the always-open lobby and nobody is running it: they open it (and become its host).
+// If it is already running, tell them its code so they can join instead.
+function openFeaturedLobby(ws) {
+  if (ws.room || ws.searching) return;
+  const existing = findFeaturedCode();
+  if (existing) {
+    const room = rooms.get(existing);
+    send(ws, { t: "featured_exists", code: existing, full: room.members.size >= room.maxPlayers });
+    return;
+  }
+  const code = newRoomCode();
+  if (!code) return;
+  const mode = getMode(FEATURED_LOBBY.modeId);
+  // Everything about this room comes from the preset, never from the client.
+  const room = makeRoom(code, ws, FEATURED_LOBBY.arenaId, true, {
+    modeId: mode.id,
+    maxPlayers: mode.maxPlayers,
+    requireCode: false,
+    featured: true,
+    teams: {},
+  });
+  const rules = cleanRelay({ t: "restart", settings: FEATURED_LOBBY.rules });
+  if (rules) room.guard.onRestart(rules.settings, Date.now());
+  send(ws, { t: "room_created", code, id: ws.id, teams: room.teams, mode: room.modeId });
+}
+
+// Its host left, so the game is over for everyone in it. Take it off the books straight away so the
+// next player who clicks the lobby can open a fresh one.
+function closeFeaturedLobby(hostWs, room) {
+  const code = hostWs.room;
+  room.members.delete(hostWs.id);
+  room.guard.removeMember(hostWs.id);
+  for (const peer of room.members.values()) {
+    send(peer, { t: "peer_left", id: hostWs.id });
+    peer.room = null;
+  }
+  rooms.delete(code);
 }
 
 // Team modes: a late joiner goes to whichever team has fewer players right now.
@@ -651,6 +701,10 @@ async function handleMessage(ws, raw, isBinary) {
 
   switch (msg.t) {
     case "create_room": {
+      if (msg.featured === true) {
+        openFeaturedLobby(ws);
+        return;
+      }
       if (ws.room || ws.searching || rooms.size >= MAX_ROOMS || !isValidArenaId(msg.arenaId)) return;
       const code = newRoomCode();
       if (!code) return;
@@ -671,8 +725,20 @@ async function handleMessage(ws, raw, isBinary) {
     }
 
     case "list_lobbies": {
-      const lobbies = [];
+      // The always-open lobby is always first: the live room if someone has opened it, otherwise an empty slot.
+      const featuredCode = findFeaturedCode();
+      const featuredRoom = featuredCode ? rooms.get(featuredCode) : null;
+      const lobbies = [{
+        featured: true,
+        code: featuredRoom ? featuredCode : null,
+        locked: false,
+        mode: FEATURED_LOBBY.modeId,
+        arenaId: FEATURED_LOBBY.arenaId,
+        playerCount: featuredRoom ? featuredRoom.members.size : 0,
+        maxPlayers: getMode(FEATURED_LOBBY.modeId).maxPlayers,
+      }];
       for (const [code, room] of rooms) {
+        if (room.featured) continue;
         if (room.isPublic && room.members.size < room.maxPlayers) {
           lobbies.push({ code: room.requireCode ? null : code, locked: !!room.requireCode, mode: room.modeId ?? null, arenaId: room.arenaId, playerCount: room.members.size, maxPlayers: room.maxPlayers });
           if (lobbies.length >= 50) break;

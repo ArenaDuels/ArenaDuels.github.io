@@ -29,3 +29,16 @@ export const GAME_MODES = [
 export const MODE_IDS = GAME_MODES.map((m) => m.id);
 export const isValidModeId = (v) => typeof v === "string" && MODE_IDS.includes(v);
 export const getMode = (id) => GAME_MODES.find((m) => m.id === id) ?? GAME_MODES[0];
+
+// The lobby that is always on the list of public lobbies. Nobody hosts it full time: the first
+// player to click it opens it and runs its bots and clock from their browser, and it goes back
+// on the list as an empty slot when they leave. Games run the full time limit and then restart
+// by themselves. Both the browser and the relay read this, so the two always agree.
+export const FEATURED_LOBBY = Object.freeze({
+  modeId: "ffa",
+  arenaId: "foundry",
+  botCount: 3,
+  botSkill: 2,
+  restartDelaySec: 15, // pause on the results screen before the next game
+  rules: Object.freeze({ timeLimit: 10, scoreLimit: 0, startingHealth: 100, healthSteal: 0, respawnDelay: 2 }), // scoreLimit 0: the clock ends it
+});

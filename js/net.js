@@ -26,6 +26,7 @@ export class Net {
     this.onPeerDisconnected = null; // (id|null) => void — null means we lost the server itself
     this.onMatchCancelled = null;   // (reason) => void — a matchmade game fell through after we were in its room
     this._search = null;            // the matchmaking search in progress, if any
+    this.featured = false;          // true while we are the host of the always-open lobby
   }
 
   /**
@@ -38,12 +39,22 @@ export class Net {
       const body = { t: "create_room", arenaId, isPublic: !!opts.isPublic, requireCode: !!opts.requireCode };
       if (isValidModeId(opts.modeId)) body.modeId = opts.modeId;
       if (opts.settings && typeof opts.settings === "object") body.settings = opts.settings;
+      if (opts.featured === true) body.featured = true;
       const ws = this._connect(reject, () => ws.send(JSON.stringify(body)));
       ws.onmessage = (ev) => {
         const msg = this._parse(ev);
         if (!msg) return;
+        if (msg.t === "featured_exists") {
+          // The always-open lobby is already running: hand back its code so the caller can join it.
+          this._settled = true;
+          clearTimeout(this._timeout);
+          ws.close();
+          reject(Object.assign(new Error("The lobby is already open."), { existingCode: isValidCode(msg.code) ? msg.code : null, full: msg.full === true }));
+          return;
+        }
         if (msg.t === "room_created") {
           if (!isValidCode(msg.code) || !isValidId(msg.id)) return;
+          this.featured = opts.featured === true;
           this._settled = true;
           clearTimeout(this._timeout);
           this.ws = ws;
@@ -363,5 +374,6 @@ export class Net {
     this._search?.cancel();
     if (this.ws) this.ws.close();
     this.ws = null;
+    this.featured = false;
   }
 }

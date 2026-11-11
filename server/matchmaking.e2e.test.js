@@ -137,7 +137,7 @@ test("custom match: Free For All holds five, a locked lobby hides its code, priv
   const watcher = player("watcher");
   await watcher.open;
   watcher.send({ t: "list_lobbies" });
-  const list = (await watcher.waitFor("lobby_list")).lobbies;
+  const list = (await watcher.waitFor("lobby_list")).lobbies.filter((l) => !l.featured); // the always-open slot is covered by its own test
   assert.equal(list.length, 1, "the private match isn't listed");
   assert.equal(list[0].locked, true);
   assert.equal(list[0].code, null, "a locked lobby's code isn't shared");
@@ -168,10 +168,50 @@ test("custom match: Team Deathmatch rooms balance late joiners across teams", as
   const watcher = player("w2");
   await watcher.open;
   watcher.send({ t: "list_lobbies" });
-  const lobby = (await watcher.waitFor("lobby_list")).lobbies[0];
+  const lobby = (await watcher.waitFor("lobby_list")).lobbies.find((l) => !l.featured);
   assert.equal(lobby.locked, false);
   assert.equal(lobby.code, created.code);
   await closeAll([host, watcher, ...joiners]);
+});
+
+test("always-open lobby: first click opens it, later clicks join it, it reopens when its host leaves", async () => {
+  const host = player("fhost");
+  const other = player("fother");
+  const third = player("fthird");
+  await Promise.all([host.open, other.open, third.open]);
+  // waitFor() hands back the newest message of a type, so count first to be sure the reply is a fresh one
+  const slot = async (p) => {
+    const before = p.of("lobby_list").length;
+    p.send({ t: "list_lobbies" });
+    for (let waited = 0; p.of("lobby_list").length === before; waited += 25) {
+      if (waited > 3000) throw new Error("no lobby_list reply");
+      await sleep(25);
+    }
+    return p.last("lobby_list").lobbies[0];
+  };
+
+  const empty = await slot(other);
+  assert.deepEqual([empty.featured, empty.code, empty.playerCount, empty.maxPlayers, empty.mode], [true, null, 0, 5, "ffa"]);
+
+  host.send({ t: "create_room", featured: true, arenaId: "classic", isPublic: false });
+  const created = await host.waitFor("room_created");
+
+  const live = await slot(other);
+  assert.deepEqual([live.featured, live.code, live.playerCount], [true, created.code, 1]);
+
+  third.send({ t: "create_room", featured: true });
+  assert.equal((await third.waitFor("featured_exists")).code, created.code, "a second opener is sent to the live lobby");
+
+  other.send({ t: "join_room", code: created.code });
+  const joined = await other.waitFor("room_joined");
+  assert.deepEqual([joined.arenaId, joined.mode, joined.hostId], ["foundry", "ffa", created.id], "the room comes from the preset, not the client");
+
+  host.ws.close();
+  await other.waitFor("peer_left", 3000);
+  await new Promise((r) => setTimeout(r, 150));
+  const reopened = await slot(third);
+  assert.deepEqual([reopened.featured, reopened.code, reopened.playerCount], [true, null, 0]);
+  await closeAll([host, other, third]);
 });
 
 test("different game modes are matched separately", async () => {

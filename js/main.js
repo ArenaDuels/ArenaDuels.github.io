@@ -11,7 +11,7 @@ import { MatchState, DEFAULT_SETTINGS as DEFAULT_MATCH_RULES, sanitizeSettings }
 import { iconSvg } from "./icons.js";
 import { createLookPreview } from "./look-preview.js";
 import { cleanName, cleanRelay, isBotId, isValidArenaId, isValidId, SERVER_ID, SERVER_ONLY } from "./validate.js";
-import { GAME_MODES, getMode, isValidModeId } from "./modes.js";
+import { GAME_MODES, FEATURED_LOBBY, getMode, isValidModeId } from "./modes.js";
 
 /* =========================================================
    SETTINGS — persisted to localStorage. Sensitivity uses the same
@@ -191,14 +191,17 @@ applyCrosshairSize(); // apply saved size immediately, even before a match
 // did nothing until the next click moved the lock.) Also asks for raw mouse
 // input where the browser supports it, so OS mouse acceleration can't make
 // turning uneven; falls back to a normal lock otherwise.
+let lockMode = "none"; // "raw" = unadjusted mouse input, "normal" = regular lock (shown in the F9 overlay)
 function lockPointer() {
   const el = document.body;
   const plain = () => {
+    lockMode = "normal";
     try { el.requestPointerLock()?.catch?.(() => {}); } catch {}
   };
   try {
     const p = el.requestPointerLock({ unadjustedMovement: true });
-    if (p && typeof p.catch === "function") p.catch(plain);
+    if (p && typeof p.then === "function") p.then(() => { lockMode = "raw"; }, plain);
+    else lockMode = "normal"; // browser ignored the option (no raw input support)
   } catch {
     plain();
   }
@@ -733,10 +736,10 @@ async function createCustomMatch() {
 }
 createBtn.addEventListener("click", createCustomMatch);
 
-function startBots() {
+function startBots(cfg = matchSettings) {
   botManager?.dispose();
   botManager = null;
-  if (!net.isHost || matchSettings.botCount <= 0) return;
+  if (!net.isHost || cfg.botCount <= 0) return;
   botManager = new BotManager({
     scene,
     players,
@@ -763,9 +766,9 @@ function startBots() {
   });
   // Team Deathmatch: each bot joins the team chosen in Custom Match, or whichever has fewer players on Balanced.
   const teamFor = currentModeId === "tdm" ? (id) => {
-    if (matchSettings.botTeam === 0 || matchSettings.botTeam === 1) {
-      playerTeams[id] = matchSettings.botTeam;
-      return matchSettings.botTeam;
+    if (cfg.botTeam === 0 || cfg.botTeam === 1) {
+      playerTeams[id] = cfg.botTeam;
+      return cfg.botTeam;
     }
     const n = [0, 0];
     for (const t of Object.values(playerTeams)) if (t === 0 || t === 1) n[t]++;
@@ -773,7 +776,62 @@ function startBots() {
     playerTeams[id] = team;
     return team;
   } : null;
-  botManager.spawnBots(matchSettings.botCount, matchSettings.botSkill, teamFor);
+  botManager.spawnBots(cfg.botCount, cfg.botSkill, teamFor);
+}
+
+/* ---- THE ALWAYS-OPEN LOBBY ----
+   It is always on the lobby list. The first player to click it opens it and becomes its host, which
+   means their browser runs the bots and the clock (see FEATURED_LOBBY in modes.js). Everyone after
+   that just joins. Games run their full time and then restart by themselves. */
+async function hostFeaturedLobby() {
+  if (custom.creating || matchActive || matchStarting) return;
+  custom.creating = true;
+  stopLobbyPolling();
+  joinStatusEl.textContent = "Opening the lobby...";
+  const wakeupTimer = setTimeout(() => {
+    joinStatusEl.textContent = "Server is waking up. This can take up to a minute on the first connection...";
+  }, 3000);
+  const preset = FEATURED_LOBBY;
+  const rules = sanitizeSettings(preset.rules);
+  try {
+    const code = await net.host(preset.arenaId, { isPublic: true, requireCode: false, modeId: preset.modeId, settings: rules, featured: true });
+    clearTimeout(wakeupTimer);
+    hostId = net.hostId;
+    myId = net.myId;
+    myName = getPlayerName();
+    playerTeams = { ...(net.roomTeams || {}) };
+    matchStarting = true;
+    match.scores.clear();
+    applyMatchSettings(rules, preset.modeId);
+    await beginMatch(preset.arenaId);
+    startBots({ botCount: preset.botCount, botSkill: preset.botSkill, botTeam: "auto" });
+    showRoomCodeBanner(code);
+    joinStatusEl.textContent = "";
+  } catch (err) {
+    clearTimeout(wakeupTimer);
+    net.destroy();
+    matchStarting = false;
+    if (err && err.existingCode && !err.full) {
+      // Someone opened it a moment before us: just join theirs.
+      custom.creating = false;
+      joinFromBrowser(err.existingCode);
+      return;
+    }
+    joinStatusEl.textContent = err && err.full ? "That lobby is full right now." : "Couldn't open the lobby. Try again.";
+    if (!screens.browse.classList.contains("hidden")) startLobbyPolling();
+  } finally {
+    custom.creating = false;
+  }
+}
+
+// When a game in the always-open lobby ends, the host starts the next one after a short pause.
+let featuredRestartTimer = null;
+function scheduleFeaturedRestart() {
+  clearTimeout(featuredRestartTimer);
+  featuredRestartTimer = setTimeout(() => {
+    featuredRestartTimer = null;
+    if (net.isHost && net.featured && match.over) restartMatchAsHost();
+  }, FEATURED_LOBBY.restartDelaySec * 1000);
 }
 
 /* ---- JOIN FLOW (shared by manual code entry and the lobby browser) ---- */
@@ -1121,10 +1179,14 @@ function renderLobbyList(lobbies) {
       </div>
       <button class="lobby-join-btn" ${full ? "disabled" : ""}></button>
     `;
-    row.querySelector(".lobby-arena-name").textContent = `${arena.name} · ${modeName}`;
-    row.querySelector(".lobby-player-count").textContent = `${lobby.playerCount}/${lobby.maxPlayers} players`;
+    row.querySelector(".lobby-arena-name").textContent = lobby.featured ? `Always Open · ${modeName} · ${arena.name}` : `${arena.name} · ${modeName}`;
+    row.querySelector(".lobby-player-count").textContent = lobby.featured
+      ? `${lobby.playerCount}/${lobby.maxPlayers} players · ${FEATURED_LOBBY.botCount} bots`
+      : `${lobby.playerCount}/${lobby.maxPlayers} players`;
     const btn = row.querySelector(".lobby-join-btn");
-    if (lobby.locked) {
+    if (lobby.featured) {
+      btn.textContent = full ? "Full" : lobby.code ? "Join" : "Play";
+    } else if (lobby.locked) {
       btn.innerHTML = `<span class="lock-icon">${lockSvg}</span>Code`;
       if (full) btn.textContent = "Full";
     } else {
@@ -1132,7 +1194,10 @@ function renderLobbyList(lobbies) {
     }
     if (!full) {
       btn.addEventListener("click", () => {
-        if (lobby.locked) {
+        if (lobby.featured) {
+          if (lobby.code) joinFromBrowser(lobby.code);
+          else hostFeaturedLobby();
+        } else if (lobby.locked) {
           joinStatusEl.textContent = "That lobby needs a code. Ask the host for it.";
           joinCodeInput.focus();
         } else {
@@ -1832,6 +1897,7 @@ function endMatchAsHost(reason) {
   match.finish(reason);
   net.broadcast({ t: "end", reason, snap: match.snapshot() });
   showResults();
+  if (net.featured) scheduleFeaturedRestart();
 }
 
 function showResults() {
@@ -1967,6 +2033,44 @@ addEventListener("mousemove", (e) => {
   local.yaw -= sanitizeDelta(e.movementX) * s;
   local.pitch -= sanitizeDelta(e.movementY) * s;
   local.pitch = Math.max(-1.4, Math.min(1.4, local.pitch));
+});
+
+/* =========================================================
+   MOUSE DIAGNOSTICS — press F9 to show or hide.
+   Shows whether raw mouse input is active, the frame rate, and the
+   biggest single mouse jump each second. Nothing here changes aiming.
+========================================================= */
+const mouseDbg = { el: null, on: false, events: 0, max: 0, shownMax: 0, shownEvents: 0, frames: 0, fps: 0, last: 0 };
+addEventListener("mousemove", (e) => {
+  if (!mouseDbg.on || document.pointerLockElement !== document.body) return;
+  mouseDbg.events++;
+  mouseDbg.max = Math.max(mouseDbg.max, Math.hypot(sanitizeDelta(e.movementX), sanitizeDelta(e.movementY)));
+});
+function mouseDbgTick(now) {
+  if (!mouseDbg.on) return;
+  mouseDbg.frames++;
+  if (now - mouseDbg.last >= 1000) {
+    mouseDbg.fps = Math.round((mouseDbg.frames * 1000) / (now - mouseDbg.last));
+    mouseDbg.shownMax = Math.round(mouseDbg.max);
+    mouseDbg.shownEvents = mouseDbg.events;
+    mouseDbg.frames = 0; mouseDbg.events = 0; mouseDbg.max = 0; mouseDbg.last = now;
+    mouseDbg.el.textContent =
+      `mouse lock: ${lockMode}\nfps: ${mouseDbg.fps}\nmouse events/s: ${mouseDbg.shownEvents}\nbiggest jump: ${mouseDbg.shownMax}`;
+  }
+  requestAnimationFrame(mouseDbgTick);
+}
+addEventListener("keydown", (e) => {
+  if (e.code !== "F9") return;
+  e.preventDefault();
+  mouseDbg.on = !mouseDbg.on;
+  if (!mouseDbg.el) {
+    mouseDbg.el = document.createElement("pre");
+    mouseDbg.el.style.cssText =
+      "position:fixed;left:8px;bottom:8px;margin:0;padding:6px 8px;background:rgba(0,0,0,.65);color:#fff;font:12px monospace;z-index:9999;pointer-events:none;";
+    document.body.appendChild(mouseDbg.el);
+  }
+  mouseDbg.el.style.display = mouseDbg.on ? "block" : "none";
+  if (mouseDbg.on) { mouseDbg.last = performance.now(); requestAnimationFrame(mouseDbgTick); }
 });
 
 /* =========================================================

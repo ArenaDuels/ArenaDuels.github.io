@@ -273,6 +273,12 @@ Signed-in players get **kills, deaths, wins and losses**, shown on the **Profile
 - **API (read-only):** `GET /api/leaderboard?board=kills|wins` (public, cached 30 s) and
   `GET /api/stats/me` (needs the signed-in player's token). Both are rate limited per address.
 
+The lobby list always starts with an **Always Open** lobby (Free For All, 5 players, 3 bots, 10-minute games
+that restart by themselves; the preset is `FEATURED_LOBBY` in `modes.js`). Nobody hosts it full time: the
+first player to click it opens it and their browser runs the bots and the clock, so it closes when that
+player leaves and goes back on the list as an empty slot. The relay builds the room from the preset, so a
+client can't pick its own rules for it.
+
 One account can only be in one place at a time: a second tab signed in as the same account
 can't search while the first is searching, loading or in a room, and can't join that account's match
 by code (`sessions.js`).
