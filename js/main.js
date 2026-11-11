@@ -12,6 +12,7 @@ import { iconSvg } from "./icons.js";
 import { createLookPreview } from "./look-preview.js";
 import { cleanName, cleanRelay, isBotId, isValidArenaId, isValidId, SERVER_ID, SERVER_ONLY } from "./validate.js";
 import { GAME_MODES, FEATURED_LOBBY, getMode, isValidModeId } from "./modes.js";
+import { TrainingSession, DRILLS, DRILL_IDS, loadBests, saveBest } from "./training.js";
 
 /* =========================================================
    SETTINGS — persisted to localStorage. Sensitivity uses the same
@@ -104,7 +105,7 @@ function closeSettings() {
 }
 
 function openPauseMenu() {
-  if (!matchActive || match.over) return;
+  if (!matchActive || match.over || training?.finished) return;
   paused = true;
   document.exitPointerLock();
   for (const k in keys) keys[k] = false;
@@ -122,6 +123,11 @@ function resumeMatch() {
 function leaveMatch() {
   matchActive = false;
   paused = false;
+  training?.dispose();
+  training = null;
+  document.body.classList.remove("training-mode");
+  document.getElementById("training-hud").classList.add("hidden");
+  document.getElementById("training-results").classList.add("hidden");
   pauseMenu.classList.add("hidden");
   settingsModal.classList.add("hidden");
   hideCustomization();
@@ -215,6 +221,7 @@ const screens = {
   custom: document.getElementById("screen-custom"),
   browse: document.getElementById("screen-browse"),
   matchmaking: document.getElementById("screen-matchmaking"),
+  training: document.getElementById("screen-training"),
 };
 const hud = document.getElementById("hud");
 const hudHpCorner = document.getElementById("hud-hp-corner");
@@ -833,6 +840,112 @@ function scheduleFeaturedRestart() {
     if (net.isHost && net.featured && match.over) restartMatchAsHost();
   }, FEATURED_LOBBY.restartDelaySec * 1000);
 }
+
+/* ---- AIM TRAINING ----
+   Solo drills in the Classic Box (see training.js). No network: we just set up an arena and a
+   local player, then hand the targets' scoring each frame's beam result. */
+let training = null;
+let trainingDrillId = null;
+let trainingHudKey = "";
+const trainingResultsEl = document.getElementById("training-results");
+const trainingPlayer = () => ({ pos: local.mesh.position, yaw: local.yaw });
+
+function renderTrainingDrills() {
+  const bests = loadBests();
+  const list = document.getElementById("training-drills");
+  list.replaceChildren();
+  for (const id of DRILL_IDS) {
+    const drill = DRILLS[id];
+    const card = el("div", "training-card");
+    const text = el("div", "training-card-text");
+    text.append(
+      el("p", "training-card-title", `${drill.name} \u00b7 ${drill.seconds}s`),
+      el("p", "training-card-blurb", drill.blurb),
+      el("p", "training-card-best", bests[id] !== undefined ? `Best: ${drill.format(bests[id])} ${drill.unit}` : "No score yet"),
+    );
+    const btn = el("button", "btn btn-primary", "Start");
+    btn.addEventListener("click", () => startTraining(id));
+    card.append(text, btn);
+    list.append(card);
+  }
+}
+
+async function startTraining(drillId) {
+  if (matchActive || matchStarting || !DRILLS[drillId]) return;
+  matchStarting = true;
+  trainingDrillId = drillId;
+  net.destroy(); // nothing here talks to the server
+  hostId = null;
+  myId = "training";
+  myName = getPlayerName();
+  playerTeams = {};
+  match.scores.clear();
+  applyMatchSettings(DEFAULT_MATCH_RULES, "1v1");
+  try {
+    await beginMatch("classic");
+  } catch {
+    matchStarting = false;
+    showScreen("training");
+    return;
+  }
+  document.body.classList.add("training-mode");
+  document.getElementById("training-hud").classList.remove("hidden");
+  trainingHudKey = "";
+  training = new TrainingSession({
+    camera,
+    makeTarget: (color, name) => new RemotePlayer(scene, color, name),
+    onHud: updateTrainingHud,
+    onFinish: onTrainingFinished,
+  });
+  training.start(drillId, trainingPlayer());
+}
+
+function updateTrainingHud(info) {
+  const key = `${info.name}|${info.timeText}|${info.scoreText}|${info.banner}`;
+  if (key === trainingHudKey) return;
+  trainingHudKey = key;
+  document.getElementById("training-name").textContent = info.name;
+  document.getElementById("training-time").textContent = info.timeText;
+  document.getElementById("training-score").textContent = info.scoreText;
+  document.getElementById("training-banner").textContent = info.banner;
+}
+
+function onTrainingFinished(result) {
+  paused = true; // the loop stops simulating; the arena keeps rendering behind the results
+  firing = false;
+  for (const k in keys) keys[k] = false;
+  document.exitPointerLock();
+  const isBest = saveBest(result.drillId, result.score);
+  const best = loadBests()[result.drillId];
+  document.getElementById("training-results-name").textContent = result.name;
+  document.getElementById("training-results-score").textContent = result.scoreText;
+  document.getElementById("training-results-unit").textContent = result.unit;
+  document.getElementById("training-results-detail").textContent = result.lines.join(" \u00b7 ");
+  document.getElementById("training-results-best").textContent = isBest
+    ? "New personal best!"
+    : best !== undefined ? `Personal best: ${DRILLS[result.drillId].format(best)}` : "";
+  trainingResultsEl.classList.remove("hidden");
+}
+
+document.getElementById("btn-training").addEventListener("click", () => {
+  renderTrainingDrills();
+  showScreen("training");
+});
+document.getElementById("btn-training-back").addEventListener("click", () => showScreen("menu"));
+document.getElementById("btn-training-retry").addEventListener("click", () => {
+  if (!training) return;
+  trainingResultsEl.classList.add("hidden");
+  paused = false;
+  local.spawn(mySpawn);
+  training.start(trainingDrillId, trainingPlayer());
+  lockPointer();
+});
+document.getElementById("btn-training-drills").addEventListener("click", () => {
+  leaveMatch();
+  renderTrainingDrills();
+  showScreen("training");
+});
+document.getElementById("btn-training-menu").addEventListener("click", leaveMatch);
 
 /* ---- JOIN FLOW (shared by manual code entry and the lobby browser) ---- */
 async function doJoin(code, statusEl) {
@@ -1996,7 +2109,7 @@ addEventListener("keydown", (e) => {
     e.preventDefault(); // hold Tab for the live scoreboard instead of tabbing around the page
     showTabBoard(true);
   }
-  if (e.code === "Escape" && matchActive && !match.over) {
+  if (e.code === "Escape" && matchActive && !match.over && !training?.finished) {
     if (paused) resumeMatch();
     else openPauseMenu();
   }
@@ -2198,6 +2311,7 @@ function loop() {
   if (botManager) botManager.interpolate(alpha);
 
   for (const rp of players.values()) rp.update(dt, camera, arenaObjects);
+  if (training) training.update(dt, trainingPlayer());
 
   const targets = [];
   const targetIds = [];
@@ -2207,8 +2321,10 @@ function loop() {
       targetIds.push(id);
     }
   }
+  if (training) for (const m of training.hitMeshes()) targets.push(m);
   const solidObjects = arenaObjects; // includes the floor now, so floor shots register too
 
+  let beamHitMesh = null; // which training target the beam reached first, if any
   if (activeFiring) {
     const origin = new THREE.Vector3();
     camera.getWorldPosition(origin);
@@ -2218,6 +2334,7 @@ function loop() {
 
     const hits = raycaster.intersectObjects([...targets, ...solidObjects], false);
     const hit = hits[0];
+    if (hit && training && training.ownsMesh(hit.object)) beamHitMesh = hit.object;
     const end = hit ? hit.point : origin.clone().addScaledVector(dir, 50);
 
     // Visual beam starts from the gun's actual muzzle — a real object in
@@ -2249,6 +2366,8 @@ function loop() {
     laser.visible = false;
     endScorchStroke();
   }
+
+  if (training) training.afterBeam(dt, activeFiring, beamHitMesh, trainingPlayer());
 
   updateScorchMarks();
 

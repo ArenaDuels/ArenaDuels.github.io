@@ -49,6 +49,7 @@
         <button id="btn-find-match" class="btn btn-primary btn-big">Find Match</button>
         <button id="btn-custom" class="btn btn-secondary btn-big">Custom Match</button>
         <button id="btn-browse" class="btn btn-secondary btn-big">Browse Public Lobbies</button>
+        <button id="btn-training" class="btn btn-secondary btn-big">Aim Training</button>
         <div class="home-links">
           <button id="btn-profile" class="btn btn-secondary">Profile</button>
           <button id="btn-leaderboards" class="btn btn-secondary">Leaderboards</button>
@@ -340,6 +341,16 @@
     </div>
   </div>
 
+  <!-- ===================== AIM TRAINING ===================== -->
+  <div id="screen-training" class="screen hidden">
+    <div class="menu-panel training-panel">
+      <p class="eyebrow">Aim Training</p>
+      <p class="status-text">Solo drills in an empty room. Nothing you do here counts toward the leaderboards.</p>
+      <div id="training-drills" class="training-drills"></div>
+      <button id="btn-training-back" class="btn btn-secondary">Back</button>
+    </div>
+  </div>
+
   <!-- ===================== MATCHMAKING ===================== -->
   <div id="screen-matchmaking" class="screen hidden">
     <div class="menu-panel mm-panel">
@@ -402,6 +413,14 @@
     <span id="hud-hp-value">100</span>
     <span id="hud-score">0 kills · 0 deaths</span>
   </div>
+  <div id="training-hud" class="hidden">
+    <div id="training-banner" class="training-banner"></div>
+    <div class="training-bar">
+      <span id="training-name" class="training-name"></span>
+      <span id="training-time" class="training-time">0</span>
+      <span id="training-score" class="training-score"></span>
+    </div>
+  </div>
   <div id="room-code-banner" class="hidden">
     <span class="room-code-label">Room Code</span>
     <span id="room-code-value">------</span>
@@ -436,6 +455,22 @@
       <div class="menu-actions">
         <button id="btn-rematch" class="btn btn-primary hidden">Play Again</button>
         <button id="btn-scoreboard-close" class="btn btn-secondary">Back to Menu</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== TRAINING RESULTS ===================== -->
+  <div id="training-results" class="modal-overlay hidden">
+    <div class="modal-panel scoreboard-panel">
+      <p id="training-results-name" class="eyebrow">Drill</p>
+      <h2 id="training-results-score" class="results-winner"></h2>
+      <p id="training-results-unit" class="results-reason"></p>
+      <p id="training-results-detail" class="status-text"></p>
+      <p id="training-results-best" class="status-text"></p>
+      <div class="menu-actions">
+        <button id="btn-training-retry" class="btn btn-primary">Try Again</button>
+        <button id="btn-training-drills" class="btn btn-secondary">Other Drills</button>
+        <button id="btn-training-menu" class="btn btn-secondary">Main Menu</button>
       </div>
     </div>
   </div>

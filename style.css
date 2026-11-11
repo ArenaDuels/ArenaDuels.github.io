@@ -1534,3 +1534,44 @@ html, body {
 .lb-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lb-score { font-weight: 600; }
 @media (max-width: 420px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
+
+
+/* ===================== AIM TRAINING ===================== */
+.training-panel { width: min(560px, 94vw); }
+.training-drills { display: flex; flex-direction: column; gap: 12px; margin: 18px 0 22px; }
+.training-card {
+  display: flex; align-items: center; gap: 16px; padding: 14px 18px; text-align: left;
+  background: rgba(26, 26, 32, 0.6); border: 1px solid var(--border); border-radius: 14px;
+  transition: border-color 0.15s, transform 0.15s, background 0.15s;
+}
+.training-card:hover { border-color: var(--brand); background: rgba(26, 26, 32, 0.9); transform: translateY(-2px); }
+.training-card-text { flex: 1; min-width: 0; }
+.training-card-title { margin: 0 0 4px; font-family: 'Space Grotesk', sans-serif; font-size: 18px; font-weight: 700; }
+.training-card-blurb { margin: 0 0 6px; font-size: 12px; line-height: 1.45; color: var(--text-dim); }
+.training-card-best { margin: 0; font-size: 12px; color: var(--brand); }
+
+#training-hud {
+  position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  pointer-events: none; z-index: 20;
+}
+.training-bar {
+  display: flex; align-items: baseline; gap: 16px; padding: 6px 22px;
+  background: rgba(10, 10, 16, 0.72); border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 999px; backdrop-filter: blur(8px); font-family: 'Space Grotesk', sans-serif;
+}
+.training-name { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: var(--text-dim); }
+.training-time { font-size: 26px; font-weight: 700; letter-spacing: 2px; min-width: 2ch; text-align: center; }
+.training-score { font-size: 15px; font-weight: 600; color: var(--brand); }
+.training-banner {
+  min-height: 0; font-family: 'Space Grotesk', sans-serif; font-size: 34px; font-weight: 700;
+  letter-spacing: 3px; text-shadow: 0 0 24px rgba(106, 168, 255, 0.55);
+}
+.training-banner:empty { display: none; }
+
+/* Training has its own HUD: hide the match clock, kills/deaths and kill feed. */
+body.training-mode #hud,
+body.training-mode #hud-score,
+body.training-mode #hud-hp-corner,
+body.training-mode #kill-feed,
+body.training-mode #room-code-banner { display: none !important; }
