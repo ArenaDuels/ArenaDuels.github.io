@@ -12,7 +12,7 @@ import { iconSvg } from "./icons.js";
 import { createLookPreview } from "./look-preview.js";
 import { cleanName, cleanRelay, isBotId, isValidArenaId, isValidId, SERVER_ID, SERVER_ONLY } from "./validate.js";
 import { GAME_MODES, FEATURED_LOBBY, getMode, isValidModeId } from "./modes.js";
-import { TrainingSession, DRILLS, DRILL_IDS, loadBests, saveBest, nearConsole, buildTrainingConsole } from "./training.js";
+import { TrainingSession, DRILLS, DRILL_IDS, LEVELS, LEVEL_IDS, DEFAULT_LEVEL, bestKey, loadBests, saveBest, nearConsole, buildTrainingConsole } from "./training.js";
 
 /* =========================================================
    SETTINGS — persisted to localStorage. Sensitivity uses the same
@@ -128,6 +128,7 @@ function leaveMatch() {
   trainingRoom?.dispose();
   trainingRoom = null;
   consolePanelOpen = false;
+  crosshair.classList.remove("on-target");
   document.body.classList.remove("training-mode");
   for (const id of ["training-hud", "training-results", "training-console", "training-hint"]) {
     document.getElementById(id).classList.add("hidden");
@@ -853,6 +854,12 @@ let trainingRoom = null;  // the console model
 let trainingDrillId = null;
 let trainingHudKey = "";
 let consolePanelOpen = false;
+const LEVEL_KEY = "arenaduels.training.level";
+let trainingLevel = DEFAULT_LEVEL; // how fast the tracking and close-quarters targets go
+try {
+  const saved = localStorage.getItem(LEVEL_KEY);
+  if (LEVELS[saved]) trainingLevel = saved;
+} catch { /* storage blocked: stay on the default */ }
 const trainingResultsEl = document.getElementById("training-results");
 const consolePanelEl = document.getElementById("training-console");
 const trainingHintEl = document.getElementById("training-hint");
@@ -891,25 +898,41 @@ async function enterTrainingRoom() {
   trainingHintEl.classList.remove("hidden");
 }
 
-// The drill list on the console panel.
+// The speed buttons and the drill list on the console panel.
 function renderConsoleDrills() {
   const bests = loadBests();
+  const levels = document.getElementById("training-levels");
+  levels.replaceChildren(el("span", "training-levels-label", "Speed"));
+  for (const id of LEVEL_IDS) {
+    const btn = el("button", `level-btn${id === trainingLevel ? " active" : ""}`, LEVELS[id].label);
+    btn.addEventListener("click", () => setTrainingLevel(id));
+    levels.append(btn);
+  }
   const list = document.getElementById("training-drills");
   list.replaceChildren();
   DRILL_IDS.forEach((id, i) => {
     const drill = DRILLS[id];
     const card = el("div", "training-card");
     const text = el("div", "training-card-text");
+    const best = bests[bestKey(id, trainingLevel)];
+    const where = drill.levels ? ` (${LEVELS[trainingLevel].label})` : "";
     text.append(
       el("p", "training-card-title", `${i + 1} \u00b7 ${drill.name} \u00b7 ${drill.seconds}s`),
       el("p", "training-card-blurb", drill.blurb),
-      el("p", "training-card-best", bests[id] !== undefined ? `Best: ${drill.format(bests[id])} ${drill.unit}` : "No score yet"),
+      el("p", "training-card-best", best !== undefined ? `Best${where}: ${drill.format(best)} ${drill.unit}` : "No score yet"),
     );
     const btn = el("button", "btn btn-primary", "Start");
     btn.addEventListener("click", () => startDrill(id));
     card.append(text, btn);
     list.append(card);
   });
+}
+
+function setTrainingLevel(id) {
+  if (!LEVELS[id]) return;
+  trainingLevel = id;
+  try { localStorage.setItem(LEVEL_KEY, id); } catch { /* ignore */ }
+  renderConsoleDrills();
 }
 
 function setConsolePanel(open) {
@@ -942,7 +965,7 @@ function beginDrill(id) {
   local.spawn(DRILL_SPAWN);
   trainingHudKey = "";
   trainingHudEl.classList.remove("hidden");
-  training.start(id, trainingPlayer());
+  training.start(id, trainingPlayer(), trainingLevel);
   if (document.pointerLockElement !== document.body) lockPointer();
 }
 
@@ -951,6 +974,7 @@ function backToRoom() {
   trainingResultsEl.classList.add("hidden");
   trainingHudEl.classList.add("hidden");
   training.stop();
+  crosshair.classList.remove("on-target");
   paused = false;
   local.spawn(ROOM_RETURN);
   lockPointer();
@@ -971,8 +995,8 @@ function onTrainingFinished(result) {
   firing = false;
   for (const k in keys) keys[k] = false;
   document.exitPointerLock();
-  const isBest = saveBest(result.drillId, result.score);
-  const best = loadBests()[result.drillId];
+  const isBest = saveBest(result.bestKey, result.score);
+  const best = loadBests()[result.bestKey];
   document.getElementById("training-results-name").textContent = result.name;
   document.getElementById("training-results-score").textContent = result.scoreText;
   document.getElementById("training-results-unit").textContent = result.unit;
@@ -995,6 +1019,7 @@ addEventListener("keydown", (e) => {
   if (!training || training.phase !== "idle" || !consolePanelOpen || e.repeat) return;
   const n = ["Digit1", "Digit2", "Digit3"].indexOf(e.code);
   if (n >= 0 && DRILL_IDS[n]) startDrill(DRILL_IDS[n]);
+  else if (e.code === "KeyL") setTrainingLevel(LEVEL_IDS[(LEVEL_IDS.indexOf(trainingLevel) + 1) % LEVEL_IDS.length]);
   else if (e.code === "KeyE") {
     if (document.pointerLockElement) document.exitPointerLock();
     else lockPointer();
@@ -2424,7 +2449,10 @@ function loop() {
     endScorchStroke();
   }
 
-  if (training) training.afterBeam(dt, activeFiring, beamHitMesh, trainingPlayer());
+  if (training) {
+    training.afterBeam(dt, activeFiring, beamHitMesh, trainingPlayer());
+    crosshair.classList.toggle("on-target", training.onTarget);
+  }
 
   updateScorchMarks();
 

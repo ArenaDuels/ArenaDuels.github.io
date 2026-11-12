@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import * as THREE from "../vendor/three/three.module.min.js";
-import { TrainingSession, DRILLS, DRILL_IDS, loadBests, saveBest, yawToward, nearConsole, CONSOLE } from "../js/training.js";
+import { TrainingSession, DRILLS, DRILL_IDS, LEVELS, LEVEL_IDS, bestKey, loadBests, saveBest, yawToward, nearConsole, CONSOLE } from "../js/training.js";
 import { ARENAS, ARENA_LIST } from "../js/arenas.js";
 
 // A stand-in for RemotePlayer that records what the drill does to it.
@@ -11,6 +11,7 @@ function fakeRobot() {
     targetPos: new THREE.Vector3(),
     targetYaw: 0,
     hp: 100,
+    bodyMat: { emissive: new THREE.Color(0x101010), emissiveIntensity: 0.2 },
     visible: true,
     setVisible(v) { this.visible = v; },
     update() {},
@@ -33,11 +34,11 @@ const onScreen = (cam, pos) => {
 };
 
 // Plays a whole drill at 60fps. `beam(session)` returns the mesh the beam hits (or null) each frame.
-function play(drillId, beam, { firing = true } = {}) {
+function play(drillId, beam, { firing = true, level } = {}) {
   resetPlayer();
   let result = null;
   const session = new TrainingSession({ camera: makeCamera(), makeTarget: fakeRobot, onFinish: (r) => (result = r) });
-  session.start(drillId, player);
+  session.start(drillId, player, level);
   const dt = 1 / 60;
   for (let i = 0; i < 60 * 80 && !result; i++) {
     session.update(dt, player);
@@ -64,11 +65,12 @@ test("a robot facing rule matches how players spawn facing the middle", () => {
   assert.ok(Math.abs(yawToward(0, 12, 0, 0) - 0) < 1e-9);
 });
 
-test("tracking: no beam scores 0s, a beam that never leaves the target scores ~60s with ~100% accuracy", () => {
+test("tracking: no beam scores 0s, a beam that never leaves the target scores most of the 60s with ~100% accuracy", () => {
   assert.equal(play("tracking", () => null, { firing: false }).result.score, 0);
   const full = play("tracking", firstAlive).result;
-  assert.ok(full.score > 54 && full.score <= 60, `got ${full.score}`);
+  assert.ok(full.score > 44 && full.score <= 60, `got ${full.score}`); // the target is down for a moment after each takedown
   assert.match(full.lines[0], /^Accuracy: (9\d|100)%/);
+  assert.match(full.lines[1], /^Takedowns: [1-9]\d*$/);
   assert.equal(full.drillId, "tracking");
 });
 
@@ -85,36 +87,53 @@ test("tracking and cqc targets can run as fast as a player (16) but never faster
   }
 });
 
-test("the cqc bot sometimes A-D spams: bursts of left-right flips a fraction of a second apart", () => {
-  let flips = 0, last = null, lastDir = null, time = 0, rapid = 0;
-  play("cqc", (sess) => {
-    time += 1 / 60;
-    const t = sess.targets[0];
-    if (t && t.alive) {
-      if (lastDir !== null && t.strafeDir !== lastDir) { flips++; if (last !== null && time - last < 0.3) rapid++; last = time; }
-      lastDir = t.strafeDir;
-    }
-    return null;
-  }, { firing: false });
-  assert.ok(rapid >= 20, `only ${rapid} quick flips (of ${flips})`);
+// Runs fn with a repeatable Math.random, so the "how often / how fast" checks can't flake.
+function seeded(seed, fn) {
+  const real = Math.random;
+  let x = seed >>> 0;
+  Math.random = () => ((x = (Math.imul(x, 1664525) + 1013904223) >>> 0) / 4294967296);
+  try { return fn(); } finally { Math.random = real; }
+}
+
+test("the cqc bot sometimes A-D spams, slowly: now and then a few left-right flips, never frantic", () => {
+  seeded(7, () => {
+    let time = 0, lastFlip = null, prevTimer = 0, flips = 0, fastest = Infinity, spamFrames = 0, frames = 0;
+    play("cqc", (sess) => {
+      time += 1 / 60;
+      const t = sess.targets[0];
+      if (t && t.alive) {
+        frames++;
+        if (t.spamLeft > 0) spamFrames++;
+        if (t.spamTimer > prevTimer + 0.1) { // the spam timer was just reset: that is one spam flip
+          flips++;
+          if (lastFlip !== null && time - lastFlip < 1) fastest = Math.min(fastest, time - lastFlip);
+          lastFlip = time;
+        }
+        prevTimer = t.spamTimer;
+      }
+      return null;
+    }, { firing: false });
+    assert.ok(flips >= 6, `only ${flips} spam flips`);
+    assert.ok(fastest >= 0.25, `flipped after only ${fastest.toFixed(2)}s`);
+    assert.ok(spamFrames / frames < 0.25, `spamming ${Math.round((100 * spamFrames) / frames)}% of the time`);
+  });
 });
 
-test("the tracking target sometimes A-D spams too: its direction reverses over and over in quick succession", () => {
-  let prev = null, time = 0, last = null, rapid = 0;
-  play("tracking", (sess) => {
-    time += 1 / 60;
-    const t = sess.targets[0];
-    if (t) {
-      const w = t.wish.clone();
-      if (prev && w.lengthSq() > 1 && prev.lengthSq() > 1 && w.dot(prev) < -0.5 * w.length() * prev.length()) {
-        if (last !== null && time - last < 0.3) rapid++;
-        last = time;
+test("the tracking target spams slowly too, and only now and then", () => {
+  seeded(11, () => {
+    let spamFrames = 0, frames = 0, bursts = 0, was = false;
+    play("tracking", (sess) => {
+      const t = sess.targets[0];
+      if (t) {
+        frames++;
+        if (t.spamLeft > 0) { spamFrames++; if (!was) bursts++; }
+        was = t.spamLeft > 0;
       }
-      prev = w;
-    }
-    return null;
-  }, { firing: false });
-  assert.ok(rapid >= 10, `only ${rapid} quick reversals`);
+      return null;
+    }, { firing: false });
+    assert.ok(bursts >= 1, "it spams at least once in a drill");
+    assert.ok(spamFrames / frames < 0.25, `spamming ${Math.round((100 * spamFrames) / frames)}% of the time`);
+  });
 });
 
 test("tracking: the target wanders and jumps but never leaves the room or stands in the player", () => {
@@ -251,19 +270,25 @@ test("pausing the loop (no updates) does not use up drill time, and a retry star
   assert.equal(session.targets.length, 0, "old targets removed");
 });
 
-test("personal bests are saved only when beaten, and junk in storage is ignored", () => {
+test("personal bests are kept per drill and per speed level, saved only when beaten, and junk in storage is ignored", () => {
   const store = new Map();
   globalThis.localStorage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) };
+  assert.equal(bestKey("flick", "easy"), "flick", "flick has no speed levels");
+  assert.equal(bestKey("tracking", "easy"), "tracking.easy");
+  assert.equal(bestKey("cqc", "nonsense"), "cqc.hard");
   assert.equal(saveBest("flick", 20), true);
   assert.equal(saveBest("flick", 20), false);
   assert.equal(saveBest("flick", 15), false);
   assert.equal(saveBest("flick", 25), true);
+  assert.equal(saveBest("tracking.easy", 30), true);
+  assert.equal(saveBest("tracking.hard", 12), true, "each level has its own best");
+  assert.equal(saveBest("tracking", 99), false, "a levelled drill needs a level");
   assert.equal(saveBest("nope", 99), false);
-  assert.equal(saveBest("cqc", 0), false);
-  assert.deepEqual(loadBests(), { flick: 25 });
-  store.set("arenaduels.training.bests.v2", JSON.stringify({ flick: "lots", cqc: -3, tracking: 61.5 }));
-  assert.deepEqual(loadBests(), { tracking: 61.5 });
-  store.set("arenaduels.training.bests.v2", "{not json");
+  assert.equal(saveBest("cqc.hard", 0), false);
+  assert.deepEqual(loadBests(), { flick: 25, "tracking.easy": 30, "tracking.hard": 12 });
+  store.set("arenaduels.training.bests.v3", JSON.stringify({ flick: "lots", "cqc.hard": -3, "tracking.medium": 61.5, bogus: 5 }));
+  assert.deepEqual(loadBests(), { "tracking.medium": 61.5 });
+  store.set("arenaduels.training.bests.v3", "{not json");
   assert.deepEqual(loadBests(), {});
   delete globalThis.localStorage;
 });
@@ -284,4 +309,85 @@ test("the Training Room is a real arena but is kept out of the arena pickers", (
 
 test("coming back from a drill puts you close enough to the console that its list is already up", () => {
   assert.ok(nearConsole(0, -9));
+});
+
+test("speed levels cap how fast the moving targets go: easy 8, medium 12, hard 16", () => {
+  assert.deepEqual(LEVEL_IDS, ["easy", "medium", "hard"]);
+  for (const drill of ["tracking", "cqc"]) {
+    for (const level of LEVEL_IDS) {
+      let top = 0;
+      play(drill, (sess) => {
+        const t = sess.targets[0];
+        if (t) top = Math.max(top, Math.hypot(t.vel.x, t.vel.z));
+        return null;
+      }, { firing: false, level });
+      const cap = LEVELS[level].maxSpeed;
+      assert.ok(top <= cap + 0.001, `${drill} ${level}: ran at ${top.toFixed(1)}, over ${cap}`);
+      assert.ok(top > cap * 0.7, `${drill} ${level}: only reached ${top.toFixed(1)} of ${cap}`);
+    }
+  }
+});
+
+test("the tracking target strafes across your view: sideways to the line between you, not toward or away", () => {
+  seeded(3, () => {
+    let sideways = 0, along = 0;
+    play("tracking", (sess) => {
+      const t = sess.targets[0];
+      if (t && t.alive) {
+        const dx = player.pos.x - t.pos.x, dz = player.pos.z - t.pos.z, d = Math.hypot(dx, dz) || 1;
+        const radial = (t.vel.x * dx + t.vel.z * dz) / d;           // toward/away from you
+        const lateral = (-t.vel.x * dz + t.vel.z * dx) / d;        // across your view
+        sideways += Math.abs(lateral);
+        along += Math.abs(radial);
+      }
+      return null;
+    }, { firing: false });
+    assert.ok(sideways > along * 2.5, `sideways ${sideways.toFixed(0)} vs toward/away ${along.toFixed(0)}`);
+  });
+});
+
+test("tracking: holding the beam on the target takes it down, and another appears in view", () => {
+  resetPlayer();
+  const cam = makeCamera();
+  const session = new TrainingSession({ camera: cam, makeTarget: fakeRobot });
+  session.start("tracking", player);
+  for (let i = 0; i < 200; i++) session.update(1 / 60, player);
+  const t = session.targets[0];
+  assert.ok(t.alive && onScreen(cam, t.pos), "first target is in view");
+  let frames = 0;
+  while (session.score === 0 && frames++ < 600) {
+    session.update(1 / 60, player);
+    session.afterBeam(1 / 60, true, t.alive ? t.rp.mesh : null, player);
+  }
+  assert.equal(session.score, 1);
+  assert.ok(frames > 120 && frames < 200, `took ${frames} frames (about 2.5s of beam)`);
+  assert.equal(t.alive, false, "down");
+  for (let i = 0; i < 40; i++) session.update(1 / 60, player);
+  assert.ok(t.alive && onScreen(cam, t.pos) && t.hp === 100, "back with full health, in view");
+});
+
+test("the beam lighting up a target is reported, and the glow is put back afterwards", () => {
+  resetPlayer();
+  const session = new TrainingSession({ camera: makeCamera(), makeTarget: fakeRobot });
+  session.start("tracking", player);
+  for (let i = 0; i < 200; i++) session.update(1 / 60, player);
+  const t = session.targets[0];
+  const mat = t.rp.bodyMat;
+  const before = mat.emissive.getHex();
+  session.afterBeam(1 / 60, true, t.rp.mesh, player);
+  assert.equal(session.onTarget, true);
+  assert.equal(mat.emissive.getHex(), 0xff2a2a);
+  session.afterBeam(1 / 60, true, null, player);
+  assert.equal(session.onTarget, false);
+  assert.equal(mat.emissive.getHex(), before);
+  assert.equal(mat.emissiveIntensity, 0.2);
+});
+
+test("the results name the speed level for tracking and cqc, and file the score under that level", () => {
+  const r = play("tracking", () => null, { firing: false, level: "easy" }).result;
+  assert.equal(r.name, "Tracking \u00b7 Easy");
+  assert.equal(r.bestKey, "tracking.easy");
+  const f = play("flick", () => null, { firing: false }).result;
+  assert.equal(f.name, "Flick");
+  assert.equal(f.bestKey, "flick");
 });

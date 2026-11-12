@@ -1591,3 +1591,22 @@ body.training-mode #room-code-banner { display: none !important; }
   pointer-events: none; z-index: 20;
 }
 body.training-mode #hud-hp-corner { display: none !important; }
+
+/* Training: the crosshair lights up while the beam is on a target. */
+#crosshair.on-target {
+  background: #ff3b3b;
+  mix-blend-mode: normal;
+  transform: translate(-50%, -50%) scale(2);
+  box-shadow: 0 0 10px 2px rgba(255, 59, 59, 0.8);
+}
+
+/* Training console: speed buttons. */
+.training-levels { display: flex; align-items: center; gap: 8px; margin: 10px 0 2px; }
+.training-levels-label { font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-dim); margin-right: 4px; }
+.level-btn {
+  padding: 6px 14px; border-radius: 999px; cursor: pointer; font: inherit; font-size: 13px; color: var(--text);
+  background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.14);
+  transition: background 0.15s, border-color 0.15s;
+}
+.level-btn:hover { border-color: var(--brand); }
+.level-btn.active { background: rgba(79, 216, 255, 0.18); border-color: rgba(79, 216, 255, 0.8); }
