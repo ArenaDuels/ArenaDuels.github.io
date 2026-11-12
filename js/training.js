@@ -21,6 +21,8 @@ const TARGET_HP = 100;
 const READY_SECONDS = 3;
 const FLICK_POP_TIME = 0.22; // seconds of beam it takes to pop a flick target
 const TARGET_COLOR = 0xff5a4f;
+const AD_SPAM_CHANCE = 0.3;           // each time it picks a new direction, the chance it starts A-D spamming instead
+const AD_FLIP_MIN = 0.09, AD_FLIP_MAX = 0.22; // seconds between flips while spamming
 const VIEW_MARGIN = 0.85;   // a flick target must land inside this much of the screen (1 = the very edge)
 
 export const DRILLS = {
@@ -104,6 +106,8 @@ class Target {
     this.range = 4;
     this.rangeTimer = 0;
     this.retreat = 0;
+    this.spamLeft = 0;    // seconds left of a burst of A-D spam (rapid left-right strafing)
+    this.spamTimer = 0;   // until the next flip in that burst
   }
   show(v) {
     this.alive = v;
@@ -271,15 +275,27 @@ export class TrainingSession {
   }
 
   #trackingStep(t, dt, player) {
-    t.timer -= dt;
-    if (t.timer <= 0) {
-      t.timer = rand(0.5, 1.5);
-      const ang = rand(0, Math.PI * 2);
-      const speed = rand(6, PLAYER_SPEED);
-      t.wish.set(Math.cos(ang) * speed, 0, Math.sin(ang) * speed);
-      if (Math.random() < 0.3) t.jump(0.85);
+    if (t.spamLeft > 0) {
+      // A-D spam: the same line, flipping back and forth, so it shakes in place instead of travelling.
+      t.spamLeft -= dt;
+      t.spamTimer -= dt;
+      if (t.spamTimer <= 0) {
+        t.spamTimer = rand(AD_FLIP_MIN, AD_FLIP_MAX);
+        t.wish.multiplyScalar(-1);
+      }
+      if (t.spamLeft <= 0) t.timer = 0; // burst over: pick a new direction right away
+    } else {
+      t.timer -= dt;
+      if (t.timer <= 0) {
+        t.timer = rand(0.5, 1.5);
+        const ang = rand(0, Math.PI * 2);
+        const speed = rand(6, PLAYER_SPEED);
+        t.wish.set(Math.cos(ang) * speed, 0, Math.sin(ang) * speed);
+        if (Math.random() < 0.3) t.jump(0.85);
+        if (Math.random() < AD_SPAM_CHANCE) { t.spamLeft = rand(0.7, 1.6); t.spamTimer = 0; }
+      }
     }
-    t.vel.lerp(t.wish, Math.min(1, dt * 6));
+    t.vel.lerp(t.wish, Math.min(1, dt * (t.spamLeft > 0 ? 16 : 6)));
     this.#capSpeed(t);
     t.pos.x += t.vel.x * dt;
     t.pos.z += t.vel.z * dt;
@@ -335,11 +351,23 @@ export class TrainingSession {
     dx /= dist;
     dz /= dist;
 
-    t.timer -= dt; // when to flip the strafe direction
-    if (t.timer <= 0) {
-      t.timer = rand(0.35, 1.3);
-      t.strafeDir = Math.random() < 0.7 ? -t.strafeDir : t.strafeDir; // usually reverses, sometimes keeps going
-      t.strafeSpeed = rand(9, PLAYER_SPEED);
+    if (t.spamLeft > 0) {
+      // A-D spam: flips left and right every split second.
+      t.spamLeft -= dt;
+      t.spamTimer -= dt;
+      if (t.spamTimer <= 0) {
+        t.spamTimer = rand(AD_FLIP_MIN, AD_FLIP_MAX);
+        t.strafeDir = -t.strafeDir;
+      }
+      if (t.spamLeft <= 0) t.timer = 0;
+    } else {
+      t.timer -= dt; // when to flip the strafe direction
+      if (t.timer <= 0) {
+        t.timer = rand(0.35, 1.3);
+        t.strafeDir = Math.random() < 0.7 ? -t.strafeDir : t.strafeDir; // usually reverses, sometimes keeps going
+        t.strafeSpeed = rand(9, PLAYER_SPEED);
+        if (Math.random() < AD_SPAM_CHANCE) { t.spamLeft = rand(0.7, 1.6); t.spamTimer = 0; t.strafeSpeed = rand(12, PLAYER_SPEED); }
+      }
     }
     t.rangeTimer -= dt; // how close it wants to stay
     if (t.rangeTimer <= 0) {
@@ -362,7 +390,7 @@ export class TrainingSession {
     const tz = dx * t.strafeDir;
     t.wish.set(dx * radial + tx * t.strafeSpeed, 0, dz * radial + tz * t.strafeSpeed);
     // Less steering in the air, like a real jump.
-    t.vel.lerp(t.wish, Math.min(1, dt * (t.onGround ? 10 : 3)));
+    t.vel.lerp(t.wish, Math.min(1, dt * (t.onGround ? (t.spamLeft > 0 ? 18 : 10) : 3)));
     this.#capSpeed(t);
     t.pos.x += t.vel.x * dt;
     t.pos.z += t.vel.z * dt;
@@ -397,6 +425,7 @@ export class TrainingSession {
     t.jumpTimer = rand(0.5, 1.2);
     t.rangeTimer = 0;
     t.retreat = 0;
+    t.spamLeft = 0;
     t.show(true);
   }
 

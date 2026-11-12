@@ -85,6 +85,38 @@ test("tracking and cqc targets can run as fast as a player (16) but never faster
   }
 });
 
+test("the cqc bot sometimes A-D spams: bursts of left-right flips a fraction of a second apart", () => {
+  let flips = 0, last = null, lastDir = null, time = 0, rapid = 0;
+  play("cqc", (sess) => {
+    time += 1 / 60;
+    const t = sess.targets[0];
+    if (t && t.alive) {
+      if (lastDir !== null && t.strafeDir !== lastDir) { flips++; if (last !== null && time - last < 0.3) rapid++; last = time; }
+      lastDir = t.strafeDir;
+    }
+    return null;
+  }, { firing: false });
+  assert.ok(rapid >= 20, `only ${rapid} quick flips (of ${flips})`);
+});
+
+test("the tracking target sometimes A-D spams too: its direction reverses over and over in quick succession", () => {
+  let prev = null, time = 0, last = null, rapid = 0;
+  play("tracking", (sess) => {
+    time += 1 / 60;
+    const t = sess.targets[0];
+    if (t) {
+      const w = t.wish.clone();
+      if (prev && w.lengthSq() > 1 && prev.lengthSq() > 1 && w.dot(prev) < -0.5 * w.length() * prev.length()) {
+        if (last !== null && time - last < 0.3) rapid++;
+        last = time;
+      }
+      prev = w;
+    }
+    return null;
+  }, { firing: false });
+  assert.ok(rapid >= 10, `only ${rapid} quick reversals`);
+});
+
 test("tracking: the target wanders and jumps but never leaves the room or stands in the player", () => {
   let jumped = false;
   const { session } = play("tracking", (s) => {
