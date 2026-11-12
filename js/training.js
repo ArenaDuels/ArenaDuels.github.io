@@ -8,17 +8,20 @@
 // by hand, and main.js hands us each frame's beam result so we can score it. Nothing hurts the player.
 
 import * as THREE from "../vendor/three/three.module.min.js";
+import { CONSOLE_PLINTH } from "./arenas/training-room.js";
 
 // Same numbers as MOVE in player.js, so the CQC bot jumps and falls like a real player.
 const GRAVITY = 35;
 const JUMP_VEL = 12;
 const FLOOR_Y = 1.1;        // height of a capsule's centre when it stands on the floor
 const BOUND = 13;           // targets stay this far from the middle (the room is 30 wide, walls at +-15)
+const PLAYER_SPEED = 16;    // WISH_SPEED in player.js: how fast a player runs, so targets can move just as fast
 const BEAM_DPS = 40;        // what a player's beam does per second
 const TARGET_HP = 100;
 const READY_SECONDS = 3;
 const FLICK_POP_TIME = 0.22; // seconds of beam it takes to pop a flick target
 const TARGET_COLOR = 0xff5a4f;
+const VIEW_MARGIN = 0.85;   // a flick target must land inside this much of the screen (1 = the very edge)
 
 export const DRILLS = {
   tracking: {
@@ -175,9 +178,16 @@ export class TrainingSession {
     this.#emitHud();
   }
 
-  dispose() {
+  // Back to "no drill running" (you are in the room, not in a drill).
+  stop() {
     this.#clearTargets();
     this.phase = "idle";
+    this.drillId = null;
+    this.finished = false;
+  }
+
+  dispose() {
+    this.stop();
   }
 
   // The meshes the beam should be tested against.
@@ -198,7 +208,8 @@ export class TrainingSession {
       this.timeLeft = Math.max(0, DRILLS[this.drillId].seconds - this.elapsed);
       for (const t of this.targets) {
         if (this.drillId === "tracking") this.#trackingStep(t, dt, player);
-        else if (this.drillId === "cqc") this.#cqcStep(t, dt, player);
+        else if (this.drillId === "flick") { if (!t.alive) this.#placeFlickTarget(t, player); }
+        else this.#cqcStep(t, dt, player);
       }
     }
     for (const t of this.targets) {
@@ -264,11 +275,12 @@ export class TrainingSession {
     if (t.timer <= 0) {
       t.timer = rand(0.5, 1.5);
       const ang = rand(0, Math.PI * 2);
-      const speed = rand(3.5, 9);
+      const speed = rand(6, PLAYER_SPEED);
       t.wish.set(Math.cos(ang) * speed, 0, Math.sin(ang) * speed);
       if (Math.random() < 0.3) t.jump(0.85);
     }
     t.vel.lerp(t.wish, Math.min(1, dt * 6));
+    this.#capSpeed(t);
     t.pos.x += t.vel.x * dt;
     t.pos.z += t.vel.z * dt;
     this.#keepInside(t);
@@ -283,23 +295,31 @@ export class TrainingSession {
     this.#placeFlickTarget(t, player);
   }
 
-  // Somewhere well off to the side of (or behind) where the player is looking, so every target is a real flick.
+  // Somewhere you can see right now, off to one side of your crosshair so it is a real flick. If there is
+  // no such spot (say you are looking at the ceiling), the target stays hidden and appears the moment
+  // there is one: it never shows up out of your sight.
   #placeFlickTarget(t, player) {
-    let x = 0, z = 0;
-    for (let tries = 0; tries < 12; tries++) {
-      const off = (Math.random() < 0.5 ? -1 : 1) * rand(0.6, 2.4); // radians away from straight ahead
-      const dist = rand(6, 13);
+    this.camera.updateMatrixWorld(true);
+    const probe = new THREE.Vector3();
+    for (let tries = 0; tries < 40; tries++) {
+      const off = (Math.random() < 0.5 ? -1 : 1) * rand(0.1, 0.7); // radians to the side of straight ahead
+      const dist = rand(4, 13);
       const yaw = player.yaw + off;
-      x = player.pos.x - Math.sin(yaw) * dist;
-      z = player.pos.z - Math.cos(yaw) * dist;
-      if (Math.abs(x) <= BOUND && Math.abs(z) <= BOUND) break;
+      const x = player.pos.x - Math.sin(yaw) * dist;
+      const z = player.pos.z - Math.cos(yaw) * dist;
+      if (Math.abs(x) > BOUND || Math.abs(z) > BOUND) continue;
+      probe.set(x, FLOOR_Y, z).project(this.camera);
+      if (probe.z >= 1 || Math.abs(probe.x) > VIEW_MARGIN || Math.abs(probe.y) > VIEW_MARGIN) continue;
+      t.pos.set(x, FLOOR_Y, z);
+      t.contact = 0;
+      t.hp = TARGET_HP;
+      t.bornAt = this.elapsed;
+      t.face(player.pos.x, player.pos.z);
+      t.show(true);
+      return true;
     }
-    t.pos.set(clamp(x, -BOUND, BOUND), FLOOR_Y, clamp(z, -BOUND, BOUND));
-    t.contact = 0;
-    t.hp = TARGET_HP;
-    t.bornAt = this.elapsed;
-    t.face(player.pos.x, player.pos.z);
-    t.show(true);
+    t.show(false);
+    return false;
   }
 
   // The close-quarters bot: orbits the player, hops, closes in and backs off.
@@ -319,7 +339,7 @@ export class TrainingSession {
     if (t.timer <= 0) {
       t.timer = rand(0.35, 1.3);
       t.strafeDir = Math.random() < 0.7 ? -t.strafeDir : t.strafeDir; // usually reverses, sometimes keeps going
-      t.strafeSpeed = rand(6, 9.5);
+      t.strafeSpeed = rand(9, PLAYER_SPEED);
     }
     t.rangeTimer -= dt; // how close it wants to stay
     if (t.rangeTimer <= 0) {
@@ -336,13 +356,14 @@ export class TrainingSession {
     t.retreat = Math.max(0, t.retreat - dt);
     if (dist < 2.1 && t.retreat <= 0) t.retreat = rand(0.45, 0.9);
 
-    let radial = clamp((dist - t.range) * 3, -8, 8); // + = come closer
-    if (t.retreat > 0) radial = -9;
+    let radial = clamp((dist - t.range) * 3, -PLAYER_SPEED, PLAYER_SPEED); // + = come closer
+    if (t.retreat > 0) radial = -PLAYER_SPEED * 0.9;
     const tx = -dz * t.strafeDir; // sideways, around you
     const tz = dx * t.strafeDir;
     t.wish.set(dx * radial + tx * t.strafeSpeed, 0, dz * radial + tz * t.strafeSpeed);
     // Less steering in the air, like a real jump.
     t.vel.lerp(t.wish, Math.min(1, dt * (t.onGround ? 10 : 3)));
+    this.#capSpeed(t);
     t.pos.x += t.vel.x * dt;
     t.pos.z += t.vel.z * dt;
 
@@ -380,6 +401,15 @@ export class TrainingSession {
   }
 
   /* ----- shared bits ----- */
+
+  // Nothing runs faster than a player does.
+  #capSpeed(t) {
+    const sp = Math.hypot(t.vel.x, t.vel.z);
+    if (sp > PLAYER_SPEED) {
+      t.vel.x *= PLAYER_SPEED / sp;
+      t.vel.z *= PLAYER_SPEED / sp;
+    }
+  }
 
   // Keeps a target inside the room. True if it had to be pushed back.
   #keepInside(t) {
@@ -466,4 +496,87 @@ export class TrainingSession {
     for (const t of this.targets) t.dispose();
     this.targets = [];
   }
+}
+
+/* ---------- the console in the Training Room ---------- */
+
+export const CONSOLE = { x: CONSOLE_PLINTH.x, z: CONSOLE_PLINTH.z, nearRadius: 5.5 };
+
+// True when (x, z) is close enough to the console for its drill list to pop up.
+export function nearConsole(x, z) {
+  return Math.hypot(x - CONSOLE.x, z - CONSOLE.z) <= CONSOLE.nearRadius;
+}
+
+// The console model: a slab and a tilted, glowing screen on top of the plinth. Looks only; the plinth
+// underneath is the solid part (it is a block in the Training Room arena). Returns { group, dispose }.
+export function buildTrainingConsole(scene) {
+  const group = new THREE.Group();
+  const top = CONSOLE_PLINTH.h;
+  const metal = new THREE.MeshStandardMaterial({ color: 0x1b2230, roughness: 0.45, metalness: 0.6 });
+  const glow = new THREE.MeshBasicMaterial({ color: 0x4fd8ff });
+
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.35, 1.0), metal);
+  slab.position.set(CONSOLE.x, top + 0.175, CONSOLE.z);
+  group.add(slab);
+
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(2.8, 1.6, 0.14), metal);
+  frame.position.set(CONSOLE.x, top + 1.15, CONSOLE.z - 0.2);
+  frame.rotation.x = -0.25; // leans back, away from you
+  group.add(frame);
+
+  let screenMat;
+  if (typeof document !== "undefined") {
+    const canvas = document.createElement("canvas");
+    canvas.width = 512;
+    canvas.height = 256;
+    const ctx = canvas.getContext("2d");
+    const grad = ctx.createLinearGradient(0, 0, 0, 256);
+    grad.addColorStop(0, "#0b2a3f");
+    grad.addColorStop(1, "#06121d");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 512, 256);
+    ctx.strokeStyle = "#4fd8ff";
+    ctx.lineWidth = 4;
+    ctx.strokeRect(6, 6, 500, 244);
+    ctx.fillStyle = "#4fd8ff";
+    ctx.textAlign = "center";
+    ctx.font = "bold 40px sans-serif";
+    ctx.fillText("TRAINING CONSOLE", 256, 66);
+    ctx.fillStyle = "#cfefff";
+    ctx.font = "30px sans-serif";
+    DRILL_IDS.forEach((id, i) => ctx.fillText(`${i + 1}   ${DRILLS[id].name}`, 256, 120 + i * 38));
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    screenMat = new THREE.MeshBasicMaterial({ map: tex });
+  } else {
+    screenMat = glow;
+  }
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(2.5, 1.3), screenMat);
+  screen.position.z = 0.075; // just in front of the frame, so it leans with it
+  frame.add(screen);
+
+  for (const dx of [-0.8, 0, 0.8]) {
+    const key = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.06, 0.25), glow);
+    key.position.set(CONSOLE.x + dx, top + 0.38, CONSOLE.z + 0.28);
+    group.add(key);
+  }
+
+  const light = new THREE.PointLight(0x4fd8ff, 1.2, 9);
+  light.position.set(CONSOLE.x, top + 1.6, CONSOLE.z + 1.2);
+  group.add(light);
+
+  scene.add(group);
+  return {
+    group,
+    dispose() {
+      scene.remove(group);
+      group.traverse((o) => {
+        o.geometry?.dispose?.();
+        for (const m of [].concat(o.material ?? [])) {
+          m.map?.dispose?.();
+          m.dispose?.();
+        }
+      });
+    },
+  };
 }

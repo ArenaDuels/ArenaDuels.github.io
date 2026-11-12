@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import * as THREE from "../vendor/three/three.module.min.js";
-import { TrainingSession, DRILLS, DRILL_IDS, loadBests, saveBest, yawToward } from "../js/training.js";
+import { TrainingSession, DRILLS, DRILL_IDS, loadBests, saveBest, yawToward, nearConsole, CONSOLE } from "../js/training.js";
+import { ARENAS, ARENA_LIST } from "../js/arenas.js";
 
 // A stand-in for RemotePlayer that records what the drill does to it.
 function fakeRobot() {
@@ -18,12 +19,24 @@ function fakeRobot() {
 }
 const player = { pos: new THREE.Vector3(-10, 1.1, 0), yaw: -Math.PI / 2 };
 const resetPlayer = () => { player.pos.set(-10, 1.1, 0); player.yaw = -Math.PI / 2; };
+// A camera where the player's eyes are, looking the way the player looks (pitch up is positive).
+function makeCamera(pitch = 0) {
+  const cam = new THREE.PerspectiveCamera(75, 16 / 9, 0.1, 1000);
+  cam.position.set(player.pos.x, player.pos.y + 1, player.pos.z);
+  cam.rotation.set(pitch, player.yaw, 0, "YXZ");
+  cam.updateMatrixWorld(true);
+  return cam;
+}
+const onScreen = (cam, pos) => {
+  const p = new THREE.Vector3(pos.x, pos.y, pos.z).project(cam);
+  return p.z < 1 && Math.abs(p.x) <= 0.85 && Math.abs(p.y) <= 0.85;
+};
 
 // Plays a whole drill at 60fps. `beam(session)` returns the mesh the beam hits (or null) each frame.
 function play(drillId, beam, { firing = true } = {}) {
   resetPlayer();
   let result = null;
-  const session = new TrainingSession({ camera: {}, makeTarget: fakeRobot, onFinish: (r) => (result = r) });
+  const session = new TrainingSession({ camera: makeCamera(), makeTarget: fakeRobot, onFinish: (r) => (result = r) });
   session.start(drillId, player);
   const dt = 1 / 60;
   for (let i = 0; i < 60 * 80 && !result; i++) {
@@ -59,6 +72,19 @@ test("tracking: no beam scores 0s, a beam that never leaves the target scores ~6
   assert.equal(full.drillId, "tracking");
 });
 
+test("tracking and cqc targets can run as fast as a player (16) but never faster", () => {
+  for (const drill of ["tracking", "cqc"]) {
+    let top = 0;
+    play(drill, (sess) => {
+      const t = sess.targets[0];
+      if (t) top = Math.max(top, Math.hypot(t.vel.x, t.vel.z));
+      return null;
+    }, { firing: false });
+    assert.ok(top > 13, `${drill}: topped out at only ${top.toFixed(1)}`);
+    assert.ok(top <= 16.001, `${drill}: ran at ${top.toFixed(1)}, faster than a player`);
+  }
+});
+
 test("tracking: the target wanders and jumps but never leaves the room or stands in the player", () => {
   let jumped = false;
   const { session } = play("tracking", (s) => {
@@ -89,6 +115,39 @@ test("flick: tapping each target pops it and the next appears well away from whe
   });
   assert.ok(result.score >= 100 && result.score <= 280, `popped ${result.score}`);
   assert.deepEqual(result.lines, [], "flick shows just the score");
+});
+
+test("flick: every target appears somewhere you can see, off to one side of the crosshair", () => {
+  resetPlayer();
+  const cam = makeCamera();
+  const session = new TrainingSession({ camera: cam, makeTarget: fakeRobot });
+  session.start("flick", player);
+  for (let i = 0; i < 200; i++) session.update(1 / 60, player); // countdown over, first target placed
+  const t = session.targets[0];
+  let sides = new Set();
+  for (let i = 0; i < 200; i++) {
+    assert.ok(t.alive, "visible");
+    assert.ok(onScreen(cam, t.pos), `spawned off screen at ${t.pos.x.toFixed(1)}, ${t.pos.z.toFixed(1)}`);
+    const p = t.pos.clone().project(cam);
+    assert.ok(Math.abs(p.x) > 0.02, "not dead centre");
+    sides.add(Math.sign(p.x));
+    session.afterBeam(1 / 60, true, t.rp.mesh, player); // pop it
+    for (let k = 0; k < 20 && session.score === i; k++) session.afterBeam(1 / 60, true, t.rp.mesh, player);
+  }
+  assert.equal(sides.size, 2, "both sides get used");
+});
+
+test("flick: looking at the ceiling there is nowhere to show a target, so it waits until there is", () => {
+  resetPlayer();
+  let cam = makeCamera(1.35); // looking nearly straight up
+  const session = new TrainingSession({ camera: cam, makeTarget: fakeRobot });
+  session.start("flick", player);
+  for (let i = 0; i < 200; i++) session.update(1 / 60, player);
+  assert.equal(session.targets[0].alive, false, "nothing appears while you look at the ceiling");
+  session.camera.rotation.set(0, player.yaw, 0, "YXZ"); // look back down at the room
+  session.update(1 / 60, player);
+  assert.equal(session.targets[0].alive, true);
+  assert.ok(onScreen(session.camera, session.targets[0].pos));
 });
 
 test("flick: shooting nothing pops nothing", () => {
@@ -147,7 +206,8 @@ test("cqc: beam time on the bot takes it down and a new one arrives; accuracy is
 });
 
 test("pausing the loop (no updates) does not use up drill time, and a retry starts clean", () => {
-  const session = new TrainingSession({ camera: {}, makeTarget: fakeRobot });
+  resetPlayer();
+  const session = new TrainingSession({ camera: makeCamera(), makeTarget: fakeRobot });
   session.start("tracking", player);
   assert.equal(session.phase, "ready");
   for (let i = 0; i < 200; i++) session.update(1 / 60, player);
@@ -174,4 +234,22 @@ test("personal bests are saved only when beaten, and junk in storage is ignored"
   store.set("arenaduels.training.bests.v2", "{not json");
   assert.deepEqual(loadBests(), {});
   delete globalThis.localStorage;
+});
+
+test("the console pops its list up near it and not across the room", () => {
+  assert.ok(nearConsole(CONSOLE.x, CONSOLE.z + 4));
+  assert.ok(!nearConsole(0, 6), "the spawn point is far from it");
+});
+
+test("the Training Room is a real arena but is kept out of the arena pickers", () => {
+  const room = ARENAS.training;
+  assert.ok(room && room.modern && room.spawns.length >= 1);
+  assert.ok(!ARENA_LIST.some((a) => a.id === "training"));
+  const spawn = room.spawns[0];
+  assert.ok(nearConsole(spawn.x, spawn.z) === false, "you arrive away from the console");
+  assert.ok(Math.abs(spawn.yaw) < 1e-9, "and face north, toward it");
+});
+
+test("coming back from a drill puts you close enough to the console that its list is already up", () => {
+  assert.ok(nearConsole(0, -9));
 });

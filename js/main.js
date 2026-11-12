@@ -12,7 +12,7 @@ import { iconSvg } from "./icons.js";
 import { createLookPreview } from "./look-preview.js";
 import { cleanName, cleanRelay, isBotId, isValidArenaId, isValidId, SERVER_ID, SERVER_ONLY } from "./validate.js";
 import { GAME_MODES, FEATURED_LOBBY, getMode, isValidModeId } from "./modes.js";
-import { TrainingSession, DRILLS, DRILL_IDS, loadBests, saveBest } from "./training.js";
+import { TrainingSession, DRILLS, DRILL_IDS, loadBests, saveBest, nearConsole, buildTrainingConsole } from "./training.js";
 
 /* =========================================================
    SETTINGS — persisted to localStorage. Sensitivity uses the same
@@ -125,9 +125,13 @@ function leaveMatch() {
   paused = false;
   training?.dispose();
   training = null;
+  trainingRoom?.dispose();
+  trainingRoom = null;
+  consolePanelOpen = false;
   document.body.classList.remove("training-mode");
-  document.getElementById("training-hud").classList.add("hidden");
-  document.getElementById("training-results").classList.add("hidden");
+  for (const id of ["training-hud", "training-results", "training-console", "training-hint"]) {
+    document.getElementById(id).classList.add("hidden");
+  }
   pauseMenu.classList.add("hidden");
   settingsModal.classList.add("hidden");
   hideCustomization();
@@ -221,7 +225,6 @@ const screens = {
   custom: document.getElementById("screen-custom"),
   browse: document.getElementById("screen-browse"),
   matchmaking: document.getElementById("screen-matchmaking"),
-  training: document.getElementById("screen-training"),
 };
 const hud = document.getElementById("hud");
 const hudHpCorner = document.getElementById("hud-hp-corner");
@@ -841,39 +844,26 @@ function scheduleFeaturedRestart() {
   }, FEATURED_LOBBY.restartDelaySec * 1000);
 }
 
-/* ---- AIM TRAINING ----
-   Solo drills in the Classic Box (see training.js). No network: we just set up an arena and a
-   local player, then hand the targets' scoring each frame's beam result. */
-let training = null;
+/* ---- TRAINING ROOM ----
+   The main menu's Training Room button drops you into an empty room with a console at the far end.
+   Walk up to the console and it lists the drills; pick one and it starts. Everything is solo and local:
+   no network, nothing counts toward the leaderboards. The drills themselves are in training.js. */
+let training = null;      // runs the drills; exists while you are in the room
+let trainingRoom = null;  // the console model
 let trainingDrillId = null;
 let trainingHudKey = "";
+let consolePanelOpen = false;
 const trainingResultsEl = document.getElementById("training-results");
+const consolePanelEl = document.getElementById("training-console");
+const trainingHintEl = document.getElementById("training-hint");
+const trainingHudEl = document.getElementById("training-hud");
 const trainingPlayer = () => ({ pos: local.mesh.position, yaw: local.yaw });
+const DRILL_SPAWN = { x: 0, y: 1.4, z: 3, yaw: 0 };     // the middle of the room, for the drills
+const ROOM_RETURN = { x: 0, y: 1.4, z: -9, yaw: 0 };  // back by the console, after a drill
 
-function renderTrainingDrills() {
-  const bests = loadBests();
-  const list = document.getElementById("training-drills");
-  list.replaceChildren();
-  for (const id of DRILL_IDS) {
-    const drill = DRILLS[id];
-    const card = el("div", "training-card");
-    const text = el("div", "training-card-text");
-    text.append(
-      el("p", "training-card-title", `${drill.name} \u00b7 ${drill.seconds}s`),
-      el("p", "training-card-blurb", drill.blurb),
-      el("p", "training-card-best", bests[id] !== undefined ? `Best: ${drill.format(bests[id])} ${drill.unit}` : "No score yet"),
-    );
-    const btn = el("button", "btn btn-primary", "Start");
-    btn.addEventListener("click", () => startTraining(id));
-    card.append(text, btn);
-    list.append(card);
-  }
-}
-
-async function startTraining(drillId) {
-  if (matchActive || matchStarting || !DRILLS[drillId]) return;
+async function enterTrainingRoom() {
+  if (matchActive || matchStarting) return;
   matchStarting = true;
-  trainingDrillId = drillId;
   net.destroy(); // nothing here talks to the server
   hostId = null;
   myId = "training";
@@ -882,22 +872,88 @@ async function startTraining(drillId) {
   match.scores.clear();
   applyMatchSettings(DEFAULT_MATCH_RULES, "1v1");
   try {
-    await beginMatch("classic");
+    await beginMatch("training");
   } catch {
     matchStarting = false;
-    showScreen("training");
+    showScreen("menu");
     return;
   }
   document.body.classList.add("training-mode");
-  document.getElementById("training-hud").classList.remove("hidden");
-  trainingHudKey = "";
+  trainingRoom = buildTrainingConsole(scene);
   training = new TrainingSession({
     camera,
     makeTarget: (color, name) => new RemotePlayer(scene, color, name),
     onHud: updateTrainingHud,
     onFinish: onTrainingFinished,
   });
-  training.start(drillId, trainingPlayer());
+  renderConsoleDrills();
+  consolePanelOpen = false;
+  trainingHintEl.classList.remove("hidden");
+}
+
+// The drill list on the console panel.
+function renderConsoleDrills() {
+  const bests = loadBests();
+  const list = document.getElementById("training-drills");
+  list.replaceChildren();
+  DRILL_IDS.forEach((id, i) => {
+    const drill = DRILLS[id];
+    const card = el("div", "training-card");
+    const text = el("div", "training-card-text");
+    text.append(
+      el("p", "training-card-title", `${i + 1} \u00b7 ${drill.name} \u00b7 ${drill.seconds}s`),
+      el("p", "training-card-blurb", drill.blurb),
+      el("p", "training-card-best", bests[id] !== undefined ? `Best: ${drill.format(bests[id])} ${drill.unit}` : "No score yet"),
+    );
+    const btn = el("button", "btn btn-primary", "Start");
+    btn.addEventListener("click", () => startDrill(id));
+    card.append(text, btn);
+    list.append(card);
+  });
+}
+
+function setConsolePanel(open) {
+  if (open === consolePanelOpen) return;
+  consolePanelOpen = open;
+  consolePanelEl.classList.toggle("hidden", !open);
+  if (open) renderConsoleDrills(); // fresh personal bests
+}
+
+// Once a frame while you are in the room: show the drill list when you are at the console.
+function updateTrainingRoom() {
+  if (!training) return;
+  const idle = training.phase === "idle";
+  const near = idle && nearConsole(local.mesh.position.x, local.mesh.position.z);
+  setConsolePanel(near);
+  trainingHintEl.classList.toggle("hidden", !idle || near);
+}
+
+function startDrill(id) {
+  if (!training || !DRILLS[id] || training.phase !== "idle") return;
+  beginDrill(id);
+}
+
+function beginDrill(id) {
+  trainingDrillId = id;
+  trainingResultsEl.classList.add("hidden");
+  setConsolePanel(false);
+  trainingHintEl.classList.add("hidden");
+  paused = false;
+  local.spawn(DRILL_SPAWN);
+  trainingHudKey = "";
+  trainingHudEl.classList.remove("hidden");
+  training.start(id, trainingPlayer());
+  if (document.pointerLockElement !== document.body) lockPointer();
+}
+
+function backToRoom() {
+  if (!training) return;
+  trainingResultsEl.classList.add("hidden");
+  trainingHudEl.classList.add("hidden");
+  training.stop();
+  paused = false;
+  local.spawn(ROOM_RETURN);
+  lockPointer();
 }
 
 function updateTrainingHud(info) {
@@ -911,7 +967,7 @@ function updateTrainingHud(info) {
 }
 
 function onTrainingFinished(result) {
-  paused = true; // the loop stops simulating; the arena keeps rendering behind the results
+  paused = true; // the loop stops simulating; the room keeps rendering behind the results
   firing = false;
   for (const k in keys) keys[k] = false;
   document.exitPointerLock();
@@ -927,25 +983,23 @@ function onTrainingFinished(result) {
   trainingResultsEl.classList.remove("hidden");
 }
 
-document.getElementById("btn-training").addEventListener("click", () => {
-  renderTrainingDrills();
-  showScreen("training");
-});
-document.getElementById("btn-training-back").addEventListener("click", () => showScreen("menu"));
+document.getElementById("btn-training").addEventListener("click", enterTrainingRoom);
 document.getElementById("btn-training-retry").addEventListener("click", () => {
-  if (!training) return;
-  trainingResultsEl.classList.add("hidden");
-  paused = false;
-  local.spawn(mySpawn);
-  training.start(trainingDrillId, trainingPlayer());
-  lockPointer();
+  if (training) beginDrill(trainingDrillId);
 });
-document.getElementById("btn-training-drills").addEventListener("click", () => {
-  leaveMatch();
-  renderTrainingDrills();
-  showScreen("training");
-});
+document.getElementById("btn-training-drills").addEventListener("click", backToRoom);
 document.getElementById("btn-training-menu").addEventListener("click", leaveMatch);
+
+// At the console: 1/2/3 start a drill; E frees the mouse so you can click the Start buttons (E again to look around).
+addEventListener("keydown", (e) => {
+  if (!training || training.phase !== "idle" || !consolePanelOpen || e.repeat) return;
+  const n = ["Digit1", "Digit2", "Digit3"].indexOf(e.code);
+  if (n >= 0 && DRILL_IDS[n]) startDrill(DRILL_IDS[n]);
+  else if (e.code === "KeyE") {
+    if (document.pointerLockElement) document.exitPointerLock();
+    else lockPointer();
+  }
+});
 
 /* ---- JOIN FLOW (shared by manual code entry and the lobby browser) ---- */
 async function doJoin(code, statusEl) {
@@ -2311,7 +2365,10 @@ function loop() {
   if (botManager) botManager.interpolate(alpha);
 
   for (const rp of players.values()) rp.update(dt, camera, arenaObjects);
-  if (training) training.update(dt, trainingPlayer());
+  if (training) {
+    training.update(dt, trainingPlayer());
+    updateTrainingRoom();
+  }
 
   const targets = [];
   const targetIds = [];
