@@ -202,11 +202,25 @@ controllerSensSlider.addEventListener("input", () => {
 
 applyCrosshairSize(); // apply saved size immediately, even before a match
 
-// Use standard Pointer Lock on <body>, matching the original game's
-// browser-managed mouse input. Do not request unadjusted/raw mouse input.
-let lockMode = "normal"; // shown in the F9 mouse diagnostics overlay
+// Always lock onto <body> — that's the element the mouse-look handler checks
+// for. (Resume/start used to lock the canvas instead, so mouse-look silently
+// did nothing until the next click moved the lock.) Also asks for raw mouse
+// input where the browser supports it, so OS mouse acceleration can't make
+// turning uneven; falls back to a normal lock otherwise.
+let lockMode = "none"; // "raw" = unadjusted mouse input, "normal" = regular lock (shown in the F9 overlay)
 function lockPointer() {
-  try { document.body.requestPointerLock()?.catch?.(() => {}); } catch {}
+  const el = document.body;
+  const plain = () => {
+    lockMode = "normal";
+    try { el.requestPointerLock()?.catch?.(() => {}); } catch {}
+  };
+  try {
+    const p = el.requestPointerLock({ unadjustedMovement: true });
+    if (p && typeof p.then === "function") p.then(() => { lockMode = "raw"; }, plain);
+    else lockMode = "normal"; // browser ignored the option (no raw input support)
+  } catch {
+    plain();
+  }
 }
 
 /* =========================================================
