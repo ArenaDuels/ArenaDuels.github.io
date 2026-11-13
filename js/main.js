@@ -584,24 +584,25 @@ function refreshLookPickers() {
 // Skins unlock with lifetime kills on your account (the number on the stats screen). The relay checks the same
 // number before it shows your skin to anyone, so this is only the menu keeping up with it.
 const LOCK_SVG = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17 9h-1V7a4 4 0 0 0-8 0v2H7a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2zm-7-2a2 2 0 0 1 4 0v2h-4V7z"/></svg>';
-let myKills = null;     // lifetime kills on your account; 0 for guests; null until we have asked
+let myKills = null;     // actual lifetime kills shown in stats
+let mySkinKills = null; // effective unlock threshold; developer grants do not inflate the leaderboard
 let signedIn = false;
 let skinMessage = "";   // a one-off line shown after you click a locked skin
 const skinNoteEl = document.getElementById("skin-note");
 
 function updateSkinNote() {
   let text;
-  if (myKills === null) text = "Checking your kills...";
+  if (myKills === null || mySkinKills === null) text = "Checking your kills...";
   else if (!signedIn) text = "Sign in to unlock skins with kills. Solid and Checker are free.";
   else {
-    const next = nextSkin(myKills);
+    const next = nextSkin(mySkinKills);
     text = `You have ${myKills} kill${myKills === 1 ? "" : "s"}. ${next ? `${next.label} unlocks at ${next.kills}.` : "Every skin is unlocked."}`;
   }
   skinNoteEl.textContent = (skinMessage ? skinMessage + " " : "") + text + " Skins keep their own colors; your color shows on Solid.";
 }
 
 function pickSkin(sk) {
-  if (myKills !== null && !skinUnlocked(sk, myKills)) {
+  if (mySkinKills !== null && !skinUnlocked(sk, mySkinKills)) {
     skinMessage = `${sk.label} unlocks at ${sk.kills} kills.`;
     updateSkinNote();
     return;
@@ -615,17 +616,21 @@ async function refreshMyKills() {
   if (!token) {
     signedIn = false;
     myKills = 0;
+    mySkinKills = 0;
   } else {
     signedIn = true;
     try {
       const response = await fetch(`${API_BASE}/api/stats/me`, { cache: "no-store", headers: { Authorization: `Bearer ${token}` } });
       const data = await response.json().catch(() => ({}));
-      if (response.ok && Number.isFinite(data.kills)) myKills = Math.max(0, Math.floor(data.kills));
+      if (response.ok && Number.isFinite(data.kills)) {
+        myKills = Math.max(0, Math.floor(data.kills));
+        mySkinKills = Number.isFinite(data.skinUnlockKills) ? Math.max(0, Math.floor(data.skinUnlockKills)) : myKills;
+      }
     } catch { /* server asleep or offline: keep what we knew */ }
   }
   // Wearing a skin you no longer have (signed out, or a different account)? Back to Solid.
   const worn = skinById(myLook.pattern);
-  if (myKills !== null && worn && !skinUnlocked(worn, myKills)) {
+  if (mySkinKills !== null && worn && !skinUnlocked(worn, mySkinKills)) {
     myLook = { ...myLook, pattern: DEFAULT_SKIN };
     saveLook(myLook);
     updateLookPreview();

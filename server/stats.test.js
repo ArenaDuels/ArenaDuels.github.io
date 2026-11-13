@@ -211,7 +211,7 @@ test("recordResults saves accounts only, as increments, in one batch", async () 
 test("getStats returns zeros for a new account and a rank for one with kills", async () => {
   const fs = fakeFirestore();
   const store = createStatsStore({ firestore: fs, FieldValue });
-  assert.deepEqual(await store.getStats("new"), { kills: 0, deaths: 0, wins: 0, losses: 0, matches: 0, rank: { kills: null, wins: null } });
+  assert.deepEqual(await store.getStats("new"), { kills: 0, skinUnlockKills: 0, deaths: 0, wins: 0, losses: 0, matches: 0, rank: { kills: null, wins: null } });
   fs.docs.set("uA", { kills: 7, deaths: 2, wins: 1, losses: 0, matches: 1 });
   const s = await store.getStats("uA");
   assert.equal(s.kills, 7);

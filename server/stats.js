@@ -170,15 +170,24 @@ export function createStatsStore({ firestore, FieldValue, logger = console, now 
 
     /** Just a player's lifetime kills (one read): what the skin unlocks are checked against. */
     async getKills(uid) {
-      const snap = await col().doc(uid).get();
+      const [snap, accountSnap] = await Promise.all([
+        col().doc(uid).get(),
+        firestore.collection("arenaAccounts").doc(uid).get(),
+      ]);
+      if (accountSnap.exists && accountSnap.data()?.allSkinsUnlocked === true) return 5000;
       return snap.exists ? num(snap.data().kills) : 0;
     },
 
     /** One player's totals, plus where they stand on each board. */
     async getStats(uid) {
-      const snap = await col().doc(uid).get();
+      const [snap, accountSnap] = await Promise.all([
+        col().doc(uid).get(),
+        firestore.collection("arenaAccounts").doc(uid).get(),
+      ]);
       const d = snap.exists ? snap.data() : {};
-      const stats = { kills: num(d.kills), deaths: num(d.deaths), wins: num(d.wins), losses: num(d.losses), matches: num(d.matches) };
+      const actualKills = num(d.kills);
+      const skinUnlockKills = accountSnap.exists && accountSnap.data()?.allSkinsUnlocked === true ? 5000 : actualKills;
+      const stats = { kills: actualKills, skinUnlockKills, deaths: num(d.deaths), wins: num(d.wins), losses: num(d.losses), matches: num(d.matches) };
       const rank = {};
       for (const board of BOARDS) {
         rank[board] = null;

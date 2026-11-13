@@ -109,6 +109,8 @@ async function readJsonBody(req, maxBytes = 4096) {
 function knownAccountName(name, { allowLegacy }) {
   const generated = canonicalName(name);
   if (generated) return generated;
+  // The migrated developer account uses this reserved short name.
+  if (allowLegacy && typeof name === "string" && name.toLowerCase() === "dev") return "dev";
   return allowLegacy && isLegacyName(name) ? name : null;
 }
 async function passwordHash(password, salt) {
@@ -1063,6 +1065,48 @@ setInterval(() => {
   for (const [ip, e] of authAttempts) if (e.resetAt < now) authAttempts.delete(ip);
 }, 30_000).unref();
 
-httpServer.listen(PORT, () => {
-  console.log(`ArenaDuels relay server listening on port ${PORT}`);
+// One-time-in-effect migration: preserve chrome50's UID and password hash, but rename
+// its username to dev and grant the maximum skin-unlock kill threshold. No password is
+// added to source code or environment variables. The transaction is safe to run on each
+// server boot and refuses to overwrite an unrelated existing dev account.
+async function migrateDeveloperAccount() {
+  if (!firestore) return;
+  const oldNameRef = firestore.collection("arenaUsernames").doc("chrome50");
+  const newNameRef = firestore.collection("arenaUsernames").doc("dev");
+  try {
+    await firestore.runTransaction(async (tx) => {
+      const oldNameSnap = await tx.get(oldNameRef);
+      const newNameSnap = await tx.get(newNameRef);
+      if (!oldNameSnap.exists) {
+        if (newNameSnap.exists) console.log("[dev-account] dev account already exists; no rename needed");
+        else console.log("[dev-account] chrome50 account not found; migration skipped");
+        return;
+      }
+      if (newNameSnap.exists) {
+        const oldUid = oldNameSnap.data()?.uid;
+        const newUid = newNameSnap.data()?.uid;
+        if (oldUid !== newUid) throw new Error("Cannot rename chrome50: the username dev is already taken by another account.");
+        tx.delete(oldNameRef);
+      } else {
+        const record = oldNameSnap.data();
+        tx.create(newNameRef, { ...record, username: "dev" });
+        tx.delete(oldNameRef);
+      }
+      const uid = oldNameSnap.data()?.uid;
+      if (typeof uid !== "string" || !uid) throw new Error("chrome50 account has no valid UID.");
+      const accountRef = firestore.collection("arenaAccounts").doc(uid);
+      const statsRef = firestore.collection("arenaStats").doc(uid);
+      tx.set(accountRef, { uid, username: "dev", allSkinsUnlocked: true }, { merge: true });
+      tx.set(statsRef, { uid, username: "dev" }, { merge: true });
+    });
+    console.log("[dev-account] chrome50 renamed to dev; all body skins unlocked");
+  } catch (err) {
+    console.error("[dev-account] migration failed:", err.message);
+  }
+}
+
+migrateDeveloperAccount().finally(() => {
+  httpServer.listen(PORT, () => {
+    console.log(`ArenaDuels relay server listening on port ${PORT}`);
+  });
 });
