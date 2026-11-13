@@ -3,15 +3,17 @@ import { ARENA_LIST, getArena } from "./arenas.js";
 import { PlayerController, RemotePlayer, makeLaserMesh, aimLaser, setLaserColor, GAME } from "./player.js";
 import { Net } from "./net.js";
 import { randomName } from "./names.js";
-import { initializeAccountUi } from "./auth.js";
+import { initializeAccountUi, getCurrentFirebaseIdToken, API_BASE } from "./auth.js";
 import { initStatsUi } from "./stats-ui.js";
 import { BotManager, BOT_SKILLS } from "./bots.js";
-import { COLORS, PATTERNS, ACCESSORIES, loadLook, saveLook, sanitizeLook } from "./customization.js";
+import { COLORS, ACCESSORIES, loadLook, saveLook, sanitizeLook } from "./customization.js";
+import { SKINS, DEFAULT_SKIN, skinById, skinThumbUrl, skinUnlocked, nextSkin } from "./skins.js";
 import { MatchState, DEFAULT_SETTINGS as DEFAULT_MATCH_RULES, sanitizeSettings } from "./match.js";
 import { iconSvg } from "./icons.js";
 import { createLookPreview } from "./look-preview.js";
 import { cleanName, cleanRelay, isBotId, isValidArenaId, isValidId, SERVER_ID, SERVER_ONLY } from "./validate.js";
 import { GAME_MODES, FEATURED_LOBBY, getMode, isValidModeId } from "./modes.js";
+import { JumpFilter } from "./mouse-filter.js";
 import { radiansPerCount, clampSens, fromOldSensitivity, SENS_SCALE } from "./sensitivity.js";
 import { TrainingSession, DRILLS, DRILL_IDS, LEVELS, LEVEL_IDS, DEFAULT_LEVEL, bestKey, loadBests, saveBest, nearConsole, buildTrainingConsole } from "./training.js";
 
@@ -21,7 +23,7 @@ import { TrainingSession, DRILLS, DRILL_IDS, LEVELS, LEVEL_IDS, DEFAULT_LEVEL, b
    being a typical mouse default) rather than an arbitrary 0-1 slider.
 ========================================================= */
 const SETTINGS_KEY = "capsules-settings";
-const DEFAULT_SETTINGS = { sensitivity: 6, sensScale: SENS_SCALE, controllerEnabled: false, controllerSensitivity: 3.0, fov: 90, crosshairSize: 6 };
+const DEFAULT_SETTINGS = { sensitivity: 6, sensScale: SENS_SCALE, controllerEnabled: false, controllerSensitivity: 3.0, fov: 90, crosshairSize: 6, ignoreJumps: false };
 
 function loadSettings() {
   try {
@@ -38,6 +40,7 @@ function loadSettings() {
       controllerSensitivity: typeof parsed.controllerSensitivity === "number" ? parsed.controllerSensitivity : DEFAULT_SETTINGS.controllerSensitivity,
       fov: typeof parsed.fov === "number" ? parsed.fov : DEFAULT_SETTINGS.fov,
       crosshairSize: typeof parsed.crosshairSize === "number" ? parsed.crosshairSize : DEFAULT_SETTINGS.crosshairSize,
+      ignoreJumps: parsed.ignoreJumps === true,
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -76,6 +79,8 @@ const fovSlider = document.getElementById("fov-slider");
 const fovValue = document.getElementById("fov-value");
 const crosshairSlider = document.getElementById("crosshair-slider");
 const crosshairValue = document.getElementById("crosshair-value");
+const ignoreJumpsToggle = document.getElementById("ignore-jumps");
+const jumpFilter = new JumpFilter();
 
 function refreshSettingsUI() {
   sensSlider.value = settings.sensitivity;
@@ -89,6 +94,7 @@ function refreshSettingsUI() {
   fovValue.textContent = settings.fov;
   crosshairSlider.value = settings.crosshairSize;
   crosshairValue.textContent = settings.crosshairSize;
+  ignoreJumpsToggle.checked = settings.ignoreJumps;
 }
 
 let paused = false;
@@ -183,6 +189,12 @@ crosshairSlider.addEventListener("input", () => {
   applyCrosshairSize();
 });
 
+ignoreJumpsToggle.addEventListener("change", () => {
+  settings.ignoreJumps = ignoreJumpsToggle.checked;
+  jumpFilter.reset();
+  saveSettings();
+});
+
 controllerMode.addEventListener("change", () => {
   settings.controllerEnabled = controllerMode.value === "controller";
   refreshSettingsUI();
@@ -207,6 +219,8 @@ applyCrosshairSize(); // apply saved size immediately, even before a match
 // did nothing until the next click moved the lock.) Also asks for raw mouse
 // input where the browser supports it, so OS mouse acceleration can't make
 // turning uneven; falls back to a normal lock otherwise.
+let lockNote = "";   // why raw input was refused, when it was (shown in the F9 overlay)
+let lockErrors = 0;  // pointerlockerror events
 let lockMode = "none"; // "raw" = unadjusted mouse input, "normal" = regular lock (shown in the F9 overlay)
 function lockPointer() {
   const el = document.body;
@@ -216,7 +230,12 @@ function lockPointer() {
   };
   try {
     const p = el.requestPointerLock({ unadjustedMovement: true });
-    if (p && typeof p.then === "function") p.then(() => { lockMode = "raw"; }, plain);
+    if (p && typeof p.then === "function") {
+      p.then(
+        () => { lockMode = "raw"; lockNote = ""; },
+        (err) => { lockNote = `raw refused: ${err?.name || "error"}${err?.message ? " - " + err.message : ""}`.slice(0, 90); plain(); }
+      );
+    }
     else lockMode = "normal"; // browser ignored the option (no raw input support)
   } catch {
     plain();
@@ -517,10 +536,24 @@ function buildLookPickers() {
   auto.dataset.key = "auto";
   colorPicker.appendChild(auto);
 
-  for (const p of PATTERNS) {
-    const b = tile("pattern-option", "", p.label, () => setMyLook({ pattern: p.id }));
-    b.innerHTML = iconSvg(p.id); // static, trusted markup from icons.js
-    b.dataset.key = p.id;
+  for (const sk of SKINS) {
+    const b = tile("pattern-option skin-option", "", sk.label, () => pickSkin(sk));
+    b.dataset.key = sk.id;
+    if (sk.id === DEFAULT_SKIN) b.classList.add("solid-skin"); // shows your color (see refreshLookPickers)
+    else b.style.backgroundImage = `url("${skinThumbUrl(sk.id)}")`;
+    const name = document.createElement("span");
+    name.className = "skin-name";
+    name.textContent = sk.label;
+    b.appendChild(name);
+    if (sk.kills > 0) {
+      const lock = document.createElement("span");
+      lock.className = "skin-lock";
+      lock.innerHTML = LOCK_SVG; // static, trusted markup
+      const need = document.createElement("span");
+      need.textContent = `${sk.kills} kills`;
+      lock.appendChild(need);
+      b.appendChild(lock);
+    }
     patternPicker.appendChild(b);
   }
   for (const a of ACCESSORIES) {
@@ -538,6 +571,67 @@ function refreshLookPickers() {
   mark(colorPicker, colorKey(myLook.color));
   mark(patternPicker, myLook.pattern);
   mark(accessoryPicker, myLook.accessory);
+  // Skins you haven't earned yet are dimmed with the kills they need. (Until we know your kills, nothing is dimmed.)
+  patternPicker.querySelectorAll("button").forEach((el) => {
+    const sk = skinById(el.dataset.key);
+    el.classList.toggle("locked", !!sk && myKills !== null && !skinUnlocked(sk, myKills));
+    if (sk && sk.id === DEFAULT_SKIN) el.style.background = "#" + (myLook.color ?? 0x8a8f98).toString(16).padStart(6, "0"); // Auto: neutral grey
+  });
+  updateSkinNote();
+}
+
+/* ---- skin unlocks ---- */
+// Skins unlock with lifetime kills on your account (the number on the stats screen). The relay checks the same
+// number before it shows your skin to anyone, so this is only the menu keeping up with it.
+const LOCK_SVG = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17 9h-1V7a4 4 0 0 0-8 0v2H7a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2zm-7-2a2 2 0 0 1 4 0v2h-4V7z"/></svg>';
+let myKills = null;     // lifetime kills on your account; 0 for guests; null until we have asked
+let signedIn = false;
+let skinMessage = "";   // a one-off line shown after you click a locked skin
+const skinNoteEl = document.getElementById("skin-note");
+
+function updateSkinNote() {
+  let text;
+  if (myKills === null) text = "Checking your kills...";
+  else if (!signedIn) text = "Sign in to unlock skins with kills. Solid and Checker are free.";
+  else {
+    const next = nextSkin(myKills);
+    text = `You have ${myKills} kill${myKills === 1 ? "" : "s"}. ${next ? `${next.label} unlocks at ${next.kills}.` : "Every skin is unlocked."}`;
+  }
+  skinNoteEl.textContent = (skinMessage ? skinMessage + " " : "") + text + " Skins keep their own colors; your color shows on Solid.";
+}
+
+function pickSkin(sk) {
+  if (myKills !== null && !skinUnlocked(sk, myKills)) {
+    skinMessage = `${sk.label} unlocks at ${sk.kills} kills.`;
+    updateSkinNote();
+    return;
+  }
+  skinMessage = "";
+  setMyLook({ pattern: sk.id });
+}
+
+async function refreshMyKills() {
+  const token = await getCurrentFirebaseIdToken().catch(() => null);
+  if (!token) {
+    signedIn = false;
+    myKills = 0;
+  } else {
+    signedIn = true;
+    try {
+      const response = await fetch(`${API_BASE}/api/stats/me`, { cache: "no-store", headers: { Authorization: `Bearer ${token}` } });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && Number.isFinite(data.kills)) myKills = Math.max(0, Math.floor(data.kills));
+    } catch { /* server asleep or offline: keep what we knew */ }
+  }
+  // Wearing a skin you no longer have (signed out, or a different account)? Back to Solid.
+  const worn = skinById(myLook.pattern);
+  if (myKills !== null && worn && !skinUnlocked(worn, myKills)) {
+    myLook = { ...myLook, pattern: DEFAULT_SKIN };
+    saveLook(myLook);
+    updateLookPreview();
+    if (matchActive) net.broadcast({ t: "hello", name: myName, look: myLook });
+  }
+  refreshLookPickers();
 }
 
 // The color you actually show up as: your pick, or the assigned one for Auto.
@@ -578,6 +672,8 @@ function openCustomization() {
   }
   updateLookPreview();
   lookPreview?.start();
+  skinMessage = "";
+  refreshMyKills();
 }
 
 // Hides the menu without returning to Settings (used when a match starts/ends).
@@ -2227,10 +2323,26 @@ function sanitizeDelta(v) {
 addEventListener("mousemove", (e) => {
   if (!matchActive || paused || match.over || local.hp <= 0 || document.pointerLockElement !== document.body) return;
   const s = sensitivityMultiplier();
-  local.yaw -= sanitizeDelta(e.movementX) * s;
-  local.pitch -= sanitizeDelta(e.movementY) * s;
+  const dx = sanitizeDelta(e.movementX);
+  const dy = sanitizeDelta(e.movementY);
+  // "Ignore sudden mouse jumps" (Settings): throws away a big jump that is immediately undone (see mouse-filter.js).
+  const moves = settings.ignoreJumps ? jumpFilter.push(dx, dy, performance.now()) : [[dx, dy]];
+  for (const [mx, my] of moves) {
+    local.yaw -= mx * s;
+    local.pitch -= my * s;
+  }
   local.pitch = Math.max(-1.4, Math.min(1.4, local.pitch));
 });
+
+// A held mouse movement that nothing followed is real: release it (called every frame from the loop).
+function flushHeldMouse() {
+  if (!settings.ignoreJumps || !matchActive || paused || local.hp <= 0) return;
+  for (const [mx, my] of jumpFilter.flush(performance.now())) {
+    const s = sensitivityMultiplier();
+    local.yaw -= mx * s;
+    local.pitch = Math.max(-1.4, Math.min(1.4, local.pitch - my * s));
+  }
+}
 
 /* =========================================================
    MOUSE DIAGNOSTICS — press F9 to show or hide.
@@ -2252,10 +2364,11 @@ function mouseDbgTick(now) {
     mouseDbg.shownEvents = mouseDbg.events;
     mouseDbg.frames = 0; mouseDbg.events = 0; mouseDbg.max = 0; mouseDbg.last = now;
     mouseDbg.el.textContent =
-      `mouse lock: ${lockMode}\nfps: ${mouseDbg.fps}\nmouse events/s: ${mouseDbg.shownEvents}\nbiggest jump: ${mouseDbg.shownMax}`;
+      `mouse lock: ${lockMode}${lockNote ? `\n${lockNote}` : ""}\nlock errors: ${lockErrors}\nfps: ${mouseDbg.fps}\nmouse events/s: ${mouseDbg.shownEvents}\nbiggest jump: ${mouseDbg.shownMax}\njumps ignored: ${settings.ignoreJumps ? jumpFilter.ignored : "filter off"}`;
   }
   requestAnimationFrame(mouseDbgTick);
 }
+document.addEventListener("pointerlockerror", () => { lockErrors++; });
 addEventListener("keydown", (e) => {
   if (e.code !== "F9") return;
   e.preventDefault();
@@ -2340,6 +2453,7 @@ function loop() {
   const now = performance.now();
   const dt = Math.min((now - last) / 1000, 0.25);
   last = now;
+  flushHeldMouse();
 
   // The match clock runs even while you're paused — the game goes on without you.
   if (matchActive) {

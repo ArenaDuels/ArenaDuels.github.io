@@ -29,6 +29,7 @@ import { MODE_IDS, FEATURED_LOBBY, getMode, isValidModeId } from "./modes.js";
 import { MatchTally, createStatsStore, BOARDS } from "./stats.js";
 import { clientIpFrom, resolveTrustProxy } from "./clientip.js";
 import { uidBusyElsewhere, uidInRoom } from "./sessions.js";
+import { skinById, lookWithUnlockedSkin } from "./skins.js";
 
 const PORT = process.env.PORT || 8080;
 const scrypt = promisify(crypto.scrypt);
@@ -468,6 +469,30 @@ function makeRoom(code, host, arenaId, isPublic, extra = {}) {
   return room;
 }
 
+// ---- skins ----
+// A skin other than the free ones has to be earned: it is only shown if the sender's account really has the
+// kills for it (the same lifetime kills as the leaderboard). Guests have none. A skin you haven't unlocked
+// goes out as Solid, whatever the sender's browser claims.
+async function lifetimeKills(ws) {
+  if (!ws.uid || !stats) return 0;
+  const now = Date.now();
+  if (ws.killsAt && now - ws.killsAt < 20_000) return ws.kills; // at most one read every 20 seconds per player
+  ws.killsAt = now;
+  try {
+    ws.kills = await stats.getKills(ws.uid);
+  } catch (err) {
+    console.error("[skins] kills lookup failed:", err.message);
+    ws.kills = ws.kills ?? 0;
+  }
+  return ws.kills;
+}
+
+async function allowedLook(ws, look) {
+  const skin = skinById(look.pattern);
+  if (!skin || skin.kills === 0) return look; // free (or not a skin at all): nothing to check
+  return lookWithUnlockedSkin(look, await lifetimeKills(ws));
+}
+
 // ---- the always-open lobby ----
 
 function findFeaturedCode() {
@@ -847,6 +872,7 @@ async function handleMessage(ws, raw, isBinary) {
           if (reserved?.exists) clean.name = `Guest-${ws.id.slice(0, 4)}`;
           ws.publicName = clean.name;
         }
+        if (clean.look) clean.look = await allowedLook(ws, clean.look);
       }
 
       // Health, respawns and corrections are the server's to announce — never a player's.

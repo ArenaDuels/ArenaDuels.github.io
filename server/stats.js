@@ -168,6 +168,12 @@ export function createStatsStore({ firestore, FieldValue, logger = console, now 
       return mine.length;
     },
 
+    /** Just a player's lifetime kills (one read): what the skin unlocks are checked against. */
+    async getKills(uid) {
+      const snap = await col().doc(uid).get();
+      return snap.exists ? num(snap.data().kills) : 0;
+    },
+
     /** One player's totals, plus where they stand on each board. */
     async getStats(uid) {
       const snap = await col().doc(uid).get();

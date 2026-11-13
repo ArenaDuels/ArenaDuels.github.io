@@ -214,6 +214,32 @@ test("always-open lobby: first click opens it, later clicks join it, it reopens 
   await closeAll([host, other, third]);
 });
 
+test("skins: a guest can wear the free skins, but a locked one is shown to everyone else as Solid", async () => {
+  const host = player("skinhost");
+  const guest = player("skinguest");
+  await Promise.all([host.open, guest.open]);
+  host.send({ t: "create_room", arenaId: "classic", isPublic: false });
+  const created = await host.waitFor("room_created");
+  guest.send({ t: "join_room", code: created.code });
+  await guest.waitFor("room_joined");
+
+  const wear = async (pattern) => {
+    const before = host.of("hello").length;
+    guest.send({ t: "hello", name: "Skinny", look: { color: 255, pattern, accessory: "none" } });
+    for (let waited = 0; host.of("hello").length === before; waited += 25) {
+      if (waited > 40000) throw new Error(`no hello relayed for ${String(pattern)}`);
+      await sleep(25);
+    }
+    return host.last("hello").look.pattern;
+  };
+  assert.equal(await wear("checker"), "checker", "free skin passes");
+  assert.equal(await wear("gold"), "solid", "a guest has no kills, so Gold goes out as Solid");
+  assert.equal(await wear("camo"), "solid", "even the first unlock needs kills");
+  assert.equal(await wear("solid"), "solid");
+  assert.equal(await wear("stripes"), undefined, "an old pattern name is dropped");
+  await closeAll([host, guest]);
+});
+
 test("different game modes are matched separately", async () => {
   const dm = await search(["a", "b"], "1v1");
   const vamp = await search(["c", "d"], "tdm");

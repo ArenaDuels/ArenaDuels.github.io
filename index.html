@@ -152,8 +152,9 @@
       </div>
 
       <div class="customization-section">
-        <p class="custom-label">Pattern</p>
+        <p class="custom-label">Texture</p>
         <div class="pattern-picker" id="pattern-picker"></div>
+        <p id="skin-note" class="status-text"></p>
       </div>
 
       <div class="customization-section">
@@ -225,6 +226,14 @@
           <span id="crosshair-value" class="setting-value">6</span>
         </div>
         <input id="crosshair-slider" type="range" min="2" max="16" step="1" value="6" class="slider">
+      </div>
+
+      <div class="setting-row">
+        <label class="setting-label">
+          <span>Ignore sudden mouse jumps</span>
+          <input id="ignore-jumps" type="checkbox">
+        </label>
+        <p class="status-text">Turn this on if the view jumps when another game is open. A big jump that is instantly undone is thrown away; normal flicks are untouched.</p>
       </div>
 
       <button id="btn-customization-open" class="btn btn-secondary">Customize Player</button>

@@ -2,22 +2,14 @@
 // and building what other players see (body pattern + accessory).
 //
 // A "look" is { color, pattern, accessory }:
-//   color      one of COLORS, or null = "Auto" (the usual assigned color)
-//   pattern    id from PATTERNS
+//   color      one of COLORS, or null = "Auto" (the usual assigned color). Only the Solid skin shows it on the body.
+//   pattern    the skin: an id from SKINS (skins.js). Real texture images, unlocked by kills on your account.
 //   accessory  id from ACCESSORIES
 
 import * as THREE from "../vendor/three/three.module.min.js";
+import { DEFAULT_SKIN, skinById, skinTextureUrl } from "./skins.js";
 
 export const COLORS = [0xffffff, 0xff4d6a, 0x39ff88, 0xffd166, 0x9b5de5, 0x4cc9f0, 0xff8c42];
-
-// Each id doubles as the icon name in icons.js.
-export const PATTERNS = [
-  { id: "solid", label: "Solid" },
-  { id: "stripes", label: "Stripes" },
-  { id: "bands", label: "Bands" },
-  { id: "dots", label: "Dots" },
-  { id: "checker", label: "Checker" },
-];
 
 export const ACCESSORIES = [
   { id: "none", label: "None" },
@@ -30,7 +22,7 @@ export const ACCESSORIES = [
   { id: "party", label: "Party hat" },
 ];
 
-export const DEFAULT_LOOK = { color: null, pattern: "solid", accessory: "none" };
+export const DEFAULT_LOOK = { color: null, pattern: DEFAULT_SKIN, accessory: "none" };
 
 /* ---------- saving / loading / validating ---------- */
 
@@ -42,7 +34,7 @@ export function sanitizeLook(raw) {
   const out = { ...DEFAULT_LOOK };
   if (!raw || typeof raw !== "object") return out;
   if (raw.color === null || COLORS.includes(raw.color)) out.color = raw.color ?? null;
-  if (PATTERNS.some((p) => p.id === raw.pattern)) out.pattern = raw.pattern;
+  if (skinById(raw.pattern)) out.pattern = raw.pattern; // old pattern ids (stripes, bands, dots) fall back to Solid
   if (ACCESSORIES.some((a) => a.id === raw.accessory)) out.accessory = raw.accessory;
   return out;
 }
@@ -64,66 +56,65 @@ export function saveLook(look) {
   }
 }
 
-/* ---------- body pattern ---------- */
+/* ---------- body skins ---------- */
 
-const textureCache = new Map();
+// One entry per skin image, made the first time someone wears it. The image loads in the background;
+// until it arrives the body shows the plain color, and every material waiting on it is updated.
+const skinCache = new Map(); // id -> { texture, failed, waiting: Set<material> }
+const loader = new THREE.TextureLoader();
 
-// Draws the pattern on a canvas in the chosen color (the capsule's UVs run
-// around the body horizontally and along its length vertically).
-function patternTexture(patternId, color) {
-  const key = `${patternId}:${color}`;
-  if (textureCache.has(key)) return textureCache.get(key);
-
-  const size = 256;
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext("2d");
-
-  const base = new THREE.Color(color);
-  const dark = base.clone().multiplyScalar(0.4);
-  ctx.fillStyle = `#${base.getHexString()}`;
-  ctx.fillRect(0, 0, size, size);
-  ctx.fillStyle = `#${dark.getHexString()}`;
-
-  if (patternId === "stripes") {
-    for (let i = 1; i < 8; i += 2) ctx.fillRect((i * size) / 8, 0, size / 8, size);
-  } else if (patternId === "bands") {
-    for (let i = 1; i < 8; i += 2) ctx.fillRect(0, (i * size) / 8, size, size / 8);
-  } else if (patternId === "checker") {
-    const n = 8;
-    for (let y = 0; y < n; y++) {
-      for (let x = 0; x < n; x++) {
-        if ((x + y) % 2) ctx.fillRect((x * size) / n, (y * size) / n, size / n, size / n);
+function skinEntry(id) {
+  let entry = skinCache.get(id);
+  if (entry) return entry;
+  entry = { texture: null, failed: false, waiting: new Set() };
+  skinCache.set(id, entry);
+  loader.load(
+    skinTextureUrl(id),
+    (tex) => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      // Mirrored tiling hides the seams (these images aren't built to tile). Twice around the body is an
+      // even count, so the seam at the back of the body is continuous too. Once along it: the body is
+      // about as tall as one tile is wide.
+      tex.wrapS = tex.wrapT = THREE.MirroredRepeatWrapping;
+      tex.repeat.set(2, 1);
+      tex.anisotropy = 4;
+      entry.texture = tex;
+      for (const m of entry.waiting) {
+        if (m.userData.skin === id) {
+          m.map = tex;
+          m.color.set(0xffffff);
+          m.needsUpdate = true;
+        }
       }
+      entry.waiting.clear();
+    },
+    undefined,
+    () => {
+      entry.failed = true; // keep showing the plain color
+      entry.waiting.clear();
     }
-  } else if (patternId === "dots") {
-    const n = 4;
-    const cell = size / n;
-    for (let y = 0; y < n; y++) {
-      for (let x = 0; x < n; x++) {
-        ctx.beginPath();
-        ctx.arc((x + 0.5 + (y % 2 ? 0.5 : 0)) * cell, (y + 0.5) * cell, cell * 0.26, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-  }
-
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  textureCache.set(key, tex);
-  return tex;
+  );
+  return entry;
 }
 
-// Applies color + pattern to a capsule body material.
-export function applyBodyLook(material, color, patternId) {
-  if (patternId === "solid") {
+// Puts a skin on a capsule body material. Solid shows your color; every other skin shows its own image.
+export function applyBodyLook(material, color, skinId) {
+  const skin = skinById(skinId);
+  const id = skin ? skin.id : DEFAULT_SKIN;
+  material.userData.skin = id;
+  if (id === DEFAULT_SKIN) {
     material.map = null;
     material.color.set(color);
   } else {
-    material.map = patternTexture(patternId, color);
-    material.color.set(0xffffff); // the texture already carries the color
+    const entry = skinEntry(id);
+    if (entry.texture) {
+      material.map = entry.texture;
+      material.color.set(0xffffff); // the image carries its own colors
+    } else {
+      material.map = null;
+      material.color.set(color); // plain color until the image arrives
+      if (!entry.failed) entry.waiting.add(material);
+    }
   }
   material.needsUpdate = true;
 }

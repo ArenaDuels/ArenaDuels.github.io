@@ -7,6 +7,7 @@
 // Rule of thumb: nothing that arrives over the network is used until it has
 // been through cleanRelay() (gameplay messages) or one of the helpers below.
 
+import { SKIN_IDS } from "./skins.js";
 export const ARENA_IDS = ["classic", "foundry", "ruins", "neon", "mansion", "glacier"];
 export const MAX_NAME_LEN = 16;
 export const MAX_BOTS = 8;
@@ -51,7 +52,7 @@ function cleanLook(v) {
   if (!isObj(v)) return undefined;
   const color = v.color === null || typeof v.color === "number" ? v.color : null;
   const short = (s) => (typeof s === "string" && s.length <= 24 ? s : undefined);
-  return { color: color !== null && !Number.isFinite(color) ? null : color, pattern: short(v.pattern), accessory: short(v.accessory) };
+  return { color: color !== null && !Number.isFinite(color) ? null : color, pattern: SKIN_IDS.includes(v.pattern) ? v.pattern : undefined, accessory: short(v.accessory) };
 }
 
 function cleanSettings(v) {

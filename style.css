@@ -1610,3 +1610,18 @@ body.training-mode #hud-hp-corner { display: none !important; }
 }
 .level-btn:hover { border-color: var(--brand); }
 .level-btn.active { background: rgba(79, 216, 255, 0.18); border-color: rgba(79, 216, 255, 0.8); }
+
+/* ===== Texture skins (the picker in Customize) ===== */
+.skin-option { position: relative; overflow: hidden; padding: 0; background-size: cover; background-position: center; }
+.skin-option.solid-skin { background-color: #888; }
+.skin-option .skin-name {
+  position: absolute; left: 0; right: 0; bottom: 0; padding: 2px 0; font-size: 10px; line-height: 1.2;
+  text-align: center; color: #fff; background: rgba(0, 0, 0, 0.62); pointer-events: none;
+}
+.skin-option .skin-lock {
+  display: none; position: absolute; inset: 0; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; padding-bottom: 14px; font-size: 10px; color: #fff; background: rgba(8, 8, 12, 0.7); pointer-events: none;
+}
+.skin-option.locked .skin-lock { display: flex; }
+.skin-option .skin-lock svg { width: 16px; height: 16px; }
+.skin-option.locked { cursor: not-allowed; }
