@@ -574,7 +574,7 @@ function refreshLookPickers() {
   // Skins you haven't earned yet are dimmed with the kills they need. (Until we know your kills, nothing is dimmed.)
   patternPicker.querySelectorAll("button").forEach((el) => {
     const sk = skinById(el.dataset.key);
-    el.classList.toggle("locked", !!sk && myKills !== null && !skinUnlocked(sk, myKills));
+    el.classList.toggle("locked", !!sk && myKills !== null && !myAllSkinsUnlocked && !skinUnlocked(sk, myKills));
     if (sk && sk.id === DEFAULT_SKIN) el.style.background = "#" + (myLook.color ?? 0x8a8f98).toString(16).padStart(6, "0"); // Auto: neutral grey
   });
   updateSkinNote();
@@ -584,25 +584,26 @@ function refreshLookPickers() {
 // Skins unlock with lifetime kills on your account (the number on the stats screen). The relay checks the same
 // number before it shows your skin to anyone, so this is only the menu keeping up with it.
 const LOCK_SVG = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17 9h-1V7a4 4 0 0 0-8 0v2H7a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2zm-7-2a2 2 0 0 1 4 0v2h-4V7z"/></svg>';
-let myKills = null;     // actual lifetime kills shown in stats
-let mySkinKills = null; // effective unlock threshold; developer grants do not inflate the leaderboard
+let myKills = null;     // lifetime kills on your account; 0 for guests; null until we have asked
+let myAllSkinsUnlocked = false;
 let signedIn = false;
 let skinMessage = "";   // a one-off line shown after you click a locked skin
 const skinNoteEl = document.getElementById("skin-note");
 
 function updateSkinNote() {
   let text;
-  if (myKills === null || mySkinKills === null) text = "Checking your kills...";
+  if (myKills === null) text = "Checking your kills...";
   else if (!signedIn) text = "Sign in to unlock skins with kills. Solid and Checker are free.";
+  else if (myAllSkinsUnlocked) text = "Developer account: every skin is unlocked.";
   else {
-    const next = nextSkin(mySkinKills);
+    const next = nextSkin(myKills);
     text = `You have ${myKills} kill${myKills === 1 ? "" : "s"}. ${next ? `${next.label} unlocks at ${next.kills}.` : "Every skin is unlocked."}`;
   }
   skinNoteEl.textContent = (skinMessage ? skinMessage + " " : "") + text + " Skins keep their own colors; your color shows on Solid.";
 }
 
 function pickSkin(sk) {
-  if (mySkinKills !== null && !skinUnlocked(sk, mySkinKills)) {
+  if (myKills !== null && !myAllSkinsUnlocked && !skinUnlocked(sk, myKills)) {
     skinMessage = `${sk.label} unlocks at ${sk.kills} kills.`;
     updateSkinNote();
     return;
@@ -615,22 +616,21 @@ async function refreshMyKills() {
   const token = await getCurrentFirebaseIdToken().catch(() => null);
   if (!token) {
     signedIn = false;
+    myAllSkinsUnlocked = false;
     myKills = 0;
-    mySkinKills = 0;
   } else {
     signedIn = true;
+    myAllSkinsUnlocked = false;
     try {
       const response = await fetch(`${API_BASE}/api/stats/me`, { cache: "no-store", headers: { Authorization: `Bearer ${token}` } });
       const data = await response.json().catch(() => ({}));
-      if (response.ok && Number.isFinite(data.kills)) {
-        myKills = Math.max(0, Math.floor(data.kills));
-        mySkinKills = Number.isFinite(data.skinUnlockKills) ? Math.max(0, Math.floor(data.skinUnlockKills)) : myKills;
-      }
+      if (response.ok && Number.isFinite(data.kills)) myKills = Math.max(0, Math.floor(data.kills));
+      if (response.ok) myAllSkinsUnlocked = data.allSkinsUnlocked === true;
     } catch { /* server asleep or offline: keep what we knew */ }
   }
   // Wearing a skin you no longer have (signed out, or a different account)? Back to Solid.
   const worn = skinById(myLook.pattern);
-  if (mySkinKills !== null && worn && !skinUnlocked(worn, mySkinKills)) {
+  if (myKills !== null && worn && !myAllSkinsUnlocked && !skinUnlocked(worn, myKills)) {
     myLook = { ...myLook, pattern: DEFAULT_SKIN };
     saveLook(myLook);
     updateLookPreview();
