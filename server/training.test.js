@@ -48,12 +48,12 @@ function play(drillId, beam, { firing = true, level } = {}) {
 }
 const firstAlive = (s) => s.targets.find((t) => t.alive)?.rp.mesh ?? null;
 
-test("all three drills last 60 seconds", () => {
+test("every drill lasts 60 seconds", () => {
   for (const d of Object.values(DRILLS)) assert.equal(d.seconds, 60);
 });
 
 test("every drill has a name, a length and a score format", () => {
-  assert.deepEqual(DRILL_IDS.sort(), ["cqc", "flick", "tracking"]);
+  assert.deepEqual([...DRILL_IDS].sort(), ["cqc", "flick", "reactive", "tracking"]);
   for (const d of Object.values(DRILLS)) {
     assert.ok(d.name && d.seconds > 0 && d.blurb && d.unit);
     assert.equal(typeof d.format(12.34), "string");
@@ -74,8 +74,8 @@ test("tracking: no beam scores 0s, a beam that never leaves the target scores mo
   assert.equal(full.drillId, "tracking");
 });
 
-test("tracking and cqc targets can run as fast as a player (16) but never faster", () => {
-  for (const drill of ["tracking", "cqc"]) {
+test("tracking, reactive and cqc targets can run as fast as a player (16) but never faster", () => {
+  for (const drill of ["tracking", "cqc", "reactive"]) {
     let top = 0;
     play(drill, (sess) => {
       const t = sess.targets[0];
@@ -313,7 +313,7 @@ test("coming back from a drill puts you close enough to the console that its lis
 
 test("speed levels cap how fast the moving targets go: easy 8, medium 12, hard 16", () => {
   assert.deepEqual(LEVEL_IDS, ["easy", "medium", "hard"]);
-  for (const drill of ["tracking", "cqc"]) {
+  for (const drill of ["tracking", "cqc", "reactive"]) {
     for (const level of LEVEL_IDS) {
       let top = 0;
       play(drill, (sess) => {
@@ -390,4 +390,70 @@ test("the results name the speed level for tracking and cqc, and file the score 
   const f = play("flick", () => null, { firing: false }).result;
   assert.equal(f.name, "Flick");
   assert.equal(f.bestKey, "flick");
+});
+
+test("reactive tracking: the target dodges once you have held the beam on it for a bit, and only then", () => {
+  seeded(5, () => {
+    resetPlayer();
+    const session = new TrainingSession({ camera: makeCamera(), makeTarget: fakeRobot });
+    session.start("reactive", player);
+    for (let i = 0; i < 200; i++) session.update(1 / 60, player);
+    const t = session.targets[0];
+    // beam off: it never dodges
+    for (let i = 0; i < 240; i++) { session.update(1 / 60, player); session.afterBeam(1 / 60, true, null, player); }
+    assert.equal(session.dodges, 0, "no dodging when you are not on it");
+    // beam held on it: it has to dodge within a second (the longest it waits is 0.9s)
+    let frames = 0;
+    while (session.dodges === 0 && frames++ < 90) {
+      session.update(1 / 60, player);
+      session.afterBeam(1 / 60, true, t.alive ? t.rp.mesh : null, player);
+    }
+    assert.ok(session.dodges >= 1 && frames <= 56, `first dodge after ${frames} frames of beam`);
+  });
+});
+
+test("reactive tracking: the dodge turns it around right away", () => {
+  seeded(9, () => {
+    resetPlayer();
+    const session = new TrainingSession({ camera: makeCamera(), makeTarget: fakeRobot });
+    session.start("reactive", player);
+    for (let i = 0; i < 200; i++) session.update(1 / 60, player);
+    const t = session.targets[0];
+    t.lockTime = 0;
+    t.dodgeAt = 0.3;
+    let frames = 0, before = t.strafeDir;
+    while (session.dodges === 0 && frames++ < 60) {
+      session.update(1 / 60, player);
+      before = t.strafeDir; // (its ordinary timer may have flipped it already this frame)
+      session.afterBeam(1 / 60, true, t.rp.mesh, player);
+    }
+    assert.equal(session.dodges, 1);
+    assert.equal(t.strafeDir, -before, "went the other way");
+    assert.ok(t.lockTime === 0 && t.dodgeAt >= 0.35 && t.dodgeAt <= 0.9, "the next dodge is a fresh random wait");
+  });
+});
+
+test("reactive tracking changes direction on an uneven beat, more often than plain tracking", () => {
+  seeded(21, () => {
+    const flipsPerMinute = (drill) => {
+      let flips = 0, last = null;
+      play(drill, (sess) => {
+        const t = sess.targets[0];
+        if (t) { if (last !== null && t.strafeDir !== last) flips++; last = t.strafeDir; }
+        return null;
+      }, { firing: false });
+      return flips;
+    };
+    const plain = flipsPerMinute("tracking"), reactive = flipsPerMinute("reactive");
+    assert.ok(reactive > plain * 1.2, `reactive ${reactive} vs tracking ${plain}`);
+  });
+});
+
+test("reactive tracking scores like tracking: seconds on target, accuracy and takedowns, per speed level", () => {
+  const r = play("reactive", firstAlive, { level: "medium" }).result;
+  assert.equal(r.name, "Reactive Tracking \u00b7 Medium");
+  assert.equal(r.bestKey, "reactive.medium");
+  assert.match(r.scoreText, /s$/);
+  assert.match(r.lines[0], /^Accuracy: \d+%/);
+  assert.match(r.lines[1], /^Takedowns: \d+$/);
 });

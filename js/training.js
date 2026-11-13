@@ -1,6 +1,7 @@
 // Aim Training: three solo drills, 60 seconds each, played in the Classic Box (an empty 30x30 room).
 //
 //   Tracking  keep the beam on a target that strafes across your view    score: seconds on target (+ accuracy, takedowns)
+//   Reactive  tracking, but the target dodges the moment you lock on     score: seconds on target (+ accuracy, takedowns)
 //   Flick     targets pop up around you, one at a time; flick and fire  score: targets popped
 //   CQC       a bot strafes, jumps, closes in and backs off around you  score: takedowns (+ accuracy)
 //
@@ -32,6 +33,15 @@ export const DRILLS = {
     name: "Tracking",
     seconds: 60,
     blurb: "Keep the beam on a target that strafes across your view, stops, changes direction and jumps. A few seconds on it takes it down, then another appears. Score is seconds on target.",
+    levels: true,
+    unit: "on target",
+    format: (v) => `${v.toFixed(1)}s`,
+  },
+  reactive: {
+    id: "reactive",
+    name: "Reactive Tracking",
+    seconds: 60,
+    blurb: "A target that dodges: it reverses on a random beat and changes direction the moment you hold it for a bit. You can't predict it, only react. Score is seconds on target.",
     levels: true,
     unit: "on target",
     format: (v) => `${v.toFixed(1)}s`,
@@ -129,6 +139,8 @@ class Target {
     this.spamLeft = 0;    // seconds left of a burst of A-D spam (rapid left-right strafing)
     this.spamTimer = 0;   // until the next flip in that burst
     this.respawn = 0;     // seconds until a downed target comes back
+    this.lockTime = 0;    // reactive: how long the beam has been held on it
+    this.dodgeAt = 0.6;   // reactive: it dodges once the beam has been on it this long
     this.lit = false;     // glowing because the beam is on it
     const m = rp.bodyMat;
     this.baseEmissive = m?.emissive?.getHex?.() ?? 0;
@@ -203,6 +215,11 @@ export class TrainingSession {
     return DRILLS[this.drillId];
   }
 
+  // Tracking and reactive tracking share the same strafing target.
+  get tracks() {
+    return this.drillId === "tracking" || this.drillId === "reactive";
+  }
+
   start(drillId, player, level = DEFAULT_LEVEL) {
     if (!DRILLS[drillId]) return;
     this.#clearTargets();
@@ -211,6 +228,7 @@ export class TrainingSession {
     this.maxSpeed = LEVELS[this.level].maxSpeed;
     this.onTarget = false;
     this.aliveTime = 0;       // tracking: seconds the target was up (accuracy is measured against this)
+    this.dodges = 0;          // reactive: how many times the target dodged because you were on it
     this.phase = "ready";
     this.finished = false;
     this.readyLeft = READY_SECONDS;
@@ -254,7 +272,7 @@ export class TrainingSession {
       this.timeLeft = Math.max(0, DRILLS[this.drillId].seconds - this.elapsed);
       for (const t of this.targets) {
         if (t.alive) this.aliveTime += dt;
-        if (this.drillId === "tracking") this.#trackingStep(t, dt, player);
+        if (this.tracks) this.#trackingStep(t, dt, player);
         else if (this.drillId === "flick") { if (!t.alive) this.#placeFlickTarget(t, player); }
         else this.#cqcStep(t, dt, player);
       }
@@ -273,6 +291,16 @@ export class TrainingSession {
     const t = hitMesh ? this.targets.find((x) => x.alive && x.rp.mesh === hitMesh) : null;
     this.onTarget = !!t;
     for (const x of this.targets) x.setHit(x === t);
+    if (this.drillId === "reactive") {
+      for (const x of this.targets) {
+        if (x === t) {
+          x.lockTime += dt;
+          if (x.lockTime >= x.dodgeAt) this.#dodge(x);
+        } else {
+          x.lockTime = Math.max(0, x.lockTime - dt); // lose it for a moment and the pressure eases off
+        }
+      }
+    }
     if (this.drillId === "flick") {
       // Time on a flick target builds up toward a pop; once the beam leaves, it drains away again,
       // so a quick sweep across a target doesn't count for long.
@@ -302,7 +330,7 @@ export class TrainingSession {
 
   #beginRun(player) {
     this.phase = "run";
-    if (this.drillId === "tracking") {
+    if (this.tracks) {
       const t = this.#addTarget("Target");
       this.#placeTrackingTarget(t, player);
     } else if (this.drillId === "flick") {
@@ -347,10 +375,14 @@ export class TrainingSession {
     } else {
       t.timer -= dt;
       if (t.timer <= 0) {
-        const stop = Math.random() < 0.12; // now and then it just stops for a moment
-        t.timer = stop ? rand(0.2, 0.5) : rand(0.5, 1.5);
-        t.strafeDir = Math.random() < 0.75 ? -t.strafeDir : t.strafeDir;
-        t.strafeSpeed = stop ? 0 : rand(this.maxSpeed * 0.45, this.maxSpeed);
+        const reactive = this.drillId === "reactive";
+        const stop = Math.random() < (reactive ? 0.08 : 0.12); // now and then it just stops for a moment
+        // Plain tracking changes direction every half second to a second and a half. Reactive does it on an
+        // uneven beat (mostly short, sometimes long), so you can't count it down.
+        const beat = reactive ? Math.min(1.4, 0.12 + -Math.log(1 - Math.random()) * 0.45) : rand(0.5, 1.5);
+        t.timer = stop ? rand(0.15, 0.4) : beat;
+        t.strafeDir = Math.random() < (reactive ? 0.85 : 0.75) ? -t.strafeDir : t.strafeDir;
+        t.strafeSpeed = stop ? 0 : rand(this.maxSpeed * (reactive ? 0.55 : 0.45), this.maxSpeed);
         if (Math.random() < 0.3) t.jump(0.85);
         if (!stop && Math.random() < AD_SPAM_CHANCE) { t.spamLeft = rand(AD_BURST_MIN, AD_BURST_MAX); t.spamTimer = 0; }
       }
@@ -365,7 +397,8 @@ export class TrainingSession {
     const lx = -dz * t.strafeDir; // across your view
     const lz = dx * t.strafeDir;
     t.wish.set(lx * t.strafeSpeed + dx * radial, 0, lz * t.strafeSpeed + dz * radial);
-    t.vel.lerp(t.wish, Math.min(1, dt * (t.onGround ? 7 : 3)));
+    // Reactive targets turn on a dime.
+    t.vel.lerp(t.wish, Math.min(1, dt * (t.onGround ? (this.drillId === "reactive" ? 14 : 7) : 3)));
     this.#capSpeed(t);
     t.pos.x += t.vel.x * dt;
     t.pos.z += t.vel.z * dt;
@@ -373,6 +406,19 @@ export class TrainingSession {
     this.#keepOffPlayer(t, player, 3.5);
     t.fall(dt);
     t.face(player.pos.x, player.pos.z);
+  }
+
+  // The reactive target has felt the beam on it long enough: it turns and goes the other way, right now.
+  #dodge(t) {
+    this.dodges += 1;
+    t.strafeDir = -t.strafeDir;
+    t.strafeSpeed = rand(this.maxSpeed * 0.55, this.maxSpeed);
+    t.timer = rand(0.3, 0.8);
+    t.spamLeft = 0;
+    t.vel.multiplyScalar(-0.4); // a sharp turn, not a slow swing
+    if (Math.random() < 0.3) t.jump(0.85);
+    t.lockTime = 0;
+    t.dodgeAt = rand(0.35, 0.9);
   }
 
   #trackingKill(t) {
@@ -395,6 +441,8 @@ export class TrainingSession {
     t.strafeSpeed = 0;
     t.rangeTimer = 0;
     t.spamLeft = 0;
+    t.lockTime = 0;
+    t.dodgeAt = rand(0.35, 0.9);
     t.face(player.pos.x, player.pos.z);
     t.show(true);
     return true;
@@ -591,7 +639,7 @@ export class TrainingSession {
     const onSec = Math.min(this.onTargetTime, total); // the last frame can run a hair past the end
     let score;
     const lines = [];
-    if (this.drillId === "tracking") {
+    if (this.tracks) {
       score = Math.round(onSec * 10) / 10;
       const acc = this.aliveTime > 0 ? Math.min(100, Math.round((onSec / this.aliveTime) * 100)) : 0;
       lines.push(`Accuracy: ${acc}% of the time on target`, `Takedowns: ${this.score}`);
@@ -621,7 +669,7 @@ export class TrainingSession {
     if (this.phase === "ready") big = `Get ready ${Math.max(1, Math.ceil(this.readyLeft))}`;
     let scoreText = "";
     if (this.phase === "run" || this.phase === "done") {
-      if (this.drillId === "tracking") {
+      if (this.tracks) {
         scoreText = `${Math.min(this.onTargetTime, DRILLS.tracking.seconds).toFixed(1)}s on target \u00b7 ${this.score} down`;
       } else if (this.drillId === "flick") {
         scoreText = `${this.score} popped`;

@@ -12,6 +12,7 @@ import { iconSvg } from "./icons.js";
 import { createLookPreview } from "./look-preview.js";
 import { cleanName, cleanRelay, isBotId, isValidArenaId, isValidId, SERVER_ID, SERVER_ONLY } from "./validate.js";
 import { GAME_MODES, FEATURED_LOBBY, getMode, isValidModeId } from "./modes.js";
+import { radiansPerCount, clampSens, fromOldSensitivity, SENS_SCALE } from "./sensitivity.js";
 import { TrainingSession, DRILLS, DRILL_IDS, LEVELS, LEVEL_IDS, DEFAULT_LEVEL, bestKey, loadBests, saveBest, nearConsole, buildTrainingConsole } from "./training.js";
 
 /* =========================================================
@@ -20,7 +21,7 @@ import { TrainingSession, DRILLS, DRILL_IDS, LEVELS, LEVEL_IDS, DEFAULT_LEVEL, b
    being a typical mouse default) rather than an arbitrary 0-1 slider.
 ========================================================= */
 const SETTINGS_KEY = "capsules-settings";
-const DEFAULT_SETTINGS = { sensitivity: 6, controllerEnabled: false, controllerSensitivity: 3.0, fov: 90, crosshairSize: 6 };
+const DEFAULT_SETTINGS = { sensitivity: 6, sensScale: SENS_SCALE, controllerEnabled: false, controllerSensitivity: 3.0, fov: 90, crosshairSize: 6 };
 
 function loadSettings() {
   try {
@@ -28,7 +29,11 @@ function loadSettings() {
     if (!raw) return { ...DEFAULT_SETTINGS };
     const parsed = JSON.parse(raw);
     return {
-      sensitivity: typeof parsed.sensitivity === "number" ? parsed.sensitivity : DEFAULT_SETTINGS.sensitivity,
+      // Sensitivity is on Call of Duty's scale (sensitivity.js). One saved on the old, faster scale is converted so it feels the same.
+      sensitivity: typeof parsed.sensitivity === "number"
+        ? (parsed.sensScale === SENS_SCALE ? clampSens(parsed.sensitivity) : fromOldSensitivity(parsed.sensitivity))
+        : DEFAULT_SETTINGS.sensitivity,
+      sensScale: SENS_SCALE,
       controllerEnabled: typeof parsed.controllerEnabled === "boolean" ? parsed.controllerEnabled : DEFAULT_SETTINGS.controllerEnabled,
       controllerSensitivity: typeof parsed.controllerSensitivity === "number" ? parsed.controllerSensitivity : DEFAULT_SETTINGS.controllerSensitivity,
       fov: typeof parsed.fov === "number" ? parsed.fov : DEFAULT_SETTINGS.fov,
@@ -46,7 +51,7 @@ function saveSettings() {
 let settings = loadSettings();
 
 function sensitivityMultiplier() {
-  return settings.sensitivity * 0.00035;
+  return radiansPerCount(settings.sensitivity);
 }
 
 function applyFov() {
@@ -74,7 +79,7 @@ const crosshairValue = document.getElementById("crosshair-value");
 
 function refreshSettingsUI() {
   sensSlider.value = settings.sensitivity;
-  sensValue.textContent = settings.sensitivity.toFixed(1);
+  sensValue.textContent = settings.sensitivity.toFixed(2);
   controllerMode.value = settings.controllerEnabled ? "controller" : "mouse";
   controllerSensSlider.value = settings.controllerSensitivity;
   controllerSensValue.textContent = settings.controllerSensitivity.toFixed(1);
@@ -162,7 +167,7 @@ document.getElementById("btn-leave-match").addEventListener("click", leaveMatch)
 
 sensSlider.addEventListener("input", () => {
   settings.sensitivity = parseFloat(sensSlider.value);
-  sensValue.textContent = settings.sensitivity.toFixed(1);
+  sensValue.textContent = settings.sensitivity.toFixed(2);
   saveSettings();
 });
 fovSlider.addEventListener("input", () => {
@@ -1014,10 +1019,10 @@ document.getElementById("btn-training-retry").addEventListener("click", () => {
 document.getElementById("btn-training-drills").addEventListener("click", backToRoom);
 document.getElementById("btn-training-menu").addEventListener("click", leaveMatch);
 
-// At the console: 1/2/3 start a drill; E frees the mouse so you can click the Start buttons (E again to look around).
+// At the console: 1-4 start a drill; E frees the mouse so you can click the Start buttons (E again to look around).
 addEventListener("keydown", (e) => {
   if (!training || training.phase !== "idle" || !consolePanelOpen || e.repeat) return;
-  const n = ["Digit1", "Digit2", "Digit3"].indexOf(e.code);
+  const n = ["Digit1", "Digit2", "Digit3", "Digit4"].indexOf(e.code);
   if (n >= 0 && DRILL_IDS[n]) startDrill(DRILL_IDS[n]);
   else if (e.code === "KeyL") setTrainingLevel(LEVEL_IDS[(LEVEL_IDS.indexOf(trainingLevel) + 1) % LEVEL_IDS.length]);
   else if (e.code === "KeyE") {
