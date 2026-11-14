@@ -163,8 +163,8 @@ async function handleAuthHttp(req, res, url) {
       const bootstrapRef = firestore.collection("arenaMeta").doc("accountBootstrap");
       const bootstrap = await bootstrapRef.get();
       if (!bootstrap.exists) {
-        const devName = await firestore.collection("arenaUsernames").doc("dev").get();
-        if (devName.exists) return authJson(res, 409, { error: "The dev account name is already in use. The first account cannot be created as dev." });
+        // Offer dev even if an older account still owns that name. The registration
+        // transaction below replaces that legacy record atomically for the first account.
         return authJson(res, 200, { username: "dev", nameTicket: nameTickets.issue("dev"), expiresInSeconds: nameTickets.ttlSeconds, firstAccount: true });
       }
       for (let i = 0; i < 30; i++) {
@@ -214,23 +214,51 @@ async function handleAuthHttp(req, res, url) {
       const salt = crypto.randomBytes(16).toString("hex");
       const hash = await passwordHash(password, salt);
       const bootstrapRef = firestore.collection("arenaMeta").doc("accountBootstrap");
+      let replacedDevUid = null;
       await firestore.runTransaction(async (tx) => {
         // Read both records before writing. Firestore retries this transaction if two first
         // registrations race, so only one account can receive the dev privilege.
         const [existing, bootstrap] = await Promise.all([tx.get(usernameRef), tx.get(bootstrapRef)]);
-        if (existing.exists) throw Object.assign(new Error("That username is taken. Roll a new one."), { statusCode: 409 });
         const isFirstAccount = !bootstrap.exists;
+        const replacingLegacyDev = isFirstAccount && username === "dev" && existing.exists;
+        if (existing.exists && !replacingLegacyDev) {
+          throw Object.assign(new Error("That username is taken. Roll a new one."), { statusCode: 409 });
+        }
         if (isFirstAccount && username !== "dev") {
           throw Object.assign(new Error("The first account must use the dev name. Refresh the account form and try again."), { statusCode: 409 });
         }
         if (!isFirstAccount && username === "dev") {
           throw Object.assign(new Error("The dev name is reserved for the first account."), { statusCode: 409 });
         }
+
+        // If an older dev account exists, remove its game records in the same transaction
+        // that installs the new dev identity. This prevents a partial delete or a race
+        // from leaving the username pointing at the wrong UID.
+        replacedDevUid = replacingLegacyDev && typeof existing.data()?.uid === "string"
+          ? existing.data().uid
+          : null;
+        if (replacedDevUid) {
+          tx.delete(firestore.collection("arenaAccounts").doc(replacedDevUid));
+          tx.delete(firestore.collection("arenaStats").doc(replacedDevUid));
+        }
+
         const accountRef = firestore.collection("arenaAccounts").doc(uid);
-        tx.create(usernameRef, { uid, username, salt, passwordHash: hash, createdAt: FieldValue.serverTimestamp() });
+        tx.set(usernameRef, { uid, username, salt, passwordHash: hash, createdAt: FieldValue.serverTimestamp() });
         tx.create(accountRef, { uid, username, createdAt: FieldValue.serverTimestamp(), wins: 0, losses: 0, matches: 0, allSkinsUnlocked: isFirstAccount });
         if (isFirstAccount) tx.create(bootstrapRef, { uid, username: "dev", createdAt: FieldValue.serverTimestamp() });
       });
+      // Firebase Auth user deletion is outside the Firestore transaction. The old UID
+      // has already lost its game account and stats, so even if Auth cleanup fails it
+      // cannot authenticate to the relay. Log cleanup failures without failing signup.
+      if (replacedDevUid && replacedDevUid !== uid) {
+        try {
+          await firebaseAuth.deleteUser(replacedDevUid);
+        } catch (err) {
+          if (err.code !== "auth/user-not-found") {
+            console.warn("[auth] replaced dev Firebase Auth user cleanup failed:", err.message);
+          }
+        }
+      }
       const token = await firebaseAuth.createCustomToken(uid, { username });
       return authJson(res, 201, { token, username });
     }
