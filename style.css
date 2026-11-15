@@ -1625,3 +1625,17 @@ body.training-mode #hud-hp-corner { display: none !important; }
 .skin-option.locked .skin-lock { display: flex; }
 .skin-option .skin-lock svg { width: 16px; height: 16px; }
 .skin-option.locked { cursor: not-allowed; }
+
+/* When the browser won't hand the game the mouse. */
+#lock-help {
+  position: fixed; left: 50%; bottom: 10%; transform: translateX(-50%); z-index: 40;
+  width: min(460px, 92vw); padding: 16px 20px; text-align: center;
+  background: rgba(10, 14, 22, 0.94); border: 1px solid rgba(255, 170, 70, 0.6); border-radius: 14px;
+}
+.lock-help-title { margin: 0 0 6px; font-family: 'Space Grotesk', sans-serif; font-size: 18px; font-weight: 700; color: #ffb25b; }
+.lock-help-why { margin: 0 0 8px; font-size: 14px; }
+.lock-help-tip { margin: 0 0 12px; font-size: 12px; color: var(--text-dim); }
+.lock-help-buttons { display: flex; gap: 8px; justify-content: center; }
+
+/* Inside the desktop app the game hides the cursor itself while it has the mouse. */
+body.native-mouse, body.native-mouse * { cursor: none !important; }
