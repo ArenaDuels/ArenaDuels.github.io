@@ -490,6 +490,9 @@ async function lifetimeKills(ws) {
 async function allowedLook(ws, look) {
   const skin = skinById(look.pattern);
   if (!skin || skin.kills === 0) return look; // free (or not a skin at all): nothing to check
+  // This check uses the username loaded from the verified server-side account record.
+  // A client cannot unlock skins by changing its local display name.
+  if (String(ws.username || "").trim().toLowerCase() === "dev") return look;
   return lookWithUnlockedSkin(look, await lifetimeKills(ws));
 }
 

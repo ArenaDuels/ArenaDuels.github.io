@@ -686,11 +686,17 @@ async function refreshMyKills() {
     myKills = 0;
   } else {
     signedIn = true;
-    try {
-      const response = await fetch(`${API_BASE}/api/stats/me`, { cache: "no-store", headers: { Authorization: `Bearer ${token}` } });
-      const data = await response.json().catch(() => ({}));
-      if (response.ok && Number.isFinite(data.kills)) myKills = Math.max(0, Math.floor(data.kills));
-    } catch { /* server asleep or offline: keep what we knew */ }
+    // The dev account has every skin unlocked, independent of its lifetime kills.
+    const accountUsername = (localStorage.getItem("arenaduels-account-username") || "").trim().toLowerCase();
+    if (accountUsername === "dev") {
+      myKills = Number.MAX_SAFE_INTEGER;
+    } else {
+      try {
+        const response = await fetch(`${API_BASE}/api/stats/me`, { cache: "no-store", headers: { Authorization: `Bearer ${token}` } });
+        const data = await response.json().catch(() => ({}));
+        if (response.ok && Number.isFinite(data.kills)) myKills = Math.max(0, Math.floor(data.kills));
+      } catch { /* server asleep or offline: keep what we knew */ }
+    }
   }
   // Wearing a skin you no longer have (signed out, or a different account)? Back to Solid.
   const worn = skinById(myLook.pattern);
