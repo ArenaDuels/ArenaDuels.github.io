@@ -11,21 +11,21 @@
 export const SKINS = [
   { id: "solid", label: "Solid", kills: 0 }, // no image: just the color you picked
   { id: "checker", label: "Checker", kills: 0 },
-  { id: "camo", label: "Camo", kills: 5 },
-  { id: "digital", label: "Digital", kills: 15 },
-  { id: "carbon", label: "Carbon", kills: 30 },
-  { id: "contour", label: "Contour", kills: 50 },
-  { id: "smoke", label: "Smoke", kills: 75 },
-  { id: "neon", label: "Neon", kills: 100 },
-  { id: "ice", label: "Ice", kills: 150 },
-  { id: "crown", label: "Crowns", kills: 250 },
-  { id: "glitch", label: "Glitch", kills: 350 },
-  { id: "fire", label: "Fire", kills: 500 },
-  { id: "lava", label: "Lava", kills: 750 },
-  { id: "lightning", label: "Lightning", kills: 1000 },
-  { id: "galaxy", label: "Galaxy", kills: 2000 },
-  { id: "gold", label: "Gold", kills: 3500 },
-  { id: "rainbow", label: "Rainbow", kills: 5000 },
+  { id: "camo", label: "Camo", kills: 2 },
+  { id: "digital", label: "Digital", kills: 5 },
+  { id: "carbon", label: "Carbon", kills: 10 },
+  { id: "contour", label: "Contour", kills: 15 },
+  { id: "smoke", label: "Smoke", kills: 20 },
+  { id: "neon", label: "Neon", kills: 25 },
+  { id: "ice", label: "Ice", kills: 35 },
+  { id: "crown", label: "Crowns", kills: 45 },
+  { id: "glitch", label: "Glitch", kills: 55 },
+  { id: "fire", label: "Fire", kills: 65 },
+  { id: "lava", label: "Lava", kills: 75 },
+  { id: "lightning", label: "Lightning", kills: 90 },
+  { id: "galaxy", label: "Galaxy", kills: 110 },
+  { id: "gold", label: "Gold", kills: 130 },
+  { id: "rainbow", label: "Rainbow", kills: 150 },
 ];
 
 export const SKIN_IDS = SKINS.map((s) => s.id);
@@ -34,8 +34,8 @@ export const DEFAULT_SKIN = "solid";
 export const skinById = (id) => SKINS.find((s) => s.id === id) ?? null;
 
 // Where the images live (relative to the page). Solid has none.
-export const skinTextureUrl = (id) => `./assets/skins/${id}.png`;
-export const skinThumbUrl = (id) => `./assets/skin-thumbs/${id}.jpg`;
+export const skinTextureUrl = (id) => `./assets/skins/${id}.gif`;
+export const skinThumbUrl = (id) => `./assets/skins/${id}.gif`;
 
 export const skinUnlocked = (skin, kills) => !!skin && Number.isFinite(kills) && kills >= skin.kills;
 

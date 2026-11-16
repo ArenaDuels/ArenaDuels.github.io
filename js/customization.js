@@ -58,42 +58,58 @@ export function saveLook(look) {
 
 /* ---------- body skins ---------- */
 
-// One entry per skin image, made the first time someone wears it. The image loads in the background;
-// until it arrives the body shows the plain color, and every material waiting on it is updated.
+// Animated GIF skins are copied into CanvasTextures so Three.js updates the material
+// as the browser advances each GIF frame. One shared texture is cached per skin.
 const skinCache = new Map(); // id -> { texture, failed, waiting: Set<material> }
-const loader = new THREE.TextureLoader();
 
 function skinEntry(id) {
   let entry = skinCache.get(id);
   if (entry) return entry;
-  entry = { texture: null, failed: false, waiting: new Set() };
+  entry = { texture: null, failed: false, waiting: new Set(), timer: null };
   skinCache.set(id, entry);
-  loader.load(
-    skinTextureUrl(id),
-    (tex) => {
-      tex.colorSpace = THREE.SRGBColorSpace;
-      // Mirrored tiling hides the seams (these images aren't built to tile). Twice around the body is an
-      // even count, so the seam at the back of the body is continuous too. Once along it: the body is
-      // about as tall as one tile is wide.
-      tex.wrapS = tex.wrapT = THREE.MirroredRepeatWrapping;
-      tex.repeat.set(2, 1);
-      tex.anisotropy = 4;
-      entry.texture = tex;
-      for (const m of entry.waiting) {
-        if (m.userData.skin === id) {
-          m.map = tex;
-          m.color.set(0xffffff);
-          m.needsUpdate = true;
-        }
-      }
+
+  const image = new Image();
+  image.onload = () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = image.naturalWidth || image.width;
+    canvas.height = image.naturalHeight || image.height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      entry.failed = true;
       entry.waiting.clear();
-    },
-    undefined,
-    () => {
-      entry.failed = true; // keep showing the plain color
-      entry.waiting.clear();
+      return;
     }
-  );
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    // Mirrored tiling hides seams, matching the original PNG skin maps.
+    tex.wrapS = tex.wrapT = THREE.MirroredRepeatWrapping;
+    tex.repeat.set(2, 1);
+    tex.anisotropy = 4;
+    entry.texture = tex;
+
+    for (const m of entry.waiting) {
+      if (m.userData.skin === id) {
+        m.map = tex;
+        m.color.set(0xffffff);
+        m.needsUpdate = true;
+      }
+    }
+    entry.waiting.clear();
+
+    // The GIF itself advances in the browser. Redrawing it updates the GPU texture.
+    entry.timer = window.setInterval(() => {
+      if (!entry.texture) return;
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      tex.needsUpdate = true;
+    }, 60);
+  };
+  image.onerror = () => {
+    entry.failed = true;
+    entry.waiting.clear();
+  };
+  image.src = skinTextureUrl(id);
   return entry;
 }
 

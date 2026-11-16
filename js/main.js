@@ -13,17 +13,15 @@ import { iconSvg } from "./icons.js";
 import { createLookPreview } from "./look-preview.js";
 import { cleanName, cleanRelay, isBotId, isValidArenaId, isValidId, SERVER_ID, SERVER_ONLY } from "./validate.js";
 import { GAME_MODES, FEATURED_LOBBY, getMode, isValidModeId } from "./modes.js";
-import { JumpFilter } from "./mouse-filter.js";
+import { lockFailureReason } from "./lock-help.js";
 import { radiansPerCount, clampSens, fromOldSensitivity, SENS_SCALE } from "./sensitivity.js";
 import { TrainingSession, DRILLS, DRILL_IDS, LEVELS, LEVEL_IDS, DEFAULT_LEVEL, bestKey, loadBests, saveBest, nearConsole, buildTrainingConsole } from "./training.js";
 
 /* =========================================================
-   SETTINGS — persisted to localStorage. Sensitivity uses the same
-   numeric scale convention as Call of Duty (roughly 1-20, with ~6
-   being a typical mouse default) rather than an arbitrary 0-1 slider.
+   SETTINGS — persisted to localStorage.
 ========================================================= */
 const SETTINGS_KEY = "capsules-settings";
-const DEFAULT_SETTINGS = { sensitivity: 6, sensScale: SENS_SCALE, controllerEnabled: false, controllerSensitivity: 3.0, fov: 90, crosshairSize: 6, ignoreJumps: false };
+const DEFAULT_SETTINGS = { sensitivity: 6, sensScale: SENS_SCALE, controllerEnabled: false, controllerSensitivity: 3.0, fov: 90, crosshairSize: 6 };
 
 function loadSettings() {
   try {
@@ -31,7 +29,6 @@ function loadSettings() {
     if (!raw) return { ...DEFAULT_SETTINGS };
     const parsed = JSON.parse(raw);
     return {
-      // Sensitivity is on Call of Duty's scale (sensitivity.js). One saved on the old, faster scale is converted so it feels the same.
       sensitivity: typeof parsed.sensitivity === "number"
         ? (parsed.sensScale === SENS_SCALE ? clampSens(parsed.sensitivity) : fromOldSensitivity(parsed.sensitivity))
         : DEFAULT_SETTINGS.sensitivity,
@@ -40,7 +37,6 @@ function loadSettings() {
       controllerSensitivity: typeof parsed.controllerSensitivity === "number" ? parsed.controllerSensitivity : DEFAULT_SETTINGS.controllerSensitivity,
       fov: typeof parsed.fov === "number" ? parsed.fov : DEFAULT_SETTINGS.fov,
       crosshairSize: typeof parsed.crosshairSize === "number" ? parsed.crosshairSize : DEFAULT_SETTINGS.crosshairSize,
-      ignoreJumps: parsed.ignoreJumps === true,
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -79,8 +75,6 @@ const fovSlider = document.getElementById("fov-slider");
 const fovValue = document.getElementById("fov-value");
 const crosshairSlider = document.getElementById("crosshair-slider");
 const crosshairValue = document.getElementById("crosshair-value");
-const ignoreJumpsToggle = document.getElementById("ignore-jumps");
-const jumpFilter = new JumpFilter();
 
 function refreshSettingsUI() {
   sensSlider.value = settings.sensitivity;
@@ -94,7 +88,6 @@ function refreshSettingsUI() {
   fovValue.textContent = settings.fov;
   crosshairSlider.value = settings.crosshairSize;
   crosshairValue.textContent = settings.crosshairSize;
-  ignoreJumpsToggle.checked = settings.ignoreJumps;
 }
 
 let paused = false;
@@ -117,8 +110,9 @@ function closeSettings() {
 
 function openPauseMenu() {
   if (!matchActive || match.over || training?.finished) return;
+  hideLockHelp();
   paused = true;
-  document.exitPointerLock();
+  releaseMouse();
   for (const k in keys) keys[k] = false;
   firing = false;
   settingsModal.classList.add("hidden");
@@ -141,13 +135,13 @@ function leaveMatch() {
   consolePanelOpen = false;
   crosshair.classList.remove("on-target");
   document.body.classList.remove("training-mode");
-  for (const id of ["training-hud", "training-results", "training-console", "training-hint"]) {
+  for (const id of ["training-hud", "training-results", "training-console", "training-hint", "lock-help"]) {
     document.getElementById(id).classList.add("hidden");
   }
   pauseMenu.classList.add("hidden");
   settingsModal.classList.add("hidden");
   hideCustomization();
-  document.exitPointerLock();
+  releaseMouse();
   net.destroy();
   botManager?.dispose();
   botManager = null;
@@ -189,18 +183,12 @@ crosshairSlider.addEventListener("input", () => {
   applyCrosshairSize();
 });
 
-ignoreJumpsToggle.addEventListener("change", () => {
-  settings.ignoreJumps = ignoreJumpsToggle.checked;
-  jumpFilter.reset();
-  saveSettings();
-});
-
 controllerMode.addEventListener("change", () => {
   settings.controllerEnabled = controllerMode.value === "controller";
   refreshSettingsUI();
   saveSettings();
   if (settings.controllerEnabled) {
-    document.exitPointerLock();
+    releaseMouse();
     controllerStatus.textContent = "Controller mode selected — connect a gamepad and move a stick.";
   } else {
     controllerStatus.textContent = "Mouse and keyboard mode selected.";
@@ -219,15 +207,67 @@ applyCrosshairSize(); // apply saved size immediately, even before a match
 // did nothing until the next click moved the lock.) Also asks for raw mouse
 // input where the browser supports it, so OS mouse acceleration can't make
 // turning uneven; falls back to a normal lock otherwise.
+/* ---- the desktop app's own mouse capture (arenaduels_app.py) ----
+   Inside the ArenaDuels desktop app the program itself captures the mouse: it reads it straight from Windows
+   and pins the cursor, which keeps working when another game is holding the mouse (the browser's Pointer Lock
+   can't). The app appears as window.pywebview.api and sends raw movement to window.__nativeMouse(dx, dy).
+   In a normal browser none of this exists and the game uses Pointer Lock as before. */
+const nativeMouse = { locked: false };
+
+function nativeApi() {
+  return window.pywebview?.api?.set_mouse_lock ? window.pywebview.api : null;
+}
+
+// Is the mouse captured right now, by the app or by the browser?
+function isMouseLocked() {
+  return nativeMouse.locked || document.pointerLockElement === document.body;
+}
+
+function releaseMouse() {
+  if (nativeMouse.locked) setNativeLock(false);
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+
+async function setNativeLock(on) {
+  const api = nativeApi();
+  if (!api) return false;
+  nativeMouse.locked = on; // assume it works so there is no gap; undone below if the app says no
+  document.body.classList.toggle("native-mouse", on);
+  let ok = true;
+  try { ok = !!(await api.set_mouse_lock(on)); } catch { ok = false; }
+  if (on && !ok) {
+    nativeMouse.locked = false;
+    document.body.classList.remove("native-mouse");
+  }
+  return on ? ok : true;
+}
+
+// The app tells us when it let go by itself (you switched windows, pressed the Windows key...).
+window.__nativeMouseLost = () => {
+  nativeMouse.locked = false;
+  document.body.classList.remove("native-mouse");
+};
+
 let lockNote = "";   // why raw input was refused, when it was (shown in the F9 overlay)
 let lockErrors = 0;  // pointerlockerror events
+let lockFailName = ""; // the error the last refused request gave
+let lockCheckTimer = null;
 let lockMode = "none"; // "raw" = unadjusted mouse input, "normal" = regular lock (shown in the F9 overlay)
 function lockPointer() {
+  if (nativeApi()) {
+    lockMode = "app";
+    setNativeLock(true).then((ok) => { if (ok) hideLockHelp(); });
+    clearTimeout(lockCheckTimer);
+    lockCheckTimer = setTimeout(checkLockResult, 800);
+    return;
+  }
   const el = document.body;
+  const fail = (err) => { lockFailName = err?.name || "refused"; };
   const plain = () => {
     lockMode = "normal";
-    try { el.requestPointerLock()?.catch?.(() => {}); } catch {}
+    try { el.requestPointerLock()?.catch?.(fail); } catch (err) { fail(err); }
   };
+  lockFailName = "";
   try {
     const p = el.requestPointerLock({ unadjustedMovement: true });
     if (p && typeof p.then === "function") {
@@ -240,6 +280,21 @@ function lockPointer() {
   } catch {
     plain();
   }
+  // If the mouse still hasn't been captured a moment later, tell the player why and offer a retry.
+  clearTimeout(lockCheckTimer);
+  lockCheckTimer = setTimeout(checkLockResult, 800);
+}
+
+function checkLockResult() {
+  if (isMouseLocked()) return;
+  if (!matchActive || paused || match.over || settings.controllerEnabled) return;
+  lockMode = "none";
+  document.getElementById("lock-help-why").textContent = lockFailureReason({ hasFocus: document.hasFocus(), errorName: lockFailName });
+  document.getElementById("lock-help").classList.remove("hidden");
+}
+
+function hideLockHelp() {
+  document.getElementById("lock-help").classList.add("hidden");
 }
 
 /* =========================================================
@@ -489,7 +544,7 @@ function handleData(rawMsg, fromId) {
 function handleServerLost() {
   if (!matchActive) return;
   matchActive = false;
-  document.exitPointerLock();
+  releaseMouse();
   alert("Lost connection to the server.");
   net.destroy();
   botManager?.dispose();
@@ -1072,7 +1127,7 @@ function beginDrill(id) {
   trainingHudKey = "";
   trainingHudEl.classList.remove("hidden");
   training.start(id, trainingPlayer(), trainingLevel);
-  if (document.pointerLockElement !== document.body) lockPointer();
+  if (!isMouseLocked()) lockPointer();
 }
 
 function backToRoom() {
@@ -1100,7 +1155,7 @@ function onTrainingFinished(result) {
   paused = true; // the loop stops simulating; the room keeps rendering behind the results
   firing = false;
   for (const k in keys) keys[k] = false;
-  document.exitPointerLock();
+  releaseMouse();
   const isBest = saveBest(result.bestKey, result.score);
   const best = loadBests()[result.bestKey];
   document.getElementById("training-results-name").textContent = result.name;
@@ -1127,7 +1182,7 @@ addEventListener("keydown", (e) => {
   if (n >= 0 && DRILL_IDS[n]) startDrill(DRILL_IDS[n]);
   else if (e.code === "KeyL") setTrainingLevel(LEVEL_IDS[(LEVEL_IDS.indexOf(trainingLevel) + 1) % LEVEL_IDS.length]);
   else if (e.code === "KeyE") {
-    if (document.pointerLockElement) document.exitPointerLock();
+    if (isMouseLocked()) releaseMouse();
     else lockPointer();
   }
 });
@@ -2199,7 +2254,7 @@ function endMatchAsHost(reason) {
 }
 
 function showResults() {
-  document.exitPointerLock();
+  releaseMouse();
   for (const k in keys) keys[k] = false;
   firing = false;
   paused = false;
@@ -2313,7 +2368,7 @@ addEventListener("mouseup", (e) => {
   firing = false;
 });
 canvas.addEventListener("click", () => {
-  if (matchActive && !paused && document.pointerLockElement !== document.body) {
+  if (matchActive && !paused && !isMouseLocked()) {
     lockPointer();
   }
 });
@@ -2325,29 +2380,33 @@ function sanitizeDelta(v) {
   return Number.isFinite(v) ? v : 0;
 }
 
-addEventListener("mousemove", (e) => {
-  if (!matchActive || paused || match.over || local.hp <= 0 || document.pointerLockElement !== document.body) return;
+// One mouse movement, in raw counts, from the browser's Pointer Lock or from the desktop app.
+function applyMouseMove(dx, dy) {
   const s = sensitivityMultiplier();
-  const dx = sanitizeDelta(e.movementX);
-  const dy = sanitizeDelta(e.movementY);
-  // "Ignore sudden mouse jumps" (Settings): throws away a big jump that is immediately undone (see mouse-filter.js).
-  const moves = settings.ignoreJumps ? jumpFilter.push(dx, dy, performance.now()) : [[dx, dy]];
-  for (const [mx, my] of moves) {
-    local.yaw -= mx * s;
-    local.pitch -= my * s;
-  }
+  local.yaw -= dx * s;
+  local.pitch -= dy * s;
   local.pitch = Math.max(-1.4, Math.min(1.4, local.pitch));
+}
+
+addEventListener("mousemove", (e) => {
+  if (nativeMouse.locked) return; // the app is feeding the movement in
+  if (!matchActive || paused || match.over || local.hp <= 0 || document.pointerLockElement !== document.body) return;
+  applyMouseMove(sanitizeDelta(e.movementX), sanitizeDelta(e.movementY));
 });
 
-// A held mouse movement that nothing followed is real: release it (called every frame from the loop).
-function flushHeldMouse() {
-  if (!settings.ignoreJumps || !matchActive || paused || local.hp <= 0) return;
-  for (const [mx, my] of jumpFilter.flush(performance.now())) {
-    const s = sensitivityMultiplier();
-    local.yaw -= mx * s;
-    local.pitch = Math.max(-1.4, Math.min(1.4, local.pitch - my * s));
+// The desktop app calls this with the raw movement it read from Windows.
+window.__nativeMouse = (dx, dy) => {
+  if (!nativeMouse.locked) return;
+  dx = sanitizeDelta(dx);
+  dy = sanitizeDelta(dy);
+  if (mouseDbg.on) {
+    mouseDbg.events++;
+    mouseDbg.max = Math.max(mouseDbg.max, Math.hypot(dx, dy));
   }
-}
+  if (!matchActive || paused || match.over || local.hp <= 0) return;
+  applyMouseMove(dx, dy);
+};
+
 
 /* =========================================================
    MOUSE DIAGNOSTICS — press F9 to show or hide.
@@ -2369,11 +2428,21 @@ function mouseDbgTick(now) {
     mouseDbg.shownEvents = mouseDbg.events;
     mouseDbg.frames = 0; mouseDbg.events = 0; mouseDbg.max = 0; mouseDbg.last = now;
     mouseDbg.el.textContent =
-      `mouse lock: ${lockMode}${lockNote ? `\n${lockNote}` : ""}\nlock errors: ${lockErrors}\nfps: ${mouseDbg.fps}\nmouse events/s: ${mouseDbg.shownEvents}\nbiggest jump: ${mouseDbg.shownMax}\njumps ignored: ${settings.ignoreJumps ? jumpFilter.ignored : "filter off"}`;
+      `mouse lock: ${lockMode}${lockNote ? `\n${lockNote}` : ""}\nlock errors: ${lockErrors}\nwindow focused: ${document.hasFocus()}\nfps: ${mouseDbg.fps}\nmouse events/s: ${mouseDbg.shownEvents}\nbiggest jump: ${mouseDbg.shownMax}`;
   }
   requestAnimationFrame(mouseDbgTick);
 }
 document.addEventListener("pointerlockerror", () => { lockErrors++; });
+document.addEventListener("pointerlockchange", () => {
+  if (document.pointerLockElement === document.body) hideLockHelp();
+});
+document.getElementById("btn-lock-retry").addEventListener("click", () => lockPointer());
+document.getElementById("btn-lock-hide").addEventListener("click", hideLockHelp);
+// Fullscreen often makes the browser the window Windows treats as "the" one, which can let the lock through.
+document.getElementById("btn-lock-fullscreen").addEventListener("click", async () => {
+  try { await document.documentElement.requestFullscreen?.(); } catch { /* not allowed: still try the lock */ }
+  lockPointer();
+});
 addEventListener("keydown", (e) => {
   if (e.code !== "F9") return;
   e.preventDefault();
@@ -2458,7 +2527,6 @@ function loop() {
   const now = performance.now();
   const dt = Math.min((now - last) / 1000, 0.25);
   last = now;
-  flushHeldMouse();
 
   // The match clock runs even while you're paused — the game goes on without you.
   if (matchActive) {

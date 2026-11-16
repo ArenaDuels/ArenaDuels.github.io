@@ -1,16 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { COD_YAW, radiansPerCount, cmPer360, fromOldSensitivity, clampSens, SENS_MIN, SENS_MAX } from "../js/sensitivity.js";
+import { DEGREES_PER_COUNT_PER_SENSITIVITY, radiansPerCount, cmPer360, fromOldSensitivity, clampSens, SENS_MIN, SENS_MAX } from "../js/sensitivity.js";
 
 const degrees = (r) => (r * 180) / Math.PI;
 
-test("one point of sensitivity turns 0.0066 degrees per mouse count, like Modern Warfare, Warzone and Black Ops 6", () => {
-  assert.equal(COD_YAW, 0.0066);
+test("one point of sensitivity turns 0.0066 degrees per mouse count", () => {
+  assert.equal(DEGREES_PER_COUNT_PER_SENSITIVITY, 0.0066);
   assert.ok(Math.abs(degrees(radiansPerCount(1)) - 0.0066) < 1e-12);
   assert.ok(Math.abs(degrees(radiansPerCount(6)) - 0.0396) < 1e-12);
 });
 
-test("the cm per 360 matches the published Call of Duty figures", () => {
+test("mouse travel distance per full turn is calculated consistently", () => {
   assert.ok(Math.abs(cmPer360(6, 800) - 28.9) < 0.05, "sens 6 at 800 DPI is about 28.9 cm");
   assert.ok(Math.abs(cmPer360(0.4, 800) - 432.95) < 0.5, "sens 0.4 at 800 DPI is about 433 cm");
 });

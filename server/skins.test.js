@@ -32,16 +32,17 @@ test("every skin has its texture and thumbnail files, and they are real images",
       const head = fs.readFileSync(file).subarray(0, 4);
       const isPng = head[0] === 0x89 && head[1] === 0x50;
       const isJpg = head[0] === 0xff && head[1] === 0xd8;
-      assert.ok(isPng || isJpg, `${s.id}: ${url} is not a PNG or JPEG`);
+      const isGif = head[0] === 0x47 && head[1] === 0x49 && head[2] === 0x46;
+      assert.ok(isPng || isJpg || isGif, `${s.id}: ${url} is not a PNG, JPEG, or GIF`);
     }
   }
 });
 
 test("a skin is unlocked exactly when your kills reach its number", () => {
   const camo = skinById("camo");
-  assert.equal(camo.kills, 5);
-  assert.equal(skinUnlocked(camo, 4), false);
-  assert.equal(skinUnlocked(camo, 5), true);
+  assert.equal(camo.kills, 2);
+  assert.equal(skinUnlocked(camo, 1), false);
+  assert.equal(skinUnlocked(camo, 2), true);
   assert.equal(skinUnlocked(camo, 500), true);
   assert.equal(skinUnlocked(camo, NaN), false);
   assert.equal(skinUnlocked(camo, undefined), false);
@@ -51,9 +52,9 @@ test("a skin is unlocked exactly when your kills reach its number", () => {
 
 test("the next skin to unlock is the nearest one above your kills, and null when you have them all", () => {
   assert.equal(nextSkin(0).id, "camo");
-  assert.equal(nextSkin(5).id, "digital");
-  assert.equal(nextSkin(99).id, "neon");
-  assert.equal(nextSkin(100).id, "ice");
+  assert.equal(nextSkin(2).id, "digital");
+  assert.equal(nextSkin(99).id, "galaxy");
+  assert.equal(nextSkin(100).id, "galaxy");
   assert.equal(nextSkin(5000), null);
   assert.equal(nextSkin(1e9), null);
 });
@@ -61,8 +62,8 @@ test("the next skin to unlock is the nearest one above your kills, and null when
 test("the relay swaps a skin you haven't unlocked for Solid and leaves everything else alone", () => {
   const look = { color: 1234, pattern: "gold", accessory: "crown" };
   assert.deepEqual(lookWithUnlockedSkin(look, 0), { color: 1234, pattern: "solid", accessory: "crown" });
-  assert.deepEqual(lookWithUnlockedSkin(look, 3499), { color: 1234, pattern: "solid", accessory: "crown" });
-  assert.equal(lookWithUnlockedSkin(look, 3500), look, "unlocked: the very same look comes back");
+  assert.deepEqual(lookWithUnlockedSkin(look, 129), { color: 1234, pattern: "solid", accessory: "crown" });
+  assert.equal(lookWithUnlockedSkin(look, 130), look, "unlocked: the very same look comes back");
   const free = { pattern: "checker" };
   assert.equal(lookWithUnlockedSkin(free, 0), free);
   assert.equal(lookWithUnlockedSkin(look, NaN).pattern, "solid", "unknown kills counts as none");

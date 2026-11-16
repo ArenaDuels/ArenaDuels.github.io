@@ -109,7 +109,7 @@ async function readJsonBody(req, maxBytes = 4096) {
 function knownAccountName(name, { allowLegacy }) {
   // "dev" is a reserved bootstrap name, accepted only with a server-issued ticket
   // during the one-time first-account registration flow below.
-  if (typeof name === "string" && name.toLowerCase() === "dev") return "dev";
+  if (typeof name === "string" && name.trim().toLowerCase() === "dev") return "dev";
   const generated = canonicalName(name);
   if (generated) return generated;
   return allowLegacy && isLegacyName(name) ? name : null;
