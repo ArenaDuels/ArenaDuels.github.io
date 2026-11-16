@@ -107,6 +107,9 @@ async function readJsonBody(req, maxBytes = 4096) {
 // The account name in its proper capitals if it is a name this game can have: one the generator
 // can produce, or (to sign in) an old-style name from before the bigger name list.
 function knownAccountName(name, { allowLegacy }) {
+  // "dev" is a reserved bootstrap name, accepted only with a server-issued ticket
+  // during the one-time first-account registration flow below.
+  if (typeof name === "string" && name.toLowerCase() === "dev") return "dev";
   const generated = canonicalName(name);
   if (generated) return generated;
   return allowLegacy && isLegacyName(name) ? name : null;
@@ -155,6 +158,15 @@ async function handleAuthHttp(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/auth/random-name") {
     if (!nameRollAllowed(ip)) return authJson(res, 429, { error: "You've rolled a lot of names. Wait a few minutes and try again." });
     try {
+      // The first account ever registered after this bootstrap feature is deployed is "dev".
+      // The transaction at registration is the authority; this read only chooses the UI offer.
+      const bootstrapRef = firestore.collection("arenaMeta").doc("accountBootstrap");
+      const bootstrap = await bootstrapRef.get();
+      if (!bootstrap.exists) {
+        // Offer dev even if an older account still owns that name. The registration
+        // transaction below replaces that legacy record atomically for the first account.
+        return authJson(res, 200, { username: "dev", nameTicket: nameTickets.issue("dev"), expiresInSeconds: nameTickets.ttlSeconds, firstAccount: true });
+      }
       for (let i = 0; i < 30; i++) {
         const username = authRandomName();
         const doc = await firestore.collection("arenaUsernames").doc(usernameKey(username)).get();
@@ -201,13 +213,52 @@ async function handleAuthHttp(req, res, url) {
       const uid = crypto.randomUUID().replace(/-/g, "");
       const salt = crypto.randomBytes(16).toString("hex");
       const hash = await passwordHash(password, salt);
+      const bootstrapRef = firestore.collection("arenaMeta").doc("accountBootstrap");
+      let replacedDevUid = null;
       await firestore.runTransaction(async (tx) => {
-        const existing = await tx.get(usernameRef);
-        if (existing.exists) throw Object.assign(new Error("That generated username is taken. Roll a new one."), { statusCode: 409 });
+        // Read both records before writing. Firestore retries this transaction if two first
+        // registrations race, so only one account can receive the dev privilege.
+        const [existing, bootstrap] = await Promise.all([tx.get(usernameRef), tx.get(bootstrapRef)]);
+        const isFirstAccount = !bootstrap.exists;
+        const replacingLegacyDev = isFirstAccount && username === "dev" && existing.exists;
+        if (existing.exists && !replacingLegacyDev) {
+          throw Object.assign(new Error("That username is taken. Roll a new one."), { statusCode: 409 });
+        }
+        if (isFirstAccount && username !== "dev") {
+          throw Object.assign(new Error("The first account must use the dev name. Refresh the account form and try again."), { statusCode: 409 });
+        }
+        if (!isFirstAccount && username === "dev") {
+          throw Object.assign(new Error("The dev name is reserved for the first account."), { statusCode: 409 });
+        }
+
+        // If an older dev account exists, remove its game records in the same transaction
+        // that installs the new dev identity. This prevents a partial delete or a race
+        // from leaving the username pointing at the wrong UID.
+        replacedDevUid = replacingLegacyDev && typeof existing.data()?.uid === "string"
+          ? existing.data().uid
+          : null;
+        if (replacedDevUid) {
+          tx.delete(firestore.collection("arenaAccounts").doc(replacedDevUid));
+          tx.delete(firestore.collection("arenaStats").doc(replacedDevUid));
+        }
+
         const accountRef = firestore.collection("arenaAccounts").doc(uid);
-        tx.create(usernameRef, { uid, username, salt, passwordHash: hash, createdAt: FieldValue.serverTimestamp() });
-        tx.create(accountRef, { uid, username, createdAt: FieldValue.serverTimestamp(), wins: 0, losses: 0, matches: 0 });
+        tx.set(usernameRef, { uid, username, salt, passwordHash: hash, createdAt: FieldValue.serverTimestamp() });
+        tx.create(accountRef, { uid, username, createdAt: FieldValue.serverTimestamp(), wins: 0, losses: 0, matches: 0, allSkinsUnlocked: isFirstAccount });
+        if (isFirstAccount) tx.create(bootstrapRef, { uid, username: "dev", createdAt: FieldValue.serverTimestamp() });
       });
+      // Firebase Auth user deletion is outside the Firestore transaction. The old UID
+      // has already lost its game account and stats, so even if Auth cleanup fails it
+      // cannot authenticate to the relay. Log cleanup failures without failing signup.
+      if (replacedDevUid && replacedDevUid !== uid) {
+        try {
+          await firebaseAuth.deleteUser(replacedDevUid);
+        } catch (err) {
+          if (err.code !== "auth/user-not-found") {
+            console.warn("[auth] replaced dev Firebase Auth user cleanup failed:", err.message);
+          }
+        }
+      }
       const token = await firebaseAuth.createCustomToken(uid, { username });
       return authJson(res, 201, { token, username });
     }
@@ -265,7 +316,11 @@ async function handleStatsHttp(req, res, url) {
   } catch {
     return authJson(res, 401, { error: "Sign in again to see your stats." });
   }
-  return authJson(res, 200, await stats.getStats(decoded.uid));
+  const [playerStats, accountSnap] = await Promise.all([
+    stats.getStats(decoded.uid),
+    firestore.collection("arenaAccounts").doc(decoded.uid).get(),
+  ]);
+  return authJson(res, 200, { ...playerStats, allSkinsUnlocked: accountSnap.exists && accountSnap.data()?.allSkinsUnlocked === true });
 }
 
 const MAX_PLAYERS = 4; // manual/public rooms remain capped at four
@@ -488,11 +543,9 @@ async function lifetimeKills(ws) {
 }
 
 async function allowedLook(ws, look) {
+  if (ws.allSkinsUnlocked === true) return look;
   const skin = skinById(look.pattern);
   if (!skin || skin.kills === 0) return look; // free (or not a skin at all): nothing to check
-  // This check uses the username loaded from the verified server-side account record.
-  // A client cannot unlock skins by changing its local display name.
-  if (String(ws.username || "").trim().toLowerCase() === "dev") return look;
   return lookWithUnlockedSkin(look, await lifetimeKills(ws));
 }
 
@@ -715,6 +768,7 @@ async function handleMessage(ws, raw, isBinary) {
       if (!accountUsername) throw new Error("Invalid account username");
       ws.uid = decoded.uid;
       ws.username = accountUsername;
+      ws.allSkinsUnlocked = accountSnap.data()?.allSkinsUnlocked === true;
       ws.authReady = true;
       ws.authInProgress = false;
       send(ws, { t: "auth_ready", authenticated: true, username: accountUsername });
