@@ -300,15 +300,15 @@ test("speed hacking gets the player snapped back, and held to the top honest spe
   let last;
   for (let i = 1; i <= 12; i++) {
     clock.now += 50;
-    last = put("host", -10 + i * 5, 0); // 100 m/s, 60m in 0.6s
+    last = put("host", i % 2 ? 2 : -10, 0); // 240 m/s, hopping 12m back and forth (stays inside the arena bounds)
     corrected = corrected || last.correct;
   }
   assert.ok(corrected, "should have been corrected");
   assert.equal(corrected.tp, 1);
   // however hard they push, the server's version of them can't have gone further than
-  // the saved-up allowance (18m) plus 21 m/s for the 0.6s that passed
-  assert.ok(last.x - -10 <= 18 + 21 * 0.6 + 0.01, `server position must not follow the cheat (moved ${(last.x + 10).toFixed(1)}m)`);
-  assert.ok(rejects.includes("move:speed"));
+  // the saved-up allowance (18m) plus 60 m/s for the 0.6s that passed
+  assert.ok(last.x - -10 <= 18 + 60 * 0.6 + 0.01, `server position must not follow the cheat (moved ${(last.x + 10).toFixed(1)}m)`);
+  assert.ok(rejects.includes("move:speed"), JSON.stringify(rejects));
 });
 
 test("snapping a cheater back doesn't hand them a fresh allowance", () => {
@@ -326,8 +326,8 @@ test("snapping a cheater back doesn't hand them a fresh allowance", () => {
     if (r.correct) tp = r.correct.tp;
     travelled += Math.abs(g.actors.get("host").pos.x - before);
   }
-  assert.ok(travelled <= 18 + 21 * 5 + 0.5, `travelled ${travelled.toFixed(1)}m in 5s`);
-  assert.ok(travelled > 21 * 4, `the allowance should still let them move at the legal top speed (got ${travelled.toFixed(1)}m)`);
+  assert.ok(travelled <= 18 + 60 * 5 + 0.5, `travelled ${travelled.toFixed(1)}m in 5s`);
+  assert.ok(travelled > 60 * 4, `the allowance should still let them move at the legal top speed (got ${travelled.toFixed(1)}m)`);
 });
 
 test("teleporting across the map is refused", () => {

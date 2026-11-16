@@ -5,17 +5,23 @@ import { cleanBody, cleanName } from "./validate.js";
 // ===== Movement tuning =====
 // Ground movement stays responsive, while jumping preserves the same vertical
 // impulse and gravity but reduces horizontal launch speed and air steering.
+// Quake 3 movement (id Software's bg_pmove.c, the vanilla "VQ3" rules).
+// Quake works in "units"; one unit is QUAKE_SCALE metres here, picked so
+// Quake's gravity (800) and jump (270) land on the arena's existing scale.
+// Every number below is the original Quake 3 value times that scale.
+const QUAKE_SCALE = 0.044;
 export const MOVE = {
-  GROUND_ACCEL: 14,
-  WISH_SPEED: 16,
-  AIR_WISH_SPEED: 7.5,
-  AIR_ACCEL: 3.0,
-  AIR_LAUNCH_MULTIPLIER: 0.72,
-  AIR_MAX_SPEED: 10.5,
-  MAX_SPEED_SANITY: 45,
-  FRICTION: 8,
-  GRAVITY: 35,
-  JUMP_VEL: 12,
+  QUAKE_SCALE,
+  WISH_SPEED: 320 * QUAKE_SCALE,  // g_speed 320
+  GROUND_ACCEL: 10,               // pm_accelerate
+  AIR_ACCEL: 1,                   // pm_airaccelerate
+  FRICTION: 6,                    // pm_friction
+  STOP_SPEED: 100 * QUAKE_SCALE,  // pm_stopspeed: friction treats you as at least this fast
+  GRAVITY: 800 * QUAKE_SCALE,     // g_gravity
+  JUMP_VEL: 270 * QUAKE_SCALE,    // JUMP_VELOCITY
+  // Quake 3 only jumps once per key press (you must let go of jump before the
+  // next hop). Set true if you want holding the key to keep hopping.
+  AUTO_HOP: false,
   RADIUS: 0.5,
   // The capsule (CapsuleGeometry(0.5, 1.2, ...)) is 2.2 units tall total
   // and centered on its own position, so its "head" top is 1.1 above
@@ -23,6 +29,48 @@ export const MOVE = {
   // not floating above it.
   EYE_HEIGHT: 1.0,
 };
+
+// Quake 3's PM_Friction (ground only). Slows you by max(speed, stopspeed) * friction * dt.
+function quakeFriction(vel, dt) {
+  const speed = Math.hypot(vel.x, vel.z);
+  if (speed < 1 * QUAKE_SCALE) { vel.x = 0; vel.z = 0; return; }
+  const control = speed < MOVE.STOP_SPEED ? MOVE.STOP_SPEED : speed;
+  const newSpeed = Math.max(speed - control * MOVE.FRICTION * dt, 0);
+  vel.x *= newSpeed / speed;
+  vel.z *= newSpeed / speed;
+}
+
+// Quake 3's PM_Accelerate. Used on the ground AND in the air (only the accel
+// number differs). Adds speed along wishDir only until your speed ALONG that
+// direction reaches wishSpeed. That is what makes strafe jumping work.
+function quakeAccelerate(vel, wx, wz, wishSpeed, accel, dt) {
+  const currentSpeed = vel.x * wx + vel.z * wz;
+  const addSpeed = wishSpeed - currentSpeed;
+  if (addSpeed <= 0) return;
+  let accelSpeed = accel * dt * wishSpeed;
+  if (accelSpeed > addSpeed) accelSpeed = addSpeed;
+  vel.x += accelSpeed * wx;
+  vel.z += accelSpeed * wz;
+}
+
+// One tick of Quake 3 movement for anything with { onGround, jumpHeld }:
+// jump check, then friction (ground only, and NOT on the frame you jump),
+// then accelerate. wx/wz is the unit wish direction in world space.
+// Returns nothing; changes vel and st. Gravity/collision are done by the caller.
+export function quakeMove(vel, st, wx, wz, hasInput, jumpKey, dt) {
+  if (!jumpKey) st.jumpHeld = false;
+  if (st.onGround && jumpKey && (MOVE.AUTO_HOP || !st.jumpHeld)) {
+    vel.y = MOVE.JUMP_VEL; // sets (not adds) upward speed; horizontal speed is untouched
+    st.onGround = false;
+    st.jumpHeld = true;
+  }
+  if (st.onGround) {
+    quakeFriction(vel, dt);
+    if (hasInput) quakeAccelerate(vel, wx, wz, MOVE.WISH_SPEED, MOVE.GROUND_ACCEL, dt);
+  } else if (hasInput) {
+    quakeAccelerate(vel, wx, wz, MOVE.WISH_SPEED, MOVE.AIR_ACCEL, dt);
+  }
+}
 
 // Match-wide values the host can change (Match Settings). Health bars and
 // respawns read maxHp from here so everyone agrees on what "full" means.
@@ -549,6 +597,7 @@ export class PlayerController {
     this.vel = new THREE.Vector3();
     this.wish = new THREE.Vector3();
     this.onGround = true;
+    this.jumpHeld = false;
 
     this.yaw = 0;
     this.pitch = 0;
@@ -566,6 +615,7 @@ export class PlayerController {
     this.yaw = spawnPoint.yaw || 0;
     this.pitch = 0;
     this.vel.set(0, 0, 0);
+    this.jumpHeld = false;
     this.hp = GAME.maxHp;
   }
 
@@ -587,31 +637,6 @@ export class PlayerController {
     if (keys.KeyA) this.wish.x -= 1;
     if (keys.KeyD) this.wish.x += 1;
     this.firing = !!mouseFiring;
-  }
-
-  #friction(dt) {
-    const speed = Math.hypot(this.vel.x, this.vel.z);
-    if (speed < 0.001) return;
-    const drop = speed * MOVE.FRICTION * dt;
-    const newSpeed = Math.max(speed - drop, 0);
-    this.vel.x *= newSpeed / speed;
-    this.vel.z *= newSpeed / speed;
-  }
-
-  // Classic Quake accelerate(): adds speed toward wishDir, but only up to
-  // wishSpeed *relative to your current speed along that specific
-  // direction* — not your total speed. That distinction is what makes air
-  // strafing work: turning the mouse while holding a strafe key keeps
-  // presenting a "new" wish direction relative to your velocity, so you
-  // keep gaining speed instead of hitting a hard cap.
-  #accelerate(wishDir, wishSpeed, accel, dt) {
-    const currentSpeed = this.vel.x * wishDir.x + this.vel.z * wishDir.z;
-    const addSpeed = wishSpeed - currentSpeed;
-    if (addSpeed <= 0) return;
-    let accelSpeed = accel * dt * wishSpeed;
-    if (accelSpeed > addSpeed) accelSpeed = addSpeed;
-    this.vel.x += accelSpeed * wishDir.x;
-    this.vel.z += accelSpeed * wishDir.z;
   }
 
   // Proper 3D collision: finds the highest surface (a box-top, or the
@@ -724,42 +749,12 @@ export class PlayerController {
       wishDir.normalize().applyAxisAngle(UP_AXIS, this.yaw);
     }
 
-    if (this.onGround) {
-      this.#friction(dt);
-      if (hasInput) this.#accelerate(wishDir, MOVE.WISH_SPEED, MOVE.GROUND_ACCEL, dt);
-    } else if (hasInput) {
-      // Limited air acceleration: steering changes momentum gradually rather
-      // than snapping the player to a new direction every frame.
-      this.#accelerate(wishDir, MOVE.AIR_WISH_SPEED, MOVE.AIR_ACCEL, dt);
-    }
+    quakeMove(this.vel, this, wishDir.x, wishDir.z, hasInput, jumpPressed, dt);
 
-    // Keep the airborne horizontal speed below normal running speed. This
-    // reduces jump distance and prevents repeated air-strafing speed gain.
-    if (!this.onGround) {
-      const airSpeed = Math.hypot(this.vel.x, this.vel.z);
-      if (airSpeed > MOVE.AIR_MAX_SPEED) {
-        this.vel.x *= MOVE.AIR_MAX_SPEED / airSpeed;
-        this.vel.z *= MOVE.AIR_MAX_SPEED / airSpeed;
-      }
-    }
-
-    // Safety cap for invalid/extreme values.
-    const spd = Math.hypot(this.vel.x, this.vel.z);
-    if (spd > MOVE.MAX_SPEED_SANITY) {
-      this.vel.x *= MOVE.MAX_SPEED_SANITY / spd;
-      this.vel.z *= MOVE.MAX_SPEED_SANITY / spd;
-    }
-
-    if (this.onGround && jumpPressed) {
-      // Reduce horizontal launch speed only. JUMP_VEL and GRAVITY stay
-      // unchanged, so the jump reaches the same height as before.
-      this.vel.x *= MOVE.AIR_LAUNCH_MULTIPLIER;
-      this.vel.z *= MOVE.AIR_LAUNCH_MULTIPLIER;
-      this.vel.y = MOVE.JUMP_VEL;
-      this.onGround = false;
-    }
-
-    this.vel.y -= MOVE.GRAVITY * dt;
+    // Quake integrates gravity with the average of the old and new vertical
+    // speed, which keeps jump height identical at any frame rate.
+    const vy1 = this.vel.y - MOVE.GRAVITY * dt;
+    this.vel.y = (this.vel.y + vy1) / 2;
 
     // Move in small substeps rather than one big jump, and resolve wall
     // collision after each substep. At the higher speeds air-strafing can
@@ -775,6 +770,7 @@ export class PlayerController {
       this.mesh.position.addScaledVector(this.vel, subDt);
       this.#resolveCollision(wallBoxes);
     }
+    if (!this.onGround) this.vel.y = vy1; // landing zeroes vel.y inside the collision step
   }
 
   // What we broadcast over the network each tick.

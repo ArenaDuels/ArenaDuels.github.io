@@ -18,7 +18,7 @@
 // actual aim direction), so they only hit if they're really aimed at you.
 
 import * as THREE from "../vendor/three/three.module.min.js";
-import { MOVE, dirFromYawPitch } from "./player.js";
+import { MOVE, dirFromYawPitch, quakeMove } from "./player.js";
 import { NAME_WORDS } from "./names.js";
 
 // dps: damage per second while the beam is on target (players do 40).
@@ -60,6 +60,7 @@ class Bot {
     this.hp = 100;
     this.alive = true;
     this.onGround = true;
+    this.jumpHeld = false;
     this.firing = false;
     this.kills = 0;
     this.deaths = 0;
@@ -107,66 +108,12 @@ class Bot {
   /* ---------- physics: same rules as PlayerController ---------- */
 
   physics(dt, wallBoxes, jump) {
-    // Keep bot movement in lockstep with PlayerController.updatePhysics().
-    // Bots used to overwrite horizontal velocity while airborne, which gave
-    // them the old, overly strong air-steering/jump behaviour.
+    // Bots run the exact same Quake 3 movement as the player (shared quakeMove).
     const hasInput = this.wish.lengthSq() > 0.0001;
     if (hasInput) _wish.copy(this.wish).setY(0).normalize();
-
-    if (this.onGround) {
-      const speed = Math.hypot(this.vel.x, this.vel.z);
-      if (speed > 0.001) {
-        const newSpeed = Math.max(speed - speed * MOVE.FRICTION * dt, 0);
-        this.vel.x *= newSpeed / speed;
-        this.vel.z *= newSpeed / speed;
-      }
-      if (hasInput) {
-        const currentSpeed = this.vel.x * _wish.x + this.vel.z * _wish.z;
-        const addSpeed = MOVE.WISH_SPEED - currentSpeed;
-        if (addSpeed > 0) {
-          const accelSpeed = Math.min(
-            MOVE.GROUND_ACCEL * dt * MOVE.WISH_SPEED,
-            addSpeed,
-          );
-          this.vel.x += accelSpeed * _wish.x;
-          this.vel.z += accelSpeed * _wish.z;
-        }
-      }
-    } else if (hasInput) {
-      // Gradual Quake-style air acceleration, matching the player controller.
-      const currentSpeed = this.vel.x * _wish.x + this.vel.z * _wish.z;
-      const addSpeed = MOVE.AIR_WISH_SPEED - currentSpeed;
-      if (addSpeed > 0) {
-        const accelSpeed = Math.min(
-          MOVE.AIR_ACCEL * dt * MOVE.AIR_WISH_SPEED,
-          addSpeed,
-        );
-        this.vel.x += accelSpeed * _wish.x;
-        this.vel.z += accelSpeed * _wish.z;
-      }
-    }
-
-    // Same airborne speed limit and safety cap as human movement.
-    if (!this.onGround) {
-      const airSpeed = Math.hypot(this.vel.x, this.vel.z);
-      if (airSpeed > MOVE.AIR_MAX_SPEED) {
-        this.vel.x *= MOVE.AIR_MAX_SPEED / airSpeed;
-        this.vel.z *= MOVE.AIR_MAX_SPEED / airSpeed;
-      }
-    }
-    const speed = Math.hypot(this.vel.x, this.vel.z);
-    if (speed > MOVE.MAX_SPEED_SANITY) {
-      this.vel.x *= MOVE.MAX_SPEED_SANITY / speed;
-      this.vel.z *= MOVE.MAX_SPEED_SANITY / speed;
-    }
-
-    if (this.onGround && jump) {
-      this.vel.x *= MOVE.AIR_LAUNCH_MULTIPLIER;
-      this.vel.z *= MOVE.AIR_LAUNCH_MULTIPLIER;
-      this.vel.y = MOVE.JUMP_VEL;
-      this.onGround = false;
-    }
-    this.vel.y -= MOVE.GRAVITY * dt;
+    quakeMove(this.vel, this, _wish.x, _wish.z, hasInput, jump, dt);
+    const vy1 = this.vel.y - MOVE.GRAVITY * dt;
+    this.vel.y = (this.vel.y + vy1) / 2;
 
     // Small collision substeps prevent fast movement from passing through walls.
     const moveDist = this.vel.length() * dt;
@@ -176,6 +123,7 @@ class Bot {
       this.pos.addScaledVector(this.vel, subDt);
       this.collide(wallBoxes);
     }
+    if (!this.onGround) this.vel.y = vy1;
   }
 
   // Same box-based floor/step/wall resolution PlayerController uses.

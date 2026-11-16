@@ -10,13 +10,14 @@
 
 import * as THREE from "../vendor/three/three.module.min.js";
 import { CONSOLE_PLINTH } from "./arenas/training-room.js";
+import { MOVE } from "./player.js";
 
 // Same numbers as MOVE in player.js, so the CQC bot jumps and falls like a real player.
-const GRAVITY = 35;
-const JUMP_VEL = 12;
+const GRAVITY = MOVE.GRAVITY;
+const JUMP_VEL = MOVE.JUMP_VEL;
 const FLOOR_Y = 1.1;        // height of a capsule's centre when it stands on the floor
 const BOUND = 13;           // targets stay this far from the middle (the room is 30 wide, walls at +-15)
-const PLAYER_SPEED = 16;    // WISH_SPEED in player.js: how fast a player runs, so targets can move just as fast
+const PLAYER_SPEED = MOVE.WISH_SPEED; // WISH_SPEED in player.js: how fast a player runs, so targets can move just as fast
 const BEAM_DPS = 40;        // what a player's beam does per second
 const TARGET_HP = 100;
 const READY_SECONDS = 3;
