@@ -1,7 +1,7 @@
 // False-positive check for the movement rules: honest play must never be flagged.
 //
 // This runs a faithful port of the browser's movement code (js/player.js:
-// friction, Quake-style acceleration, air limits, jumping, gravity, stepped wall
+// friction, acceleration, air limits, jumping, gravity, stepped wall
 // collision) with random "players" — running, strafe-jumping, bunny-hopping,
 // spinning the mouse, running into walls — on every real arena, sends their
 // position to the server the way the game does (20 times a second, with network
@@ -14,7 +14,7 @@ import { RoomGuard } from "./anticheat.js";
 import { getArena } from "./arenas.js";
 
 const Q = 0.044;
-const MOVE = { WISH_SPEED: 320 * Q, GROUND_ACCEL: 10, AIR_ACCEL: 1, FRICTION: 6, STOP_SPEED: 100 * Q, GRAVITY: 800 * Q, JUMP_VEL: 270 * Q, AUTO_HOP: false, RADIUS: 0.5 };
+const MOVE = { WISH_SPEED: 320 * Q, GROUND_ACCEL: 10, AIR_ACCEL: 1, FRICTION: 6, STOP_SPEED: 100 * Q, GRAVITY: 800 * Q, JUMP_VEL: 270 * Q, AUTO_HOP: true, RADIUS: 0.5 };
 
 // Small deterministic random numbers so a failure can be reproduced.
 function rng(seed) {
@@ -182,7 +182,7 @@ function playSession({ arenaId, seed, seconds }) {
     }
     body.yaw += turn * DT;
     const before = { ...body.p };
-    body.step(DT, boxes, keys, jumpHeld && Math.round(t / DT) % 2 === 0); // pulse the key: Quake needs a fresh press per hop
+    body.step(DT, boxes, keys, jumpHeld);
     travelled += Math.hypot(body.p.x - before.x, body.p.z - before.z);
     maxSpeed = Math.max(maxSpeed, Math.hypot(body.vel.x, body.vel.z));
     if (!body.onGround) airTime += DT;

@@ -5,23 +5,22 @@ import { cleanBody, cleanName } from "./validate.js";
 // ===== Movement tuning =====
 // Ground movement stays responsive, while jumping preserves the same vertical
 // impulse and gravity but reduces horizontal launch speed and air steering.
-// Quake 3 movement (id Software's bg_pmove.c, the vanilla "VQ3" rules).
-// Quake works in "units"; one unit is QUAKE_SCALE metres here, picked so
-// Quake's gravity (800) and jump (270) land on the arena's existing scale.
-// Every number below is the original Quake 3 value times that scale.
-const QUAKE_SCALE = 0.044;
+// Player movement. The numbers are written in "units" (run 320, gravity 800,
+// jump 270) and one unit is UNIT_SCALE metres, which puts gravity and jump
+// height on the arena's scale. Every number below is its unit value times that.
+const UNIT_SCALE = 0.044;
 export const MOVE = {
-  QUAKE_SCALE,
-  WISH_SPEED: 320 * QUAKE_SCALE,  // g_speed 320
+  UNIT_SCALE,
+  WISH_SPEED: 320 * UNIT_SCALE,  // g_speed 320
   GROUND_ACCEL: 10,               // pm_accelerate
   AIR_ACCEL: 1,                   // pm_airaccelerate
   FRICTION: 6,                    // pm_friction
-  STOP_SPEED: 100 * QUAKE_SCALE,  // pm_stopspeed: friction treats you as at least this fast
-  GRAVITY: 800 * QUAKE_SCALE,     // g_gravity
-  JUMP_VEL: 270 * QUAKE_SCALE,    // JUMP_VELOCITY
-  // Quake 3 only jumps once per key press (you must let go of jump before the
-  // next hop). Set true if you want holding the key to keep hopping.
-  AUTO_HOP: false,
+  STOP_SPEED: 100 * UNIT_SCALE,  // pm_stopspeed: friction treats you as at least this fast
+  GRAVITY: 800 * UNIT_SCALE,     // g_gravity
+  JUMP_VEL: 270 * UNIT_SCALE,    // JUMP_VELOCITY
+  // true: holding jump keeps hopping every time you land. false: you must
+  // let go of jump and press it again for each hop.
+  AUTO_HOP: true,
   RADIUS: 0.5,
   // The capsule (CapsuleGeometry(0.5, 1.2, ...)) is 2.2 units tall total
   // and centered on its own position, so its "head" top is 1.1 above
@@ -30,20 +29,20 @@ export const MOVE = {
   EYE_HEIGHT: 1.0,
 };
 
-// Quake 3's PM_Friction (ground only). Slows you by max(speed, stopspeed) * friction * dt.
-function quakeFriction(vel, dt) {
+// Ground friction (not applied in the air). Slows you by max(speed, stopspeed) * friction * dt.
+function applyFriction(vel, dt) {
   const speed = Math.hypot(vel.x, vel.z);
-  if (speed < 1 * QUAKE_SCALE) { vel.x = 0; vel.z = 0; return; }
+  if (speed < 1 * UNIT_SCALE) { vel.x = 0; vel.z = 0; return; }
   const control = speed < MOVE.STOP_SPEED ? MOVE.STOP_SPEED : speed;
   const newSpeed = Math.max(speed - control * MOVE.FRICTION * dt, 0);
   vel.x *= newSpeed / speed;
   vel.z *= newSpeed / speed;
 }
 
-// Quake 3's PM_Accelerate. Used on the ground AND in the air (only the accel
+// Acceleration. Used on the ground AND in the air (only the accel
 // number differs). Adds speed along wishDir only until your speed ALONG that
 // direction reaches wishSpeed. That is what makes strafe jumping work.
-function quakeAccelerate(vel, wx, wz, wishSpeed, accel, dt) {
+function applyAccel(vel, wx, wz, wishSpeed, accel, dt) {
   const currentSpeed = vel.x * wx + vel.z * wz;
   const addSpeed = wishSpeed - currentSpeed;
   if (addSpeed <= 0) return;
@@ -53,11 +52,11 @@ function quakeAccelerate(vel, wx, wz, wishSpeed, accel, dt) {
   vel.z += accelSpeed * wz;
 }
 
-// One tick of Quake 3 movement for anything with { onGround, jumpHeld }:
+// One tick of movement for anything with { onGround, jumpHeld }:
 // jump check, then friction (ground only, and NOT on the frame you jump),
 // then accelerate. wx/wz is the unit wish direction in world space.
 // Returns nothing; changes vel and st. Gravity/collision are done by the caller.
-export function quakeMove(vel, st, wx, wz, hasInput, jumpKey, dt) {
+export function moveStep(vel, st, wx, wz, hasInput, jumpKey, dt) {
   if (!jumpKey) st.jumpHeld = false;
   if (st.onGround && jumpKey && (MOVE.AUTO_HOP || !st.jumpHeld)) {
     vel.y = MOVE.JUMP_VEL; // sets (not adds) upward speed; horizontal speed is untouched
@@ -65,10 +64,10 @@ export function quakeMove(vel, st, wx, wz, hasInput, jumpKey, dt) {
     st.jumpHeld = true;
   }
   if (st.onGround) {
-    quakeFriction(vel, dt);
-    if (hasInput) quakeAccelerate(vel, wx, wz, MOVE.WISH_SPEED, MOVE.GROUND_ACCEL, dt);
+    applyFriction(vel, dt);
+    if (hasInput) applyAccel(vel, wx, wz, MOVE.WISH_SPEED, MOVE.GROUND_ACCEL, dt);
   } else if (hasInput) {
-    quakeAccelerate(vel, wx, wz, MOVE.WISH_SPEED, MOVE.AIR_ACCEL, dt);
+    applyAccel(vel, wx, wz, MOVE.WISH_SPEED, MOVE.AIR_ACCEL, dt);
   }
 }
 
@@ -749,9 +748,9 @@ export class PlayerController {
       wishDir.normalize().applyAxisAngle(UP_AXIS, this.yaw);
     }
 
-    quakeMove(this.vel, this, wishDir.x, wishDir.z, hasInput, jumpPressed, dt);
+    moveStep(this.vel, this, wishDir.x, wishDir.z, hasInput, jumpPressed, dt);
 
-    // Quake integrates gravity with the average of the old and new vertical
+    // Gravity is integrated with the average of the old and new vertical
     // speed, which keeps jump height identical at any frame rate.
     const vy1 = this.vel.y - MOVE.GRAVITY * dt;
     this.vel.y = (this.vel.y + vy1) / 2;

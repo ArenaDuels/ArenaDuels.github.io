@@ -2506,7 +2506,7 @@ let lastHpText = "";
 
 // Fixed timestep for physics — see the comment on PlayerController.updatePhysics
 // in player.js for why. Rendering (and mouse-look) still happens every rAF frame.
-const FIXED_DT = 1 / 125; // Quake 3 runs its movement at 125 Hz
+const FIXED_DT = 1 / 125; // movement is simulated at 125 Hz
 const MAX_PHYSICS_STEPS_PER_FRAME = 16; // avoid a "spiral of death" after a big stall
 let physicsAccumulator = 0;
 

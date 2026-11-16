@@ -6,7 +6,7 @@
 // broadcast to everyone else at 20Hz as { t: "bots", bots: [...] } and
 // clients render them as ordinary RemotePlayers.
 //
-// Quake-style combat movement:
+// Combat movement:
 //   - circle-strafe the target (move sideways relative to it while keeping
 //     the crosshair on it), holding a preferred range
 //   - flip strafe direction at random intervals, but only while grounded —
@@ -18,7 +18,7 @@
 // actual aim direction), so they only hit if they're really aimed at you.
 
 import * as THREE from "../vendor/three/three.module.min.js";
-import { MOVE, dirFromYawPitch, quakeMove } from "./player.js";
+import { MOVE, dirFromYawPitch, moveStep } from "./player.js";
 import { NAME_WORDS } from "./names.js";
 
 // dps: damage per second while the beam is on target (players do 40).
@@ -108,10 +108,10 @@ class Bot {
   /* ---------- physics: same rules as PlayerController ---------- */
 
   physics(dt, wallBoxes, jump) {
-    // Bots run the exact same Quake 3 movement as the player (shared quakeMove).
+    // Bots run the exact same movement as the player (shared moveStep).
     const hasInput = this.wish.lengthSq() > 0.0001;
     if (hasInput) _wish.copy(this.wish).setY(0).normalize();
-    quakeMove(this.vel, this, _wish.x, _wish.z, hasInput, jump, dt);
+    moveStep(this.vel, this, _wish.x, _wish.z, hasInput, jump, dt);
     const vy1 = this.vel.y - MOVE.GRAVITY * dt;
     this.vel.y = (this.vel.y + vy1) / 2;
 

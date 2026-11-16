@@ -50,8 +50,8 @@ export const TUNING = Object.freeze({
   TARGET_WINDOW_MS: 900,
   BOT_TARGET_WINDOW_MS: 150, // bots strafe fast, so a long rewind lets shots land beside them
   MAX_STATE_AGE_MS: 2000,
-  // --- movement rules (see client player.js: Quake 3 movement, run 14.1 m/s, jump 11.9, gravity 35.2, no speed cap) ---
-  H_SPEED: 60,               // metres/second of horizontal travel we allow. Quake movement has no speed cap: perfect strafe-jumping on
+  // --- movement rules (see client player.js: run 14.1 m/s, jump 11.9, gravity 35.2, no speed cap) ---
+  H_SPEED: 60,               // metres/second of horizontal travel we allow. movement has no speed cap: perfect strafe-jumping on
                            // open floor tops out near 54 m/s (running is 14.1), so we sit just above that.
   H_CAP_M: 18,               // distance that can be "saved up" at most: covers about a second of network stall
   NEAR_GROUND: 0.45,         // "touching down": a hopping player is sampled only every 50ms, so even a
