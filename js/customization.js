@@ -58,34 +58,52 @@ export function saveLook(look) {
 
 /* ---------- body skins ---------- */
 
-// Static PNG skin textures are loaded once and shared by all player materials.
+// Animated GIF skins are copied into CanvasTextures so Three.js updates the material
+// as the browser advances each GIF frame. One shared texture is cached per skin.
 const skinCache = new Map(); // id -> { texture, failed, waiting: Set<material> }
 
 function skinEntry(id) {
   let entry = skinCache.get(id);
   if (entry) return entry;
-  entry = { texture: null, failed: false, waiting: new Set() };
+  entry = { texture: null, failed: false, waiting: new Set(), timer: null };
   skinCache.set(id, entry);
 
   const image = new Image();
   image.onload = () => {
-    const texture = new THREE.Texture(image);
-    texture.colorSpace = THREE.SRGBColorSpace;
+    const canvas = document.createElement("canvas");
+    canvas.width = image.naturalWidth || image.width;
+    canvas.height = image.naturalHeight || image.height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      entry.failed = true;
+      entry.waiting.clear();
+      return;
+    }
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
     // Mirrored tiling hides seams, matching the original PNG skin maps.
-    texture.wrapS = texture.wrapT = THREE.MirroredRepeatWrapping;
-    texture.repeat.set(2, 1);
-    texture.anisotropy = 4;
-    texture.needsUpdate = true;
-    entry.texture = texture;
+    tex.wrapS = tex.wrapT = THREE.MirroredRepeatWrapping;
+    tex.repeat.set(2, 1);
+    tex.anisotropy = 4;
+    entry.texture = tex;
 
-    for (const material of entry.waiting) {
-      if (material.userData.skin === id) {
-        material.map = texture;
-        material.color.set(0xffffff);
-        material.needsUpdate = true;
+    for (const m of entry.waiting) {
+      if (m.userData.skin === id) {
+        m.map = tex;
+        m.color.set(0xffffff);
+        m.needsUpdate = true;
       }
     }
     entry.waiting.clear();
+
+    // The GIF itself advances in the browser. Redrawing it updates the GPU texture.
+    entry.timer = window.setInterval(() => {
+      if (!entry.texture) return;
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      tex.needsUpdate = true;
+    }, 60);
   };
   image.onerror = () => {
     entry.failed = true;
