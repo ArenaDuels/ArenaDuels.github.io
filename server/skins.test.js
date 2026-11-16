@@ -33,7 +33,9 @@ test("every skin has its texture and thumbnail files, and they are real images",
       const isPng = head[0] === 0x89 && head[1] === 0x50;
       const isJpg = head[0] === 0xff && head[1] === 0xd8;
       const isGif = head[0] === 0x47 && head[1] === 0x49 && head[2] === 0x46;
-      assert.ok(isPng || isJpg || isGif, `${s.id}: ${url} is not a PNG, JPEG, or GIF`);
+      assert.ok(!isGif, `${s.id}: ${url} must not be a GIF`);
+      if (url === skinTextureUrl(s.id)) assert.ok(isPng, `${s.id}: texture must be a PNG`);
+      if (url === skinThumbUrl(s.id)) assert.ok(isJpg, `${s.id}: thumbnail must be a JPEG`);
     }
   }
 });

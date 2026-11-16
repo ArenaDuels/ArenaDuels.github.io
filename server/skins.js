@@ -34,8 +34,8 @@ export const DEFAULT_SKIN = "solid";
 export const skinById = (id) => SKINS.find((s) => s.id === id) ?? null;
 
 // Where the images live (relative to the page). Solid has none.
-export const skinTextureUrl = (id) => `./assets/skins/${id}.gif`;
-export const skinThumbUrl = (id) => `./assets/skins/${id}.gif`;
+export const skinTextureUrl = (id) => `./assets/skins/${id}.png`;
+export const skinThumbUrl = (id) => `./assets/skin-thumbs/${id}.jpg`;
 
 export const skinUnlocked = (skin, kills) => !!skin && Number.isFinite(kills) && kills >= skin.kills;
 
