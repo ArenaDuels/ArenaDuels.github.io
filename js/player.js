@@ -21,6 +21,8 @@ export const MOVE = {
   // true: holding jump keeps hopping every time you land. false: you must
   // let go of jump and press it again for each hop.
   AUTO_HOP: true,
+  // true: on the ground, letting go of every move key stops you dead (no sliding). false: normal friction.
+  INSTANT_STOP: true,
   RADIUS: 0.5,
   // The capsule (CapsuleGeometry(0.5, 1.2, ...)) is 2.2 units tall total
   // and centered on its own position, so its "head" top is 1.1 above
@@ -64,6 +66,10 @@ export function moveStep(vel, st, wx, wz, hasInput, jumpKey, dt) {
     st.jumpHeld = true;
   }
   if (st.onGround) {
+    if (MOVE.INSTANT_STOP && !hasInput) {
+      vel.x = 0;
+      vel.z = 0;
+    }
     applyFriction(vel, dt);
     if (hasInput) applyAccel(vel, wx, wz, MOVE.WISH_SPEED, MOVE.GROUND_ACCEL, dt);
   } else if (hasInput) {

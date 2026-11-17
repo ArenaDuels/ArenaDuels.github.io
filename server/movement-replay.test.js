@@ -14,7 +14,7 @@ import { RoomGuard } from "./anticheat.js";
 import { getArena } from "./arenas.js";
 
 const Q = 0.044;
-const MOVE = { WISH_SPEED: 320 * Q, GROUND_ACCEL: 15, AIR_ACCEL: 1, FRICTION: 8, STOP_SPEED: 100 * Q, GRAVITY: 800 * Q, JUMP_VEL: 270 * Q, AUTO_HOP: true, RADIUS: 0.5 };
+const MOVE = { WISH_SPEED: 320 * Q, GROUND_ACCEL: 15, AIR_ACCEL: 1, FRICTION: 8, STOP_SPEED: 100 * Q, GRAVITY: 800 * Q, JUMP_VEL: 270 * Q, AUTO_HOP: true, INSTANT_STOP: true, RADIUS: 0.5 };
 
 // Small deterministic random numbers so a failure can be reproduced.
 function rng(seed) {
@@ -74,6 +74,7 @@ class Body {
       v.z += a * dz;
     };
     if (this.onGround) {
+      if (MOVE.INSTANT_STOP && !has) { v.x = 0; v.z = 0; }
       const speed = Math.hypot(v.x, v.z);
       if (speed < Q) { v.x = 0; v.z = 0; }
       else {
