@@ -3,19 +3,19 @@ import { applyBodyLook, buildAccessory, disposeGroup } from "./customization.js"
 import { cleanBody, cleanName } from "./validate.js";
 
 // ===== Movement tuning =====
-// Ground movement stays responsive, while jumping preserves the same vertical
-// impulse and gravity but reduces horizontal launch speed and air steering.
+// Ground movement uses the Quake III / VQ3 friction and acceleration values.
+// Air control, gravity, and jump impulse remain independently tuned.
 // Player movement. The numbers are written in "units" (run 320, gravity 800,
 // jump 270) and one unit is UNIT_SCALE metres, which puts gravity and jump
 // height on the arena's scale. Every number below is its unit value times that.
 const UNIT_SCALE = 0.044;
 export const MOVE = {
   UNIT_SCALE,
-  WISH_SPEED: 320 * UNIT_SCALE * 1.1, // run speed: 320 units, plus 10%
-  GROUND_ACCEL: 15,               // how fast you reach run speed on the ground (higher = snappier; never changes top speed)
+  WISH_SPEED: 320 * UNIT_SCALE, // VQ3 pm_maxspeed / g_speed
+  GROUND_ACCEL: 10,               // VQ3 pm_accelerate
   AIR_ACCEL: 1,                   // pm_airaccelerate
-  FRICTION: 8,                    // ground friction while you are holding a move key (must stay below GROUND_ACCEL or top speed drops)
-  STOP_FRICTION: 15,              // ground friction once you let go of every move key: stops you a little faster than you speed up
+  FRICTION: 6,                   // VQ3 pm_friction
+  STOP_FRICTION: 6,              // same VQ3 friction whether or not input is held
   STOP_SPEED: 100 * UNIT_SCALE,  // pm_stopspeed: friction treats you as at least this fast
   GRAVITY: 800 * UNIT_SCALE,     // g_gravity
   JUMP_VEL: 270 * UNIT_SCALE,    // JUMP_VELOCITY
@@ -65,7 +65,7 @@ export function moveStep(vel, st, wx, wz, hasInput, jumpKey, dt) {
     st.jumpHeld = true;
   }
   if (st.onGround) {
-    applyFriction(vel, hasInput ? MOVE.FRICTION : MOVE.STOP_FRICTION, dt);
+    applyFriction(vel, MOVE.FRICTION, dt);
     if (hasInput) applyAccel(vel, wx, wz, MOVE.WISH_SPEED, MOVE.GROUND_ACCEL, dt);
   } else if (hasInput) {
     applyAccel(vel, wx, wz, MOVE.WISH_SPEED, MOVE.AIR_ACCEL, dt);
