@@ -3,18 +3,19 @@ import { applyBodyLook, buildAccessory, disposeGroup } from "./customization.js"
 import { cleanBody, cleanName } from "./validate.js";
 
 // ===== Movement tuning =====
-// Ground movement follows Quake III / VQ3 command scaling, friction and
-// directional acceleration. Air control, gravity and jump impulse stay separate.
+// Ground movement stays responsive, while jumping preserves the same vertical
+// impulse and gravity but reduces horizontal launch speed and air steering.
 // Player movement. The numbers are written in "units" (run 320, gravity 800,
 // jump 270) and one unit is UNIT_SCALE metres, which puts gravity and jump
 // height on the arena's scale. Every number below is its unit value times that.
 const UNIT_SCALE = 0.044;
 export const MOVE = {
   UNIT_SCALE,
-  WISH_SPEED: 320 * UNIT_SCALE, // VQ3 pm_maxspeed / g_speed
-  GROUND_ACCEL: 10,               // VQ3 pm_accelerate
+  WISH_SPEED: 320 * UNIT_SCALE * 1.1, // run speed: 320 units, plus 10%
+  GROUND_ACCEL: 15,               // how fast you reach run speed on the ground (higher = snappier; never changes top speed)
   AIR_ACCEL: 1,                   // pm_airaccelerate
-  FRICTION: 6,                   // VQ3 pm_friction
+  FRICTION: 8,                    // ground friction while you are holding a move key (must stay below GROUND_ACCEL or top speed drops)
+  STOP_FRICTION: 15,              // ground friction once you let go of every move key: stops you a little faster than you speed up
   STOP_SPEED: 100 * UNIT_SCALE,  // pm_stopspeed: friction treats you as at least this fast
   GRAVITY: 800 * UNIT_SCALE,     // g_gravity
   JUMP_VEL: 270 * UNIT_SCALE,    // JUMP_VELOCITY
@@ -39,29 +40,9 @@ function applyFriction(vel, friction, dt) {
   vel.z *= newSpeed / speed;
 }
 
-// Quake III command scaling (PM_CmdScale), for the two horizontal movement
-// axes. This preserves the configured top speed on diagonal input rather
-// than accidentally making diagonal movement faster or slower.
-export function quakeWishMove(inputX, inputZ, yaw) {
-  const maxAxis = Math.max(Math.abs(inputX), Math.abs(inputZ));
-  const total = Math.hypot(inputX, inputZ);
-  if (maxAxis <= 0 || total <= 0) return { x: 0, z: 0, speed: 0 };
-
-  const scale = MOVE.WISH_SPEED * maxAxis / total;
-  const localX = inputX * scale;
-  const localZ = inputZ * scale;
-  const c = Math.cos(yaw);
-  const sn = Math.sin(yaw);
-  const worldX = localX * c + localZ * sn;
-  const worldZ = -localX * sn + localZ * c;
-  const speed = Math.hypot(worldX, worldZ);
-  return speed > 0
-    ? { x: worldX / speed, z: worldZ / speed, speed }
-    : { x: 0, z: 0, speed: 0 };
-}
-
-// Quake III PM_Accelerate: add velocity only along wish direction, limited
-// by the remaining speed in that direction. This is not a total-speed clamp.
+// Acceleration. Used on the ground AND in the air (only the accel
+// number differs). Adds speed along wishDir only until your speed ALONG that
+// direction reaches wishSpeed. That is what makes strafe jumping work.
 function applyAccel(vel, wx, wz, wishSpeed, accel, dt) {
   const currentSpeed = vel.x * wx + vel.z * wz;
   const addSpeed = wishSpeed - currentSpeed;
@@ -76,7 +57,7 @@ function applyAccel(vel, wx, wz, wishSpeed, accel, dt) {
 // jump check, then friction (ground only, and NOT on the frame you jump),
 // then accelerate. wx/wz is the unit wish direction in world space.
 // Returns nothing; changes vel and st. Gravity/collision are done by the caller.
-export function moveStep(vel, st, wx, wz, hasInput, jumpKey, dt, wishSpeed = MOVE.WISH_SPEED) {
+export function moveStep(vel, st, wx, wz, hasInput, jumpKey, dt) {
   if (!jumpKey) st.jumpHeld = false;
   if (st.onGround && jumpKey && (MOVE.AUTO_HOP || !st.jumpHeld)) {
     vel.y = MOVE.JUMP_VEL; // sets (not adds) upward speed; horizontal speed is untouched
@@ -84,8 +65,8 @@ export function moveStep(vel, st, wx, wz, hasInput, jumpKey, dt, wishSpeed = MOV
     st.jumpHeld = true;
   }
   if (st.onGround) {
-    applyFriction(vel, MOVE.FRICTION, dt);
-    if (hasInput) applyAccel(vel, wx, wz, wishSpeed, MOVE.GROUND_ACCEL, dt);
+    applyFriction(vel, hasInput ? MOVE.FRICTION : MOVE.STOP_FRICTION, dt);
+    if (hasInput) applyAccel(vel, wx, wz, MOVE.WISH_SPEED, MOVE.GROUND_ACCEL, dt);
   } else if (hasInput) {
     applyAccel(vel, wx, wz, MOVE.WISH_SPEED, MOVE.AIR_ACCEL, dt);
   }
@@ -762,20 +743,13 @@ export class PlayerController {
   updatePhysics(dt, wallBoxes, jumpPressed) {
     this.prevPos.copy(this.mesh.position);
 
-    const hasInput = this.wish.lengthSq() > 0.0001;
-    let wishX = 0;
-    let wishZ = 0;
-    let wishSpeed = MOVE.WISH_SPEED;
+    const wishDir = this.wish.clone();
+    const hasInput = wishDir.lengthSq() > 0.0001;
     if (hasInput) {
-      // Keep raw command axes until PM_CmdScale has calculated the Quake
-      // wish velocity; only then derive wishdir and wishspeed.
-      const wish = quakeWishMove(this.wish.x, this.wish.z, this.yaw);
-      wishX = wish.x;
-      wishZ = wish.z;
-      wishSpeed = wish.speed;
+      wishDir.normalize().applyAxisAngle(UP_AXIS, this.yaw);
     }
 
-    moveStep(this.vel, this, wishX, wishZ, hasInput, jumpPressed, dt, wishSpeed);
+    moveStep(this.vel, this, wishDir.x, wishDir.z, hasInput, jumpPressed, dt);
 
     // Gravity is integrated with the average of the old and new vertical
     // speed, which keeps jump height identical at any frame rate.
