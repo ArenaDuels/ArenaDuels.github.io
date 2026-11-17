@@ -659,7 +659,16 @@ let myAllSkinsUnlocked = false;
 let signedIn = false;
 let skinMessage = "";   // a one-off line shown after you click a locked skin
 const skinNoteEl = document.getElementById("skin-note");
-const accessoryNoteEl = document.getElementById("accessory-note");
+// If an older index.html is deployed without the note line, make it here so the page still works.
+const accessoryNoteEl =
+  document.getElementById("accessory-note") ??
+  (() => {
+    const p = document.createElement("p");
+    p.id = "accessory-note";
+    p.className = "status-text";
+    accessoryPicker.after(p);
+    return p;
+  })();
 let accessoryMessage = ""; // a one-off line shown after you click a locked accessory
 
 function updateSkinNote() {

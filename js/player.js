@@ -11,18 +11,17 @@ import { cleanBody, cleanName } from "./validate.js";
 const UNIT_SCALE = 0.044;
 export const MOVE = {
   UNIT_SCALE,
-  WISH_SPEED: 320 * UNIT_SCALE,  // g_speed 320
+  WISH_SPEED: 320 * UNIT_SCALE * 1.1, // run speed: 320 units, plus 10%
   GROUND_ACCEL: 15,               // how fast you reach run speed on the ground (higher = snappier; never changes top speed)
   AIR_ACCEL: 1,                   // pm_airaccelerate
-  FRICTION: 8,                    // ground friction: higher = you stop faster (6 is the stock value, 8 is snappier)
+  FRICTION: 8,                    // ground friction while you are holding a move key (must stay below GROUND_ACCEL or top speed drops)
+  STOP_FRICTION: 30,              // ground friction once you let go of every move key: stops you a little faster than you speed up
   STOP_SPEED: 100 * UNIT_SCALE,  // pm_stopspeed: friction treats you as at least this fast
   GRAVITY: 800 * UNIT_SCALE,     // g_gravity
   JUMP_VEL: 270 * UNIT_SCALE,    // JUMP_VELOCITY
   // true: holding jump keeps hopping every time you land. false: you must
   // let go of jump and press it again for each hop.
   AUTO_HOP: true,
-  // true: on the ground, letting go of every move key stops you dead (no sliding). false: normal friction.
-  INSTANT_STOP: true,
   RADIUS: 0.5,
   // The capsule (CapsuleGeometry(0.5, 1.2, ...)) is 2.2 units tall total
   // and centered on its own position, so its "head" top is 1.1 above
@@ -32,11 +31,11 @@ export const MOVE = {
 };
 
 // Ground friction (not applied in the air). Slows you by max(speed, stopspeed) * friction * dt.
-function applyFriction(vel, dt) {
+function applyFriction(vel, friction, dt) {
   const speed = Math.hypot(vel.x, vel.z);
   if (speed < 1 * UNIT_SCALE) { vel.x = 0; vel.z = 0; return; }
   const control = speed < MOVE.STOP_SPEED ? MOVE.STOP_SPEED : speed;
-  const newSpeed = Math.max(speed - control * MOVE.FRICTION * dt, 0);
+  const newSpeed = Math.max(speed - control * friction * dt, 0);
   vel.x *= newSpeed / speed;
   vel.z *= newSpeed / speed;
 }
@@ -66,11 +65,7 @@ export function moveStep(vel, st, wx, wz, hasInput, jumpKey, dt) {
     st.jumpHeld = true;
   }
   if (st.onGround) {
-    if (MOVE.INSTANT_STOP && !hasInput) {
-      vel.x = 0;
-      vel.z = 0;
-    }
-    applyFriction(vel, dt);
+    applyFriction(vel, hasInput ? MOVE.FRICTION : MOVE.STOP_FRICTION, dt);
     if (hasInput) applyAccel(vel, wx, wz, MOVE.WISH_SPEED, MOVE.GROUND_ACCEL, dt);
   } else if (hasInput) {
     applyAccel(vel, wx, wz, MOVE.WISH_SPEED, MOVE.AIR_ACCEL, dt);
