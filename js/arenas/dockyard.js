@@ -1,0 +1,37 @@
+// Dockyard: custom tactical arena layout.
+export default {
+  id: "dockyard", name: "Dockyard", thumb: "./assets/thumbs/dockyard.png",
+  floorSize: 52, wallHeight: 5, bgColor: 0xc1b26,
+  textures: { floor: "./assets/textures/dock-floor.png", wall: "./assets/textures/dock-wall.png", pillar: "./assets/textures/dock-wall.png" },
+  fallbackColors: { floor: 0x4c3d2d, wall: 0x3c4c57, pillar: 0x3c4c57 },
+  walls: [
+    [52, 5, 0.6, 0, 2.5, -26.0],
+    [52, 5, 0.6, 0, 2.5, 26.0],
+    [0.6, 5, 52, -26.0, 2.5, 0],
+    [0.6, 5, 52, 26.0, 2.5, 0],
+  ],
+  props: [
+    { type: "wall", w: 8, h: 3, d: 1, x: -13, y: 1.5, z: -10 },
+    { type: "wall", w: 1, h: 3, d: 8, x: -17, y: 1.5, z: -6 },
+    { type: "wall", w: 8, h: 3, d: 1, x: 13, y: 1.5, z: 10 },
+    { type: "wall", w: 1, h: 3, d: 8, x: 17, y: 1.5, z: 6 },
+    { type: "wall", w: 1, h: 3, d: 14, x: -9, y: 1.5, z: 0 },
+    { type: "wall", w: 1, h: 3, d: 14, x: 9, y: 1.5, z: 0 },
+    { type: "wall", w: 10, h: 3, d: 1, x: 0, y: 1.5, z: -10 },
+    { type: "wall", w: 10, h: 3, d: 1, x: 0, y: 1.5, z: 10 },
+    { type: "wall", w: 7, h: 2.5, d: 1, x: -4, y: 1.25, z: -3 },
+    { type: "wall", w: 7, h: 2.5, d: 1, x: 4, y: 1.25, z: 3 },
+    { type: "pillar", w: 2, h: 3, d: 2, x: -18, y: 1.5, z: 15 },
+    { type: "pillar", w: 2, h: 3, d: 2, x: 18, y: 1.5, z: -15 },
+    { type: "wall", w: 5, h: 2, d: 1, x: -18, y: 1, z: -10 },
+    { type: "wall", w: 5, h: 2, d: 1, x: 18, y: 1, z: 10 },
+    { type: "pillar", w: 2.5, h: 3, d: 2.5, x: 0, y: 1.5, z: 0 },
+    { type: "wall", w: 1, h: 2.5, d: 8, x: 0, y: 1.25, z: 0 },
+  ],
+  spawns: [
+    { x: -21.0, y: 1.4, z: -21.0, yaw: 0 },
+    { x: 21.0, y: 1.4, z: 21.0, yaw: 3.141592653589793 },
+    { x: -21.0, y: 1.4, z: 21.0, yaw: 1.5707963267948966 },
+    { x: 21.0, y: 1.4, z: -21.0, yaw: -1.5707963267948966 },
+  ],
+};

@@ -1,0 +1,174 @@
+// Match rules + scoreboard state. Pure logic (no DOM, no three.js) so it can
+// be shared by the HUD, the network code and the tests.
+//
+// Who is authoritative:
+//   - Kills are announced by whoever detects the death (the victim's own
+//     client for humans, the host for bots) and every client applies the
+//     same event, so every scoreboard stays in step.
+//   - The HOST owns the clock and decides when the match ends; clients just
+//     tick a local copy for a smooth display and obey the host's "end".
+
+import { cleanName, MAX_SNAP_ENTRIES } from "./validate.js";
+
+export const DEFAULT_SETTINGS = Object.freeze({
+  timeLimit: 10,      // minutes, 0 = no time limit
+  scoreLimit: 20,     // kills to win, 0 = no score limit
+  startingHealth: 100,
+  healthSteal: 0,     // % of damage dealt that heals the attacker
+  respawnDelay: 2,    // seconds
+});
+
+// Keep whatever arrives over the network (or from sliders) in sane ranges.
+export function sanitizeSettings(raw) {
+  const s = { ...DEFAULT_SETTINGS };
+  if (!raw || typeof raw !== "object") return s;
+  const num = (v, lo, hi, fallback) => (Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : fallback);
+  s.timeLimit = Math.round(num(raw.timeLimit, 0, 60, s.timeLimit));
+  s.scoreLimit = Math.round(num(raw.scoreLimit, 0, 200, s.scoreLimit));
+  s.startingHealth = Math.round(num(raw.startingHealth, 10, 500, s.startingHealth));
+  s.healthSteal = Math.round(num(raw.healthSteal, 0, 100, s.healthSteal));
+  s.respawnDelay = num(raw.respawnDelay, 0, 30, s.respawnDelay);
+  return s;
+}
+
+export class MatchState {
+  constructor() {
+    this.scores = new Map(); // id -> { id, name, kills, deaths, team }
+    this.teamKills = [0, 0]
+    this.start(DEFAULT_SETTINGS);
+  }
+
+  /** (Re)start the clock and zero everyone's kills/deaths. Keeps the roster. */
+  start(settings) {
+    this.settings = sanitizeSettings(settings);
+    this.modeId = settings?.modeId === "tdm" ? "tdm" : settings?.modeId === "ffa" ? "ffa" : settings?.modeId === "1v1" ? "1v1" : this.modeId;
+    this.remaining = this.settings.timeLimit > 0 ? this.settings.timeLimit * 60 : Infinity;
+    this.over = false;
+    this.reason = null;
+    for (const e of this.scores.values()) {
+      e.kills = 0;
+      e.deaths = 0;
+    }
+    this.teamKills = [0, 0];
+  }
+
+  ensurePlayer(id, name, team = null) {
+    let e = this.scores.get(id);
+    if (!e) {
+      e = { id, name: cleanName(name), kills: 0, deaths: 0, team: team === 0 || team === 1 ? team : null };
+      this.scores.set(id, e);
+    } else {
+      if (name) e.name = cleanName(name, e.name);
+      if (team === 0 || team === 1) e.team = team;
+    }
+    return e;
+  }
+
+  removePlayer(id) {
+    this.scores.delete(id);
+  }
+
+  nameOf(id) {
+    return this.scores.get(id)?.name ?? "Player";
+  }
+
+  /** Apply one kill. Returns false if it was ignored (match already over). */
+  addKill(attackerId, victimId) {
+    if (this.over) return false;
+    const victim = this.scores.get(victimId);
+    const attacker = this.scores.get(attackerId);
+    if (victim) victim.deaths++;
+    if (attacker && attackerId !== victimId) {
+      attacker.kills++;
+      if ((this.modeId === "tdm") && (attacker.team === 0 || attacker.team === 1)) this.teamKills[attacker.team]++;
+    }
+    return true;
+  }
+
+  tick(dt) {
+    if (this.over || !Number.isFinite(this.remaining)) return;
+    this.remaining = Math.max(0, this.remaining - dt);
+  }
+
+  /** Host clock correction for clients. */
+  setRemaining(seconds) {
+    if (this.over) return;
+    this.remaining = seconds < 0 ? Infinity : seconds;
+  }
+
+  /** "score" | "time" | null — whether the match should end right now. */
+  checkEnd() {
+    if (this.over) return null;
+    const limit = this.settings.scoreLimit;
+    if (limit > 0) {
+      if (this.modeId === "tdm") { if (Math.max(...this.teamKills) >= limit) return "score"; }
+      else for (const e of this.scores.values()) if (e.kills >= limit) return "score";
+    }
+    if (Number.isFinite(this.remaining) && this.remaining <= 0) return "time";
+    return null;
+  }
+
+  finish(reason) {
+    this.over = true;
+    this.reason = reason;
+  }
+
+  /** Best first: most kills, then fewest deaths, then name. */
+  ranking() {
+    return [...this.scores.values()].sort(
+      (a, b) => b.kills - a.kills || a.deaths - b.deaths || a.name.localeCompare(b.name)
+    );
+  }
+
+  winnerTeam() {
+    if (this.modeId !== "tdm") return null;
+    if (this.teamKills[0] === this.teamKills[1]) return null;
+    return this.teamKills[0] > this.teamKills[1] ? 0 : 1;
+  }
+
+  /** The winner, or null for a tie / empty match. */
+  winner() {
+    if (this.modeId === "tdm") {
+      const team = this.winnerTeam();
+      return team == null ? null : this.ranking().find((e) => e.team === team) ?? null;
+    }
+    const r = this.ranking();
+    if (!r.length) return null;
+    if (r.length > 1 && r[0].kills === r[1].kills && r[0].deaths === r[1].deaths) return null;
+    return r[0];
+  }
+
+  /** "MM:SS", or "∞" when there's no time limit. */
+  clockText() {
+    if (!Number.isFinite(this.remaining)) return "∞";
+    const t = Math.ceil(this.remaining);
+    return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+  }
+
+  /** JSON-safe copy (Infinity isn't valid JSON, so "no limit" is -1). */
+  snapshot() {
+    return {
+      entries: [...this.scores.values()].map(({ id, name, kills, deaths, team }) => ({ id, name, kills, deaths, team })),
+      teamKills: [...this.teamKills],
+      remaining: Number.isFinite(this.remaining) ? this.remaining : -1,
+      over: this.over,
+      reason: this.reason,
+    };
+  }
+
+  /** Adopt the host's view (late joiners, match end). Unknown ids are added. */
+  load(snap) {
+    if (!snap || !Array.isArray(snap.entries)) return;
+    const count = (v) => (Number.isFinite(v) ? Math.min(100000, Math.max(0, Math.round(v))) : 0);
+    for (const e of snap.entries.slice(0, MAX_SNAP_ENTRIES)) {
+      if (typeof e?.id !== "string" || e.id.length > 16) continue;
+      const entry = this.ensurePlayer(e.id, typeof e.name === "string" ? e.name : undefined, e.team);
+      entry.kills = count(e.kills);
+      entry.deaths = count(e.deaths);
+    }
+    if (Array.isArray(snap.teamKills) && snap.teamKills.length === 2) this.teamKills = snap.teamKills.map(count);
+    if (Number.isFinite(snap.remaining)) this.remaining = snap.remaining < 0 ? Infinity : Math.min(86400, snap.remaining);
+    this.over = !!snap.over;
+    this.reason = snap.reason === "score" || snap.reason === "time" || snap.reason === "last-standing" ? snap.reason : null;
+  }
+}

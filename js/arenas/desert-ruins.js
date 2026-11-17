@@ -1,0 +1,37 @@
+// Desert Ruins: custom tactical arena layout.
+export default {
+  id: "desert-ruins", name: "Desert Ruins", thumb: "./assets/thumbs/desert-ruins.png",
+  floorSize: 52, wallHeight: 5, bgColor: 0x302012,
+  textures: { floor: "./assets/textures/desert-floor.png", wall: "./assets/textures/desert-wall.png", pillar: "./assets/textures/desert-wall.png" },
+  fallbackColors: { floor: 0xb38a4d, wall: 0x997043, pillar: 0x997043 },
+  walls: [
+    [52, 5, 0.6, 0, 2.5, -26.0],
+    [52, 5, 0.6, 0, 2.5, 26.0],
+    [0.6, 5, 52, -26.0, 2.5, 0],
+    [0.6, 5, 52, 26.0, 2.5, 0],
+  ],
+  props: [
+    { type: "wall", w: 8, h: 3, d: 1, x: -11, y: 1.5, z: -10 },
+    { type: "wall", w: 1, h: 3, d: 8, x: -15, y: 1.5, z: -6 },
+    { type: "wall", w: 8, h: 3, d: 1, x: -11, y: 1.5, z: -2 },
+    { type: "wall", w: 1, h: 3, d: 8, x: -7, y: 1.5, z: -6 },
+    { type: "wall", w: 8, h: 3, d: 1, x: 11, y: 1.5, z: 10 },
+    { type: "wall", w: 1, h: 3, d: 8, x: 15, y: 1.5, z: 6 },
+    { type: "wall", w: 8, h: 3, d: 1, x: 11, y: 1.5, z: 2 },
+    { type: "wall", w: 1, h: 3, d: 8, x: 7, y: 1.5, z: 6 },
+    { type: "pillar", w: 2, h: 4, d: 2, x: -18, y: 2, z: 0 },
+    { type: "pillar", w: 2, h: 4, d: 2, x: 18, y: 2, z: 0 },
+    { type: "pillar", w: 2, h: 4, d: 2, x: 0, y: 2, z: -18 },
+    { type: "pillar", w: 2, h: 4, d: 2, x: 0, y: 2, z: 18 },
+    { type: "wall", w: 12, h: 2.5, d: 1, x: 0, y: 1.25, z: -8 },
+    { type: "wall", w: 1, h: 2.5, d: 12, x: 0, y: 1.25, z: 8 },
+    { type: "wall", w: 7, h: 2, d: 1, x: -8, y: 1, z: 8 },
+    { type: "wall", w: 7, h: 2, d: 1, x: 8, y: 1, z: -8 },
+  ],
+  spawns: [
+    { x: -21.0, y: 1.4, z: -21.0, yaw: 0 },
+    { x: 21.0, y: 1.4, z: 21.0, yaw: 3.141592653589793 },
+    { x: -21.0, y: 1.4, z: 21.0, yaw: 1.5707963267948966 },
+    { x: 21.0, y: 1.4, z: -21.0, yaw: -1.5707963267948966 },
+  ],
+};

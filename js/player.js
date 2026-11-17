@@ -1,0 +1,1003 @@
+import * as THREE from "../vendor/three/three.module.min.js";
+import { applyBodyLook, buildAccessory, disposeGroup } from "./customization.js";
+import { cleanBody, cleanName } from "./validate.js";
+
+// ===== Movement tuning =====
+// Ground movement stays responsive, while jumping preserves the same vertical
+// impulse and gravity but reduces horizontal launch speed and air steering.
+// Player movement. The numbers are written in "units" (run 320, gravity 800,
+// jump 270) and one unit is UNIT_SCALE metres, which puts gravity and jump
+// height on the arena's scale. Every number below is its unit value times that.
+const UNIT_SCALE = 0.044;
+export const MOVE = {
+  UNIT_SCALE,
+  WISH_SPEED: 320 * UNIT_SCALE * 1.1, // run speed: 320 units, plus 10%
+  GROUND_ACCEL: 15,               // how fast you reach run speed on the ground (higher = snappier; never changes top speed)
+  AIR_ACCEL: 1,                   // pm_airaccelerate
+  FRICTION: 8,                    // ground friction while you are holding a move key (must stay below GROUND_ACCEL or top speed drops)
+  STOP_FRICTION: 15,              // ground friction once you let go of every move key: stops you a little faster than you speed up
+  STOP_SPEED: 100 * UNIT_SCALE,  // pm_stopspeed: friction treats you as at least this fast
+  GRAVITY: 800 * UNIT_SCALE,     // g_gravity
+  JUMP_VEL: 270 * UNIT_SCALE,    // JUMP_VELOCITY
+  // true: holding jump keeps hopping every time you land. false: you must
+  // let go of jump and press it again for each hop.
+  AUTO_HOP: true,
+  RADIUS: 0.5,
+  // The capsule (CapsuleGeometry(0.5, 1.2, ...)) is 2.2 units tall total
+  // and centered on its own position, so its "head" top is 1.1 above
+  // center. This puts the camera right around eye level on that head,
+  // not floating above it.
+  EYE_HEIGHT: 1.0,
+};
+
+// Ground friction (not applied in the air). Slows you by max(speed, stopspeed) * friction * dt.
+function applyFriction(vel, friction, dt) {
+  const speed = Math.hypot(vel.x, vel.z);
+  if (speed < 1 * UNIT_SCALE) { vel.x = 0; vel.z = 0; return; }
+  const control = speed < MOVE.STOP_SPEED ? MOVE.STOP_SPEED : speed;
+  const newSpeed = Math.max(speed - control * friction * dt, 0);
+  vel.x *= newSpeed / speed;
+  vel.z *= newSpeed / speed;
+}
+
+// Acceleration. Used on the ground AND in the air (only the accel
+// number differs). Adds speed along wishDir only until your speed ALONG that
+// direction reaches wishSpeed. That is what makes strafe jumping work.
+function applyAccel(vel, wx, wz, wishSpeed, accel, dt) {
+  const currentSpeed = vel.x * wx + vel.z * wz;
+  const addSpeed = wishSpeed - currentSpeed;
+  if (addSpeed <= 0) return;
+  let accelSpeed = accel * dt * wishSpeed;
+  if (accelSpeed > addSpeed) accelSpeed = addSpeed;
+  vel.x += accelSpeed * wx;
+  vel.z += accelSpeed * wz;
+}
+
+// One tick of movement for anything with { onGround, jumpHeld }:
+// jump check, then friction (ground only, and NOT on the frame you jump),
+// then accelerate. wx/wz is the unit wish direction in world space.
+// Returns nothing; changes vel and st. Gravity/collision are done by the caller.
+export function moveStep(vel, st, wx, wz, hasInput, jumpKey, dt) {
+  if (!jumpKey) st.jumpHeld = false;
+  if (st.onGround && jumpKey && (MOVE.AUTO_HOP || !st.jumpHeld)) {
+    vel.y = MOVE.JUMP_VEL; // sets (not adds) upward speed; horizontal speed is untouched
+    st.onGround = false;
+    st.jumpHeld = true;
+  }
+  if (st.onGround) {
+    applyFriction(vel, hasInput ? MOVE.FRICTION : MOVE.STOP_FRICTION, dt);
+    if (hasInput) applyAccel(vel, wx, wz, MOVE.WISH_SPEED, MOVE.GROUND_ACCEL, dt);
+  } else if (hasInput) {
+    applyAccel(vel, wx, wz, MOVE.WISH_SPEED, MOVE.AIR_ACCEL, dt);
+  }
+}
+
+// Match-wide values the host can change (Match Settings). Health bars and
+// respawns read maxHp from here so everyone agrees on what "full" means.
+export const GAME = { maxHp: 100 };
+
+// Builds a glossy "Tic Tac" capsule mesh in the given color.
+export function makeCapsuleMesh(color) {
+  const mat = new THREE.MeshPhysicalMaterial({
+    color,
+    roughness: 0.15,
+    metalness: 0,
+    clearcoat: 1,
+    clearcoatRoughness: 0.1,
+  });
+  const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.5, 1.2, 8, 16), mat);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+function makeHpBar() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 16;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#39ff88";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false }));
+  sprite.scale.set(1.2, 0.15, 1);
+  sprite.renderOrder = 998;
+  return sprite;
+}
+
+function makeNameSprite(name) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 64;
+  const ctx = canvas.getContext("2d");
+
+  function draw(text) {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.font = "600 34px 'Space Grotesk', sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    const w = ctx.measureText(text).width;
+    ctx.fillRect(canvas.width / 2 - w / 2 - 14, canvas.height / 2 - 22, w + 28, 44);
+    ctx.fillStyle = "#e8fff4";
+    ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+  }
+  draw(name || "Player");
+
+  const texture = new THREE.CanvasTexture(canvas);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false }));
+  sprite.scale.set(1.4, 0.35, 1);
+  sprite.renderOrder = 999;
+  sprite.userData.setText = (text) => {
+    draw(text);
+    texture.needsUpdate = true;
+  };
+  return sprite;
+}
+
+// A simple low-poly first-person gun viewmodel, parented to the camera so
+// it stays fixed in screen space (bottom-right) exactly like a real FPS
+// weapon. Returns the group (to attach) and a muzzle Object3D whose real
+// WORLD position we use as the laser's true visual origin — genuine
+// parallax from an actual point in the scene, not an approximated offset.
+// Builds the gun mesh itself — body/barrel/grip/muzzle — without any
+// position/rotation applied, so callers can place it differently depending
+// on context: as a first-person viewmodel (child of the camera) or as a
+// third-person "held gun" visible to other players (child of the capsule).
+// ---------------------------------------------------------------------------
+// The ARC RIFLE. One model, used first-person (child of the camera) and
+// third-person (held by other players' capsules). Forward is -Z.
+//
+//   receiver + rail + battery pack, a shrouded barrel with three glowing
+//   energy coils, an emitter nozzle with a glowing lens, power strips on
+//   the sides, a grip, foregrip and sights.
+//
+// Everything that glows shares the player's colour (so it recolours with
+// setGunColor), and animateGun() makes the coils chase along the barrel and
+// the lens flare when firing.
+// ---------------------------------------------------------------------------
+let glowTexture = null;
+function getGlowTexture() {
+  if (glowTexture) return glowTexture;
+  const c = document.createElement("canvas");
+  c.width = c.height = 128;
+  const g = c.getContext("2d");
+  const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grad.addColorStop(0, "rgba(255,255,255,1)");
+  grad.addColorStop(0.25, "rgba(255,255,255,0.55)");
+  grad.addColorStop(0.6, "rgba(255,255,255,0.12)");
+  grad.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 128, 128);
+  glowTexture = new THREE.CanvasTexture(c);
+  glowTexture.colorSpace = THREE.SRGBColorSpace;
+  return glowTexture;
+}
+
+function makeGunModel(color) {
+  const group = new THREE.Group();
+
+  // (Metalness is kept modest on purpose: there's no environment map to
+  // reflect, so high-metal parts would render nearly black.)
+  const gunmetal = new THREE.MeshStandardMaterial({ color: 0x5d6676, roughness: 0.48, metalness: 0.3 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x2b2f3a, roughness: 0.6, metalness: 0.25 });
+  const steel = new THREE.MeshStandardMaterial({ color: 0xc2c9d6, roughness: 0.35, metalness: 0.45 });
+  const glow = () =>
+    new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.8, roughness: 0.3, metalness: 0.1 });
+
+  const mats = []; // every glowing material, for recolouring/animation
+  const accentMat = glow();
+  mats.push(accentMat);
+
+  const add = (geo, mat, x, y, z, rx = 0, ry = 0, rz = 0) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y, z);
+    m.rotation.set(rx, ry, rz);
+    group.add(m);
+    return m;
+  };
+  const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
+
+  // receiver, top rail, battery pack, rear cap
+  add(box(0.11, 0.13, 0.36), gunmetal, 0, 0, -0.02);
+  add(box(0.075, 0.03, 0.3), dark, 0, 0.08, -0.02);
+  add(box(0.1, 0.115, 0.15), gunmetal, 0, -0.005, 0.2);
+  add(box(0.085, 0.09, 0.02), dark, 0, -0.005, 0.285);
+  // charge window on top of the receiver
+  add(box(0.04, 0.012, 0.13), accentMat, 0, 0.099, -0.03);
+  // glowing power strips down both sides
+  add(box(0.006, 0.026, 0.2), accentMat, 0.058, 0.012, 0.0);
+  add(box(0.006, 0.026, 0.2), accentMat, -0.058, 0.012, 0.0);
+  add(box(0.006, 0.05, 0.07), accentMat, 0.052, -0.005, 0.2);
+  add(box(0.006, 0.05, 0.07), accentMat, -0.052, -0.005, 0.2);
+  // vents
+  for (let i = 0; i < 3; i++) {
+    add(box(0.114, 0.012, 0.022), dark, 0, 0.02 - i * 0.026, 0.115 - 0.0 + i * 0.0);
+  }
+
+  // shrouded barrel
+  add(new THREE.CylinderGeometry(0.02, 0.02, 0.46, 12), steel, 0, 0.012, -0.43, Math.PI / 2, 0, 0);
+  // open frame (a top and bottom rail) so the coils stay visible
+  add(box(0.03, 0.012, 0.3), gunmetal, 0, 0.064, -0.4);
+  add(box(0.03, 0.012, 0.3), gunmetal, 0, -0.04, -0.4);
+  for (let i = 0; i < 3; i++) {
+    add(box(0.016, 0.11, 0.014), dark, 0, 0.012, -0.29 - i * 0.1);
+  }
+
+  // three energy coils that light up one after another when firing
+  const coils = [];
+  for (let i = 0; i < 3; i++) {
+    const mat = glow();
+    mats.push(mat);
+    const coil = add(new THREE.TorusGeometry(0.036, 0.011, 8, 18), mat, 0, 0.012, -0.34 - i * 0.1);
+    coil.userData.mat = mat;
+    coils.push(coil);
+  }
+
+  // emitter nozzle + lens
+  add(new THREE.CylinderGeometry(0.015, 0.032, 0.07, 14), steel, 0, 0.012, -0.665, Math.PI / 2, 0, 0);
+  const lensMat = glow();
+  lensMat.emissiveIntensity = 1.6;
+  mats.push(lensMat);
+  add(new THREE.SphereGeometry(0.019, 12, 10), lensMat, 0, 0.012, -0.705);
+
+  // grip, trigger guard, foregrip, sights
+  add(box(0.07, 0.17, 0.09), dark, 0, -0.135, 0.09, 0.32, 0, 0);
+  add(box(0.014, 0.02, 0.07), gunmetal, 0, -0.08, -0.04);
+  add(box(0.014, 0.05, 0.014), gunmetal, 0, -0.1, -0.075);
+  add(box(0.06, 0.085, 0.11), dark, 0, -0.09, -0.22, -0.12, 0, 0);
+  add(box(0.012, 0.03, 0.014), steel, 0, 0.11, -0.2);
+  add(box(0.03, 0.026, 0.012), steel, 0, 0.105, 0.1);
+
+  // muzzle point (beam origin) and a flash sprite on it
+  const muzzle = new THREE.Object3D();
+  muzzle.position.set(0, 0.012, -0.74);
+  group.add(muzzle);
+
+  const flash = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: getGlowTexture(), color, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, fog: false,
+    })
+  );
+  flash.renderOrder = 1001;
+  flash.visible = false;
+  muzzle.add(flash);
+
+  group.userData.accentMat = accentMat;
+  group.userData.fx = { mats, coils, lensMat, accentMat, flash, baseZ: 0, baseRotX: 0, baseY: 0 };
+  return { group, muzzle };
+}
+
+/** Recolour everything on the gun that glows (and the muzzle flash). */
+export function setGunColor(group, color) {
+  const fx = group.userData.fx;
+  for (const m of fx.mats) {
+    m.color.set(color);
+    m.emissive.set(color);
+  }
+  fx.flash.material.color.set(color);
+}
+
+/** Per-frame gun animation: idle shimmer, firing pulse, flash and recoil. */
+export function animateGun(group, firing, t, viewmodel = false) {
+  const fx = group.userData.fx;
+  fx.accentMat.emissiveIntensity = firing ? 1.5 + 0.5 * Math.sin(t * 55) : 0.6 + 0.12 * Math.sin(t * 2.2);
+  for (let i = 0; i < fx.coils.length; i++) {
+    const m = fx.coils[i].userData.mat;
+    m.emissiveIntensity = firing
+      ? 1.2 + 1.6 * Math.max(0, Math.sin(t * 38 - i * 1.5))
+      : 0.3 + 0.12 * Math.sin(t * 2.2 - i * 0.8);
+  }
+  fx.lensMat.emissiveIntensity = firing ? 2.4 + 0.8 * Math.sin(t * 70) : 1.2;
+  fx.flash.visible = firing;
+  if (firing) {
+    fx.flash.material.opacity = 0.55 + 0.4 * Math.abs(Math.sin(t * 83));
+    fx.flash.scale.setScalar(viewmodel ? 0.2 + 0.08 * Math.abs(Math.sin(t * 61)) : 0.35 + 0.12 * Math.abs(Math.sin(t * 61)));
+  }
+  if (viewmodel) {
+    group.position.z = fx.baseZ + (firing ? 0.016 + 0.008 * Math.sin(t * 72) : 0);
+    group.position.y = fx.baseY + (firing ? 0.004 * Math.sin(t * 91) : 0);
+    group.rotation.x = fx.baseRotX + (firing ? 0.012 + 0.008 * Math.sin(t * 66) : 0);
+  }
+}
+
+
+// ===== The robot look other players see =====
+// rp.mesh stays the full-size capsule, but invisible: it is the hitbox every ray test uses
+// (and matches the server's), so the new look can't change who gets hit. The robot is built
+// as a child of it. Its overall height is the same 2.2, so what you see is what you can hit.
+const ROBOT = {
+  BODY_R: 0.5, BODY_LEN: 0.7, BODY_Y: -0.25, // pill: bottom at -1.1 (the feet), top at +0.6
+  NECK_Y: 0.66,                              // the head turns around this point
+  HEAD_W: 0.8, HEAD_H: 0.44, HEAD_D: 0.58,   // head top lands at +1.1, same as the old capsule
+  HEAD_PITCH_MAX: 1.1,
+};
+
+// A box with rounded, bevelled edges (three's core has no RoundedBox).
+function roundedBoxGeometry(w, h, d, r, bt) {
+  const iw = w - 2 * bt, ih = h - 2 * bt, id = Math.max(0.001, d - 2 * bt);
+  const rr = Math.max(0.001, Math.min(r - bt, iw / 2, ih / 2));
+  const x = -iw / 2, y = -ih / 2;
+  const sh = new THREE.Shape();
+  sh.moveTo(x + rr, y);
+  sh.lineTo(x + iw - rr, y);
+  sh.quadraticCurveTo(x + iw, y, x + iw, y + rr);
+  sh.lineTo(x + iw, y + ih - rr);
+  sh.quadraticCurveTo(x + iw, y + ih, x + iw - rr, y + ih);
+  sh.lineTo(x + rr, y + ih);
+  sh.quadraticCurveTo(x, y + ih, x, y + ih - rr);
+  sh.lineTo(x, y + rr);
+  sh.quadraticCurveTo(x, y, x + rr, y);
+  const geo = new THREE.ExtrudeGeometry(sh, {
+    depth: id, bevelEnabled: true, bevelThickness: bt, bevelSize: bt, bevelSegments: 3, curveSegments: 6,
+  });
+  geo.translate(0, 0, -id / 2);
+  return geo;
+}
+
+const _white = new THREE.Color(0xffffff);
+const eyeColorFor = (color) => new THREE.Color(color).lerp(_white, 0.78);
+
+function makeRobotModel(color) {
+  const root = new THREE.Group();
+  const bodyMat = new THREE.MeshPhysicalMaterial({
+    color, roughness: 0.15, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.1,
+  });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x14161c, roughness: 0.25, metalness: 0.3 });
+  const eyeMat = () => {
+    const c = eyeColorFor(color);
+    return new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 1.8, roughness: 0.3 });
+  };
+  const mk = (geo, mat, x = 0, y = 0, z = 0) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y, z);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    return m;
+  };
+
+  // pill body
+  const body = mk(new THREE.CapsuleGeometry(ROBOT.BODY_R, ROBOT.BODY_LEN, 8, 16), bodyMat, 0, ROBOT.BODY_Y, 0);
+  root.add(body);
+
+  // head: pivots at the neck so it can look up and down
+  const headPivot = new THREE.Group();
+  headPivot.position.y = ROBOT.NECK_Y;
+  root.add(headPivot);
+
+  const headCy = ROBOT.HEAD_H / 2;
+  const front = -ROBOT.HEAD_D / 2;
+  const headGeo = roundedBoxGeometry(ROBOT.HEAD_W, ROBOT.HEAD_H, ROBOT.HEAD_D, 0.11, 0.05);
+  const head = mk(headGeo, bodyMat, 0, headCy, 0);
+  headPivot.add(head);
+
+  // dark visor band with two glowing eyes
+  const visor = mk(roundedBoxGeometry(0.68, 0.28, 0.04, 0.07, 0.012), dark, 0, headCy, front - 0.005);
+  visor.castShadow = false;
+  headPivot.add(visor);
+  const eyeMats = [eyeMat(), eyeMat()];
+  [-0.15, 0.15].forEach((x, i) => {
+    const eye = mk(roundedBoxGeometry(0.11, 0.12, 0.03, 0.025, 0.008), eyeMats[i], x, headCy, front - 0.02);
+    eye.castShadow = false;
+    headPivot.add(eye);
+  });
+
+  // outlines drawn behind teammates (see setTeam)
+  const outlineMat = new THREE.MeshBasicMaterial({ color: 0x42a5ff, side: THREE.BackSide, transparent: true, opacity: 0.95, depthWrite: false });
+  const bodyOutline = new THREE.Mesh(new THREE.CapsuleGeometry(ROBOT.BODY_R + 0.025, ROBOT.BODY_LEN, 6, 12), outlineMat);
+  bodyOutline.position.y = ROBOT.BODY_Y;
+  bodyOutline.visible = false;
+  root.add(bodyOutline);
+  const headOutline = new THREE.Mesh(headGeo, outlineMat);
+  headOutline.position.y = headCy;
+  headOutline.scale.setScalar(1.07);
+  headOutline.visible = false;
+  headPivot.add(headOutline);
+
+  return { root, bodyMat, headPivot, eyeMats, bodyOutline, headOutline, outlineMat };
+}
+
+// First-person viewmodel: fixed in the bottom-right of the screen, no
+// shadows (casting a shadow of your own gun onto your own view looks odd),
+// not affected by frustum culling so it never disappears at extreme angles.
+function makeFirstPersonGun(color) {
+  const { group, muzzle } = makeGunModel(color);
+  group.renderOrder = 1000;
+  group.scale.setScalar(0.74);
+  group.position.set(0.23, -0.2, -0.4);
+  group.rotation.y = -0.05;
+  group.rotation.x = 0.01;
+  group.userData.fx.baseZ = group.position.z;
+  group.userData.fx.baseY = group.position.y;
+  group.userData.fx.baseRotX = group.rotation.x;
+  group.traverse((o) => {
+    if (o.isMesh || o.isSprite) {
+      o.castShadow = false;
+      o.receiveShadow = false;
+      o.frustumCulled = false;
+    }
+  });
+  return { group, muzzle };
+}
+
+// Third-person "held gun" visible to other players — attached to the
+// capsule body, positioned like it's held out in front, rotates with
+// whichever way the capsule is facing since it's a child of that mesh.
+function makeHeldGun(color) {
+  const { group, muzzle } = makeGunModel(color);
+  // Capsule radius is 0.5 — the attachment point has to clear that or the
+  // gun renders embedded in the body instead of held beside it.
+  group.position.set(0.62, 0.05, -0.15);
+  group.rotation.y = -0.12;
+  group.scale.setScalar(1.25); // reads better at typical view distance
+  group.traverse((o) => {
+    if (o.isMesh) {
+      o.castShadow = true;
+      o.receiveShadow = true;
+    }
+  });
+  // Keep the muzzle as a real child of the held weapon so the remote beam
+  // starts at the barrel after both yaw and pitch have been applied.
+  return { group, muzzle };
+}
+
+// ===== The beam. A hot white core, a coloured glow around it, a soft outer
+// haze, a crackling arc that jitters every frame, and a flare where it hits.
+// (Built from cylinders because THREE.Line is capped at ~1px on most GPUs.)
+// Shared by the local player's beam and every RemotePlayer's beam. =====
+const BEAM_SEGMENTS = 18;
+const beamGeometry = new THREE.CylinderGeometry(1, 0.18, 1, 10, 1, true); // tapers to a point at the muzzle
+
+function additive(color, opacity) {
+  return new THREE.MeshBasicMaterial({
+    color, transparent: true, opacity, blending: THREE.AdditiveBlending,
+    depthWrite: false, fog: false, side: THREE.DoubleSide,
+  });
+}
+
+export function makeLaserMesh(color) {
+  const beam = new THREE.Group();
+  beam.visible = false;
+
+  const part = (material, radius) => {
+    const m = new THREE.Mesh(beamGeometry, material);
+    m.userData.radius = radius;
+    m.frustumCulled = false;
+    beam.add(m);
+    return m;
+  };
+  const core = part(additive(0xffffff, 0.95), 0.02);
+  const glow = part(additive(color, 0.5), 0.065);
+  const haze = part(additive(color, 0.16), 0.13);
+
+  const arcGeo = new THREE.BufferGeometry();
+  arcGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array((BEAM_SEGMENTS + 1) * 3), 3));
+  const arc = new THREE.Line(
+    arcGeo,
+    new THREE.LineBasicMaterial({ color: 0xdff6ff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false, fog: false })
+  );
+  arc.frustumCulled = false;
+  beam.add(arc);
+
+  const flare = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: getGlowTexture(), color, transparent: true, opacity: 0.9,
+      blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+    })
+  );
+  flare.frustumCulled = false;
+  beam.add(flare);
+
+  beam.userData = { core, glow, haze, arc, flare, color };
+  return beam;
+}
+
+export function setLaserColor(beam, color) {
+  const u = beam.userData;
+  u.glow.material.color.set(color);
+  u.haze.material.color.set(color);
+  u.flare.material.color.set(color);
+  u.color = color;
+}
+
+const UP_AXIS = new THREE.Vector3(0, 1, 0);
+const _dir = new THREE.Vector3();
+/**
+ * Stretch the beam from `origin` to `end`. `hit` = it ends on something
+ * solid (so draw the impact flare); `t` is the time in seconds for the
+ * flicker.
+ */
+export function aimLaser(beam, origin, end, hit = true, t = performance.now() / 1000) {
+  _dir.subVectors(end, origin);
+  const len = _dir.length();
+  if (len < 0.001) {
+    beam.visible = false;
+    return;
+  }
+  _dir.divideScalar(len);
+  beam.position.copy(origin);
+  beam.quaternion.setFromUnitVectors(UP_AXIS, _dir);
+
+  const u = beam.userData;
+  const pulse = 1 + 0.16 * Math.sin(t * 70) + 0.09 * Math.sin(t * 113.7);
+  for (const m of [u.core, u.glow, u.haze]) {
+    const r = m.userData.radius * pulse;
+    m.scale.set(r, len, r);
+    m.position.set(0, len / 2, 0);
+  }
+
+  // jittering arc: pinned at both ends, wobbling in between
+  const pos = u.arc.geometry.attributes.position;
+  const amp = Math.min(0.14, 0.03 + len * 0.004);
+  for (let i = 0; i <= BEAM_SEGMENTS; i++) {
+    const s = i / BEAM_SEGMENTS;
+    const edge = Math.sin(Math.PI * s);
+    pos.setXYZ(i, (Math.random() - 0.5) * amp * edge, s * len, (Math.random() - 0.5) * amp * edge);
+  }
+  pos.needsUpdate = true;
+
+  u.flare.visible = hit;
+  if (hit) {
+    u.flare.position.set(0, Math.max(0, len - 0.1), 0);
+    u.flare.scale.setScalar(0.55 + 0.25 * Math.abs(Math.sin(t * 57)));
+  }
+  beam.visible = true;
+}
+
+// Reconstructs a look direction from yaw/pitch alone — used to draw a
+// remote player's beam from their broadcasted state, since they don't have
+// a real camera object on our end. 'YXZ' matches our own camera hierarchy
+// (mesh yaw as the outer/parent rotation, pitch as the inner/child one).
+const _beamRay = new THREE.Raycaster();
+const _beamEye = new THREE.Vector3();
+const _scratchEuler = new THREE.Euler(0, 0, 0, "YXZ");
+export function dirFromYawPitch(yaw, pitch, out = new THREE.Vector3()) {
+  _scratchEuler.set(pitch, yaw, 0, "YXZ");
+  return out.set(0, 0, -1).applyEuler(_scratchEuler);
+}
+
+/**
+ * The local, input-driven player. Owns the camera. No hp bar / name tag —
+ * those only make sense floating above OTHER players; your own hp lives
+ * in the HUD instead.
+ */
+export class PlayerController {
+  constructor(scene, camera, color = 0xffffff) {
+    this.scene = scene;
+    this.mesh = makeCapsuleMesh(color);
+    this.mesh.visible = false; // hide own body from own camera
+    scene.add(this.mesh);
+
+    // The camera lives under its own root, separate from the physics body
+    // (this.mesh). Physics moves in fixed timesteps that don't line up
+    // perfectly with however often the display actually renders — without
+    // this separation, the camera would inherit that fixed-step motion
+    // directly and visibly stutter/judder on displays whose refresh rate
+    // doesn't evenly divide the physics rate (i.e. almost all of them).
+    // Instead we interpolate viewRoot's position between the last two
+    // physics states each render frame (see interpolateView below), so
+    // motion looks perfectly smooth regardless of display Hz.
+    this.viewRoot = new THREE.Object3D();
+    scene.add(this.viewRoot);
+
+    this.camPivot = new THREE.Object3D();
+    this.camPivot.position.set(0, MOVE.EYE_HEIGHT, 0);
+    this.viewRoot.add(this.camPivot);
+    this.camPivot.add(camera);
+    this.camera = camera;
+
+    const { group: gunGroup, muzzle } = makeFirstPersonGun(color);
+    camera.add(gunGroup);
+    this.gunGroup = gunGroup;
+    this.gunAccent = gunGroup.userData.accentMat;
+    this.gunMuzzle = muzzle;
+
+    this.vel = new THREE.Vector3();
+    this.wish = new THREE.Vector3();
+    this.onGround = true;
+    this.jumpHeld = false;
+
+    this.yaw = 0;
+    this.pitch = 0;
+
+    this.hp = GAME.maxHp;
+    this.firing = false;
+
+    this.prevPos = this.mesh.position.clone();
+  }
+
+  spawn(spawnPoint) {
+    this.mesh.position.set(spawnPoint.x, spawnPoint.y, spawnPoint.z);
+    this.viewRoot.position.copy(this.mesh.position);
+    this.prevPos.copy(this.mesh.position);
+    this.yaw = spawnPoint.yaw || 0;
+    this.pitch = 0;
+    this.vel.set(0, 0, 0);
+    this.jumpHeld = false;
+    this.hp = GAME.maxHp;
+  }
+
+  // Recolors the first-person gun's glowing parts (your own body is never
+  // visible to you, so the gun is the only thing that shows your color).
+  setColor(color) {
+    setGunColor(this.gunGroup, color);
+  }
+
+  // Idle shimmer / firing pulse / muzzle flash / recoil on the viewmodel.
+  updateGunFx(firing, seconds) {
+    animateGun(this.gunGroup, firing, seconds, true);
+  }
+
+  applyInput(keys, mouseFiring) {
+    this.wish.set(0, 0, 0);
+    if (keys.KeyW) this.wish.z -= 1;
+    if (keys.KeyS) this.wish.z += 1;
+    if (keys.KeyA) this.wish.x -= 1;
+    if (keys.KeyD) this.wish.x += 1;
+    this.firing = !!mouseFiring;
+  }
+
+  // Proper 3D collision: finds the highest surface (a box-top, or the
+  // world floor) below the player that they're over, and rests them on
+  // it — not just the single hardcoded ground height like before. This is
+  // what makes stairs and multi-level platforms actually work: each step
+  // is just a slightly higher box, and walking into its footprint lets you
+  // step up onto it. Side-collision (getting blocked by a wall/step from
+  // the side) only applies to boxes whose top is still above you — once
+  // you're standing at or above a box's top, its footprint stops blocking
+  // you sideways, so you can walk across its surface and off the edge.
+  #resolveCollision(wallBoxes) {
+    const STEP_TOLERANCE = 0.5; // how much higher than your current feet a surface can be and still auto step-up
+    const STAND_MARGIN = MOVE.RADIUS * 0.6; // lets your capsule center be slightly past a box's edge and still count as "on" it
+    const REST_OFFSET = 1.4; // established convention: capsule center sits this far above whatever it's resting on
+    const feetLevel = this.mesh.position.y - REST_OFFSET;
+
+    let surfaceTopY = 0; // world floor
+    for (const box of wallBoxes) {
+      const overX = this.mesh.position.x > box.min.x - STAND_MARGIN && this.mesh.position.x < box.max.x + STAND_MARGIN;
+      const overZ = this.mesh.position.z > box.min.z - STAND_MARGIN && this.mesh.position.z < box.max.z + STAND_MARGIN;
+      if (overX && overZ) {
+        if (box.max.y <= feetLevel + STEP_TOLERANCE && box.max.y > surfaceTopY) {
+          surfaceTopY = box.max.y;
+        }
+      }
+    }
+    const restY = surfaceTopY + REST_OFFSET;
+
+    if (this.mesh.position.y <= restY) {
+      this.mesh.position.y = restY;
+      this.vel.y = 0;
+      this.onGround = true;
+    } else {
+      this.onGround = false;
+    }
+
+    // Small margin beyond the exact radius — without it, a resting position
+    // exactly tangent to a wall is a floating-point-unstable boundary that
+    // can flicker between "colliding" and "not colliding" frame to frame,
+    // which reads as camera stutter since the camera is attached to it.
+    // A block stops you sideways whenever its top is more than a step above
+    // your FEET. (This used to compare against the capsule centre, which sits
+    // 1.4 higher — so jumping at the side or corner of a block let the lower
+    // half of your body pass straight through it.) Run twice so being pushed
+    // out of one block can't leave you inside the neighbouring one.
+    const pushRadius = MOVE.RADIUS + 0.01;
+    const p = this.mesh.position;
+    for (let pass = 0; pass < 2; pass++) {
+      const feet = p.y - REST_OFFSET;
+      for (const box of wallBoxes) {
+        if (box.max.y <= feet + STEP_TOLERANCE) continue; // low enough to step/land on — not a wall right now
+        const cx = Math.max(box.min.x, Math.min(p.x, box.max.x));
+        const cz = Math.max(box.min.z, Math.min(p.z, box.max.z));
+        let dx = p.x - cx;
+        let dz = p.z - cz;
+        const dist2 = dx * dx + dz * dz;
+        if (dist2 >= pushRadius * pushRadius) continue;
+        if (dist2 < 1e-8) {
+          // The centre is inside the block (no direction to push along) — leave through the nearest side.
+          const left = p.x - box.min.x, right = box.max.x - p.x;
+          const front = p.z - box.min.z, back = box.max.z - p.z;
+          const m = Math.min(left, right, front, back);
+          if (m === left) p.x = box.min.x - pushRadius;
+          else if (m === right) p.x = box.max.x + pushRadius;
+          else if (m === front) p.z = box.min.z - pushRadius;
+          else p.z = box.max.z + pushRadius;
+        } else {
+          const dist = Math.sqrt(dist2);
+          const push = pushRadius - dist;
+          p.x += (dx / dist) * push;
+          p.z += (dz / dist) * push;
+        }
+      }
+    }
+  }
+
+  // Applies mouse-look rotation. Called every render frame (not tied to
+  // the fixed physics step below) so aiming stays maximally smooth at
+  // whatever refresh rate the display actually runs at.
+  updateLook() {
+    this.viewRoot.rotation.y = this.yaw;
+    this.camPivot.rotation.x = this.pitch;
+  }
+
+  // Smoothly places viewRoot somewhere between the physics body's previous
+  // and current position, based on how far into the *next* (not yet run)
+  // physics step we currently are. Called once per render frame, after
+  // any physics steps for that frame have run. This is what actually
+  // eliminates the stutter — physics stepping alone only makes each
+  // individual step consistent, it doesn't make the steps line up with
+  // however often the screen redraws.
+  interpolateView(alpha) {
+    this.viewRoot.position.lerpVectors(this.prevPos, this.mesh.position, alpha);
+  }
+
+  // Physics/movement — called with a FIXED dt from a timestep accumulator
+  // in main.js, not the raw variable render-frame time. Real frame timing
+  // is never perfectly steady (a frame that runs a hair long or short
+  // makes that single frame's movement visibly bigger/smaller than its
+  // neighbors), which is what caused the intermittent stutter. A fixed
+  // timestep makes every physics step identical regardless of actual
+  // frame timing, eliminating that as a source of jitter.
+  updatePhysics(dt, wallBoxes, jumpPressed) {
+    this.prevPos.copy(this.mesh.position);
+
+    const wishDir = this.wish.clone();
+    const hasInput = wishDir.lengthSq() > 0.0001;
+    if (hasInput) {
+      wishDir.normalize().applyAxisAngle(UP_AXIS, this.yaw);
+    }
+
+    moveStep(this.vel, this, wishDir.x, wishDir.z, hasInput, jumpPressed, dt);
+
+    // Gravity is integrated with the average of the old and new vertical
+    // speed, which keeps jump height identical at any frame rate.
+    const vy1 = this.vel.y - MOVE.GRAVITY * dt;
+    this.vel.y = (this.vel.y + vy1) / 2;
+
+    // Move in small substeps rather than one big jump, and resolve wall
+    // collision after each substep. At the higher speeds air-strafing can
+    // legitimately reach, a single full-dt move can cover more distance
+    // than a wall's thickness in one step — collision never "sees" you
+    // cross it, and you phase straight through. Substepping keeps each
+    // individual move shorter than the thinnest wall so that can't happen.
+    const moveDist = this.vel.length() * dt;
+    const MAX_STEP = 0.2;
+    const steps = Math.max(1, Math.ceil(moveDist / MAX_STEP));
+    const subDt = dt / steps;
+    for (let i = 0; i < steps; i++) {
+      this.mesh.position.addScaledVector(this.vel, subDt);
+      this.#resolveCollision(wallBoxes);
+    }
+    if (!this.onGround) this.vel.y = vy1; // landing zeroes vel.y inside the collision step
+  }
+
+  // What we broadcast over the network each tick.
+  getNetState() {
+    return {
+      x: this.mesh.position.x,
+      y: this.mesh.position.y,
+      z: this.mesh.position.z,
+      yaw: this.yaw,
+      pitch: this.pitch,
+      hp: this.hp,
+      firing: !!this.firing,
+      tp: this.tp || 0, // the last server-ordered move we've heard about (see "correct"/"respawn")
+    };
+  }
+
+  // The server moved us (it didn't accept where we said we were): go there and stop.
+  teleportTo(x, y, z) {
+    this.mesh.position.set(x, y, z);
+    this.prevPos.copy(this.mesh.position);
+    this.viewRoot.position.copy(this.mesh.position);
+    this.vel.set(0, 0, 0);
+  }
+
+  // Returns true if this hit was the killing blow.
+  takeDamage(amount) {
+    const wasAlive = this.hp > 0;
+    this.hp = Math.max(0, this.hp - amount);
+    return wasAlive && this.hp <= 0;
+  }
+
+  heal(amount) {
+    if (this.hp > 0) this.hp = Math.min(GAME.maxHp, this.hp + amount);
+  }
+}
+
+/**
+ * A network-driven player (anyone that isn't "me"). No input handling, no
+ * physics — just smoothly interpolates toward the last received snapshot.
+ * Has an hp bar, name tag (both real Sprites — Three.js guarantees these
+ * always fully face the camera), and its own LG beam that lights up
+ * whenever their broadcasted state says they're firing.
+ */
+export class RemotePlayer {
+  constructor(scene, color = 0xff4444, name = "Player") {
+    this.scene = scene;
+    // Invisible full-size capsule = the hitbox (see the ROBOT note above); the robot is its child.
+    this.mesh = makeCapsuleMesh(color);
+    this.mesh.material.visible = false;
+    this.mesh.castShadow = false;
+    this.mesh.receiveShadow = false;
+    this.model = makeRobotModel(color);
+    this.bodyMat = this.model.bodyMat;
+    this.headPivot = this.model.headPivot;
+    this.teamOutline = this.model.bodyOutline;
+    this.headOutline = this.model.headOutline;
+    this.mesh.add(this.model.root);
+    scene.add(this.mesh);
+
+    // Visible to everyone else, unlike the local player's own first-person
+    // viewmodel — attached to the capsule body so it turns with them.
+    const heldWeapon = makeHeldGun(color);
+    this.heldGun = heldWeapon.group;
+    this.gunMuzzle = heldWeapon.muzzle;
+    this.mesh.add(this.heldGun);
+
+    this.name = name;
+    this.hp = GAME.maxHp;
+    this.hpBar = makeHpBar();
+    scene.add(this.hpBar);
+
+    this.nameSprite = makeNameSprite(name);
+    scene.add(this.nameSprite);
+
+    this.laser = makeLaserMesh(color);
+    scene.add(this.laser);
+
+    this.targetPos = this.mesh.position.clone();
+    this.targetYaw = 0;
+    this.targetPitch = 0;
+    this.firing = false;
+    this.visible = true;
+
+    this.accessory = null;
+    this.accessoryKey = "";
+    this.displayColor = color;
+  }
+
+  // Apply a player's chosen look (color / body pattern / accessory).
+  // `look.color` of null means "Auto" — use the color they were assigned.
+  setLook(look, defaultColor) {
+    const color = look.color ?? defaultColor;
+    this.displayColor = color;
+
+    applyBodyLook(this.bodyMat, color, look.pattern);
+    const eyeCol = eyeColorFor(color);
+    for (const m of this.model.eyeMats) { m.color.copy(eyeCol); m.emissive.copy(eyeCol); }
+
+    setGunColor(this.heldGun, color);
+    setLaserColor(this.laser, color);
+
+    const key = `${look.accessory}:${color}`;
+    if (key !== this.accessoryKey) {
+      if (this.accessory) {
+        this.headPivot.remove(this.accessory);
+        disposeGroup(this.accessory);
+        this.accessory = null;
+      }
+      this.accessory = buildAccessory(look.accessory, color);
+      if (this.accessory) {
+        // Built in head space, so they sit on the head and tilt with it.
+        this.headPivot.add(this.accessory);
+      }
+      this.accessoryKey = key;
+    }
+  }
+
+  setTeam(team, myTeam, isTdm = true) {
+    const on = isTdm && (team === 0 || team === 1) && team === myTeam;
+    this.teamOutline.visible = on;
+    this.headOutline.visible = on;
+    this.model.outlineMat.color.setHex(0x42a5ff);
+  }
+
+  setName(name) {
+    this.name = cleanName(name);
+    this.nameSprite.userData.setText(this.name); // drawn on a canvas — never parsed as HTML
+  }
+
+  spawn(spawnPoint) {
+    this.mesh.position.set(spawnPoint.x, spawnPoint.y, spawnPoint.z);
+    this.targetPos.copy(this.mesh.position);
+    this.targetYaw = spawnPoint.yaw || 0;
+    this.hp = GAME.maxHp;
+    this.setVisible(true);
+  }
+
+  // Call this whenever a network snapshot arrives.
+  applyNetState(raw) {
+    const state = cleanBody(raw); // finite, range-checked numbers only
+    if (!state) return;
+    this.targetPos.set(state.x, state.y, state.z);
+    this.targetYaw = state.yaw;
+    this.targetPitch = state.pitch;
+    this.hp = state.hp;
+    this.firing = state.firing;
+    if (state.hp <= 0) {
+      this.setVisible(false);
+    } else if (!this.visible) {
+      // Respawned — snap straight there instead of lerping across the map.
+      this.mesh.position.copy(this.targetPos);
+      this.setVisible(true);
+    }
+  }
+
+  // Health straight from the server (a "health" message), which doesn't wait for this player's own
+  // state messages. Coming back to life is left to the next state message, which also has where they are.
+  setHealth(hp) {
+    this.hp = hp;
+    if (hp <= 0) this.setVisible(false);
+  }
+
+  setVisible(v) {
+    this.visible = v;
+    this.mesh.visible = v;
+    this.hpBar.visible = v && this.hp > 0;
+    this.nameSprite.visible = v && this.hp > 0;
+    if (!v) this.laser.visible = false;
+  }
+
+  dispose() {
+    this.scene.remove(this.mesh, this.hpBar, this.nameSprite, this.laser);
+    disposeGroup(this.model.root);
+    disposeGroup(this.heldGun);
+    if (this.accessory) {
+      this.headPivot.remove(this.accessory);
+      disposeGroup(this.accessory);
+      this.accessory = null;
+    }
+  }
+
+  // `solids` = the arena's walls and floor. Beams stop at them, so you can't see a laser go through a wall.
+  update(dt, camera, solids = null) {
+    const t = Math.min(1, dt * 12);
+    this.mesh.position.lerp(this.targetPos, t);
+    this.mesh.rotation.y += (this.targetYaw - this.mesh.rotation.y) * t;
+    // The remote weapon is a separate child of the body. Apply the networked
+    // camera pitch to it too; otherwise the body turns but the gun stays level.
+    this.heldGun.rotation.x += (this.targetPitch - this.heldGun.rotation.x) * t;
+    // The head looks up and down with the player's aim (positive pitch = up).
+    const headTarget = Math.max(-ROBOT.HEAD_PITCH_MAX, Math.min(ROBOT.HEAD_PITCH_MAX, this.targetPitch));
+    this.headPivot.rotation.x += (headTarget - this.headPivot.rotation.x) * t;
+
+    if (this.visible && this.hp > 0) {
+      this.hpBar.position.copy(this.mesh.position);
+      this.hpBar.position.y += 1.5;
+      this.hpBar.scale.x = 1.2 * Math.min(1, Math.max(this.hp / GAME.maxHp, 0));
+
+      this.nameSprite.position.copy(this.mesh.position);
+      this.nameSprite.position.y += 1.85;
+
+      if (this.firing) {
+        // Read the actual barrel muzzle in world space. This includes the
+        // body yaw, weapon pitch, weapon offset and weapon scale.
+        const origin = new THREE.Vector3();
+        this.gunMuzzle.getWorldPosition(origin);
+        const dir = dirFromYawPitch(this.targetYaw, this.targetPitch);
+        let end = origin.clone().addScaledVector(dir, 50);
+        let hitWall = false;
+        if (solids && solids.length) {
+          // Same rule as your own beam: it runs from the gun to wherever the line of sight from the
+          // eyes first meets a wall, and stops there.
+          _beamEye.copy(this.mesh.position);
+          _beamEye.y += MOVE.EYE_HEIGHT;
+          _beamRay.set(_beamEye, dir);
+          _beamRay.far = 50;
+          const h = _beamRay.intersectObjects(solids, false)[0];
+          end = h ? h.point.clone() : _beamEye.clone().addScaledVector(dir, 50);
+          hitWall = !!h;
+        }
+        // A gun poking through a wall (someone hugging it) has nothing visible to shoot.
+        if (hitWall && end.clone().sub(origin).dot(dir) <= 0.05) this.laser.visible = false;
+        else aimLaser(this.laser, origin, end, hitWall);
+      } else {
+        this.laser.visible = false;
+      }
+      animateGun(this.heldGun, this.firing, performance.now() / 1000);
+    }
+  }
+}
