@@ -12,9 +12,9 @@ const UNIT_SCALE = 0.044;
 export const MOVE = {
   UNIT_SCALE,
   WISH_SPEED: 320 * UNIT_SCALE,  // g_speed 320
-  GROUND_ACCEL: 10,               // pm_accelerate
+  GROUND_ACCEL: 15,               // how fast you reach run speed on the ground (higher = snappier; never changes top speed)
   AIR_ACCEL: 1,                   // pm_airaccelerate
-  FRICTION: 6,                    // pm_friction
+  FRICTION: 8,                    // ground friction: higher = you stop faster (6 is the stock value, 8 is snappier)
   STOP_SPEED: 100 * UNIT_SCALE,  // pm_stopspeed: friction treats you as at least this fast
   GRAVITY: 800 * UNIT_SCALE,     // g_gravity
   JUMP_VEL: 270 * UNIT_SCALE,    // JUMP_VELOCITY

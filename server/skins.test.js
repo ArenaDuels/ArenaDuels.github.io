@@ -12,6 +12,7 @@ const read = (rel) => fs.readFileSync(path.join(root, rel), "utf8");
 test("the browser and relay copies of the shared files are identical", () => {
   assert.equal(read("js/skins.js"), read("server/skins.js"));
   assert.equal(read("js/validate.js"), read("server/validate.js"));
+  assert.equal(read("js/accessory-unlocks.js"), read("server/accessory-unlocks.js"));
 });
 
 test("the skin list: Solid is the default and free, ids are unique, kills only go up", () => {

@@ -174,6 +174,12 @@ export function createStatsStore({ firestore, FieldValue, logger = console, now 
       return snap.exists ? num(snap.data().kills) : 0;
     },
 
+    /** Just a player's lifetime wins (one read): what the accessory unlocks are checked against. */
+    async getWins(uid) {
+      const snap = await col().doc(uid).get();
+      return snap.exists ? num(snap.data().wins) : 0;
+    },
+
     /** One player's totals, plus where they stand on each board. */
     async getStats(uid) {
       const snap = await col().doc(uid).get();

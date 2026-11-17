@@ -15,6 +15,10 @@ export const ICONS = {
   antenna: stroke('<path d="M12 20V9"/><circle cx="12" cy="6" r="2.2"/><path d="M7.5 20h9"/><path d="M7 4.5a7 7 0 0 0 0 7M17 4.5a7 7 0 0 1 0 7"/>'),
   shades: stroke('<path d="M2.5 10h19"/><rect x="3.5" y="10" width="7.5" height="5.5" rx="2.2"/><rect x="13" y="10" width="7.5" height="5.5" rx="2.2"/>'),
   party: stroke('<path d="M12 5l7 14.5H5z"/><path d="M8.2 14h7.6"/><circle cx="12" cy="3.6" r="1.3"/>'),
+  headphones: stroke('<path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4" height="6.5" rx="1.6"/><rect x="17" y="14" width="4" height="6.5" rx="1.6"/>'),
+  wizard: stroke('<path d="M6.5 17.5C8 11.5 10 6.5 15.5 3.5c-1 3 .2 5 1.5 6.5l.5 7.5"/><path d="M3.5 18.5h17"/><path d="M8.8 13.5h7.4"/>'),
+  viking: stroke('<path d="M6.5 18v-4a5.5 5.5 0 0 1 11 0v4"/><path d="M5.5 18h13"/><path d="M6.8 11.5C4 11 2.8 8.5 3.5 5.5M17.2 11.5c2.8-.5 4-3 3.3-6"/>'),
+  cowboy: stroke('<path d="M3 16.5c3.2 2 14.8 2 18 0"/><path d="M7 15c-.3-4 .8-8 5-8s5.3 4 5 8"/><path d="M7.4 12.4h9.2"/>'),
 
   // ---- body patterns (filled swatches) ----
   solid: solid('<rect x="4" y="4" width="16" height="16" rx="4"/>'),

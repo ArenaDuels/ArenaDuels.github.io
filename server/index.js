@@ -30,6 +30,7 @@ import { MatchTally, createStatsStore, BOARDS } from "./stats.js";
 import { clientIpFrom, resolveTrustProxy } from "./clientip.js";
 import { uidBusyElsewhere, uidInRoom } from "./sessions.js";
 import { skinById, lookWithUnlockedSkin } from "./skins.js";
+import { winsNeeded, lookWithUnlockedAccessory } from "./accessory-unlocks.js";
 
 const PORT = process.env.PORT || 8080;
 const scrypt = promisify(crypto.scrypt);
@@ -542,11 +543,28 @@ async function lifetimeKills(ws) {
   return ws.kills;
 }
 
+// Some accessories have to be earned with wins on your account: same idea, checked against lifetime wins.
+async function lifetimeWins(ws) {
+  if (!ws.uid || !stats) return 0;
+  const now = Date.now();
+  if (ws.winsAt && now - ws.winsAt < 20_000) return ws.wins; // at most one read every 20 seconds per player
+  ws.winsAt = now;
+  try {
+    ws.wins = await stats.getWins(ws.uid);
+  } catch (err) {
+    console.error("[accessories] wins lookup failed:", err.message);
+    ws.wins = ws.wins ?? 0;
+  }
+  return ws.wins;
+}
+
 async function allowedLook(ws, look) {
   if (ws.allSkinsUnlocked === true) return look;
-  const skin = skinById(look.pattern);
-  if (!skin || skin.kills === 0) return look; // free (or not a skin at all): nothing to check
-  return lookWithUnlockedSkin(look, await lifetimeKills(ws));
+  let out = look;
+  const skin = skinById(out.pattern);
+  if (skin && skin.kills > 0) out = lookWithUnlockedSkin(out, await lifetimeKills(ws));
+  if (winsNeeded(out.accessory) > 0) out = lookWithUnlockedAccessory(out, await lifetimeWins(ws));
+  return out;
 }
 
 // ---- the always-open lobby ----

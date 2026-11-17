@@ -7,6 +7,7 @@ import { initializeAccountUi, getCurrentFirebaseIdToken, API_BASE } from "./auth
 import { initStatsUi } from "./stats-ui.js";
 import { BotManager, BOT_SKILLS } from "./bots.js";
 import { COLORS, ACCESSORIES, loadLook, saveLook, sanitizeLook } from "./customization.js";
+import { winsNeeded, accessoryUnlocked, nextAccessory } from "./accessory-unlocks.js";
 import { SKINS, DEFAULT_SKIN, skinById, skinThumbUrl, skinUnlocked, nextSkin } from "./skins.js";
 import { MatchState, DEFAULT_SETTINGS as DEFAULT_MATCH_RULES, sanitizeSettings } from "./match.js";
 import { iconSvg } from "./icons.js";
@@ -612,9 +613,18 @@ function buildLookPickers() {
     patternPicker.appendChild(b);
   }
   for (const a of ACCESSORIES) {
-    const b = tile("accessory-option", "", a.label, () => setMyLook({ accessory: a.id }));
+    const b = tile("accessory-option", "", a.label, () => pickAccessory(a));
     b.innerHTML = iconSvg(a.id);
     b.dataset.key = a.id;
+    if (winsNeeded(a.id) > 0) {
+      const lock = document.createElement("span");
+      lock.className = "accessory-lock";
+      lock.innerHTML = LOCK_SVG; // static, trusted markup
+      const need = document.createElement("span");
+      need.textContent = `${winsNeeded(a.id)} wins`;
+      lock.appendChild(need);
+      b.appendChild(lock);
+    }
     accessoryPicker.appendChild(b);
   }
   refreshLookPickers();
@@ -632,7 +642,11 @@ function refreshLookPickers() {
     el.classList.toggle("locked", !!sk && myKills !== null && !myAllSkinsUnlocked && !skinUnlocked(sk, myKills));
     if (sk && sk.id === DEFAULT_SKIN) el.style.background = "#" + (myLook.color ?? 0x8a8f98).toString(16).padStart(6, "0"); // Auto: neutral grey
   });
+  accessoryPicker.querySelectorAll("button").forEach((el) => {
+    el.classList.toggle("locked", myWins !== null && !myAllSkinsUnlocked && !accessoryUnlocked(el.dataset.key, myWins));
+  });
   updateSkinNote();
+  updateAccessoryNote();
 }
 
 /* ---- skin unlocks ---- */
@@ -640,10 +654,13 @@ function refreshLookPickers() {
 // number before it shows your skin to anyone, so this is only the menu keeping up with it.
 const LOCK_SVG = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17 9h-1V7a4 4 0 0 0-8 0v2H7a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2zm-7-2a2 2 0 0 1 4 0v2h-4V7z"/></svg>';
 let myKills = null;     // lifetime kills on your account; 0 for guests; null until we have asked
+let myWins = null;      // lifetime wins on your account; 0 for guests; null until we have asked
 let myAllSkinsUnlocked = false;
 let signedIn = false;
 let skinMessage = "";   // a one-off line shown after you click a locked skin
 const skinNoteEl = document.getElementById("skin-note");
+const accessoryNoteEl = document.getElementById("accessory-note");
+let accessoryMessage = ""; // a one-off line shown after you click a locked accessory
 
 function updateSkinNote() {
   let text;
@@ -655,6 +672,29 @@ function updateSkinNote() {
     text = `You have ${myKills} kill${myKills === 1 ? "" : "s"}. ${next ? `${next.label} unlocks at ${next.kills}.` : "Every skin is unlocked."}`;
   }
   skinNoteEl.textContent = (skinMessage ? skinMessage + " " : "") + text + " Skins keep their own colors; your color shows on Solid.";
+}
+
+function updateAccessoryNote() {
+  let text;
+  if (myWins === null) text = "Checking your wins...";
+  else if (!signedIn) text = "Sign in to earn accessories with wins.";
+  else if (myAllSkinsUnlocked) text = "Developer account: every accessory is unlocked.";
+  else {
+    const next = nextAccessory(myWins);
+    const label = next ? ACCESSORIES.find((a) => a.id === next.id)?.label : null;
+    text = `You have ${myWins} win${myWins === 1 ? "" : "s"}. ${next ? `${label} unlocks at ${next.wins}.` : "Every accessory is unlocked."}`;
+  }
+  accessoryNoteEl.textContent = (accessoryMessage ? accessoryMessage + " " : "") + text;
+}
+
+function pickAccessory(a) {
+  if (myWins !== null && !myAllSkinsUnlocked && !accessoryUnlocked(a.id, myWins)) {
+    accessoryMessage = `${a.label} unlocks at ${winsNeeded(a.id)} wins.`;
+    updateAccessoryNote();
+    return;
+  }
+  accessoryMessage = "";
+  setMyLook({ accessory: a.id });
 }
 
 function pickSkin(sk) {
@@ -673,6 +713,7 @@ async function refreshMyKills() {
     signedIn = false;
     myAllSkinsUnlocked = false;
     myKills = 0;
+    myWins = 0;
   } else {
     signedIn = true;
     myAllSkinsUnlocked = false;
@@ -680,6 +721,7 @@ async function refreshMyKills() {
       const response = await fetch(`${API_BASE}/api/stats/me`, { cache: "no-store", headers: { Authorization: `Bearer ${token}` } });
       const data = await response.json().catch(() => ({}));
       if (response.ok && Number.isFinite(data.kills)) myKills = Math.max(0, Math.floor(data.kills));
+      if (response.ok && Number.isFinite(data.wins)) myWins = Math.max(0, Math.floor(data.wins));
       if (response.ok) myAllSkinsUnlocked = data.allSkinsUnlocked === true;
     } catch { /* server asleep or offline: keep what we knew */ }
   }
@@ -687,6 +729,13 @@ async function refreshMyKills() {
   const worn = skinById(myLook.pattern);
   if (myKills !== null && worn && !myAllSkinsUnlocked && !skinUnlocked(worn, myKills)) {
     myLook = { ...myLook, pattern: DEFAULT_SKIN };
+    saveLook(myLook);
+    updateLookPreview();
+    if (matchActive) net.broadcast({ t: "hello", name: myName, look: myLook });
+  }
+  // Wearing an accessory you haven't earned (signed out, or a different account)? Back to none.
+  if (myWins !== null && !myAllSkinsUnlocked && !accessoryUnlocked(myLook.accessory, myWins)) {
+    myLook = { ...myLook, accessory: "none" };
     saveLook(myLook);
     updateLookPreview();
     if (matchActive) net.broadcast({ t: "hello", name: myName, look: myLook });
@@ -733,6 +782,7 @@ function openCustomization() {
   updateLookPreview();
   lookPreview?.start();
   skinMessage = "";
+  accessoryMessage = "";
   refreshMyKills();
 }
 

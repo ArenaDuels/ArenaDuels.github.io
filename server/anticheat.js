@@ -173,7 +173,10 @@ function wallPenetration(solids, x, z, y) {
 
 // Does the flat (x/z) move from A to B cut through a wall-like block?
 function moveCutsWall(solids, ax, az, ay, bx, bz, by) {
-  const feet = Math.min(ay, by) - REST;
+  // Judge by the HIGHER end of the move: someone who jumps up and over a crate crosses it in an arc
+  // (up first, then across), but the straight line between the two samples would clip its corner.
+  // A block only counts as a wall if you stay below its top at both ends.
+  const feet = Math.max(ay, by) - REST;
   const s = TUNING.TUNNEL_SHRINK;
   for (const b of solids) {
     if (b.maxY <= feet + STEP) continue;
