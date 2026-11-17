@@ -15,7 +15,7 @@ export const MOVE = {
   GROUND_ACCEL: 15,               // how fast you reach run speed on the ground (higher = snappier; never changes top speed)
   AIR_ACCEL: 1,                   // pm_airaccelerate
   FRICTION: 8,                    // ground friction while you are holding a move key (must stay below GROUND_ACCEL or top speed drops)
-  STOP_FRICTION: 30,              // ground friction once you let go of every move key: stops you a little faster than you speed up
+  STOP_FRICTION: 15,              // ground friction once you let go of every move key: stops you a little faster than you speed up
   STOP_SPEED: 100 * UNIT_SCALE,  // pm_stopspeed: friction treats you as at least this fast
   GRAVITY: 800 * UNIT_SCALE,     // g_gravity
   JUMP_VEL: 270 * UNIT_SCALE,    // JUMP_VELOCITY
