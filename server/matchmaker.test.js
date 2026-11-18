@@ -5,7 +5,7 @@ import fs from "node:fs";
 import { Matchmaker, MATCHMAKING as M } from "./matchmaker.js";
 import { GAME_MODES, MODE_IDS, getMode, isValidModeId } from "./modes.js";
 
-const ARENAS = ["classic", "foundry", "ruins", "neon", "mansion", "glacier"];
+const ARENAS = ["classic", "foundry", "ruins", "neon", "mansion", "glacier", "alley"];
 const player = (name) => ({ id: name });
 
 // A matchmaker with a fake clock. `random` can be scripted to force particular choices.

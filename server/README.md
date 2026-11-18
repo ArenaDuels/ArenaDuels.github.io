@@ -285,3 +285,8 @@ by code (`sessions.js`).
 
 What this does *not* stop: two accounts queueing together to feed each other wins, and a player's connection
 dropping (that counts as leaving). Fixing those needs rating or reporting systems, not just counting.
+
+**Backstreets** (`alley`) is a 120x120 city-block map: houses, narrow alleys and avenues full of
+cars. Its textures and thumbnail are made by `tools/alley/` (`texgen.py`, `thumb.py`); check the
+layout with `node tools/glacier/check-arena.mjs alley`. Keep `server/arenas/alley.js` a copy of
+`js/arenas/alley.js`.
