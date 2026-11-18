@@ -222,40 +222,6 @@ def tex_dumpster(rng):
     return corrugated(rng, (28, 80, 52), (52, 128, 84))
 
 
-def vehicle(rng, rgb, glass=(26, 34, 46), glass_frac=0.4, stripe=None, light=(250, 240, 210)):
-    """A tile as tall as the vehicle: skirt at the bottom, paint, a glass band at the top.
-    Image row 0 is the top of the block."""
-    x, y = grid()
-    g0 = int(N * glass_frac)
-    skirt0 = int(N * 0.88)
-    base = fbm(N, 6, 4, rng)
-    paint = mix(col(*[v * 0.88 for v in rgb]), col(*rgb), smoothstep(0.2, 0.8, base))
-    # gloss gradient: lighter just under the glass
-    gloss = np.exp(-((y - g0 - 30) / 70.0) ** 2) * 0.22
-    a = paint * (1 + gloss[:, :, None])
-    a = mix(a, col(*glass), (y < g0).astype(np.float32))
-    shine = np.exp(-((x * 0.6 + y - 120) % 340 - 20) ** 2 / 600.0) * (y < g0)
-    a = mix(a, col(120, 142, 168), shine * 0.35)
-    # window pillar every half tile
-    pil = ((np.abs(np.mod(x, N / 2) - N / 4) < 5) & (y < g0)).astype(np.float32)
-    a = mix(a, paint[0, 0][None, None, :] * 0.8 + 0, pil)
-    # door seams + handles
-    seam = ((np.abs(np.mod(x, N / 2)) < 2) & (y >= g0) & (y < skirt0)).astype(np.float32)
-    a = mix(a, col(20, 20, 22), seam * 0.7)
-    handle = rect(x, y, N / 2 - 60, g0 + 40, N / 2 - 30, g0 + 50)
-    a = mix(a, col(210, 210, 214), handle)
-    # skirt
-    a = mix(a, col(24, 24, 26), (y >= skirt0).astype(np.float32))
-    if stripe:
-        sy0, sy1 = int(N * 0.62), int(N * 0.70)
-        a = mix(a, col(*stripe), rect(x, y, 0, sy0, N, sy1))
-    # dust
-    a = mix(a, col(120, 112, 100), grime(N, rng, 1.0, 5) * 0.25)
-    a = mix(a, col(30, 28, 26), streaks(N, rng, 22, 0.35, 1.0) * 0.2)
-    h = 0.5 + 0.15 * seam - 0.1 * pil
-    return finish(a, h, rng, 2.0)
-
-
 TEXTURES = {
     "floor": tex_floor, "road": tex_road,
     "paint_yellow": lambda r: tex_paint(r, (226, 182, 34)),
@@ -263,12 +229,6 @@ TEXTURES = {
     "wall": tex_wall, "brick": tex_brick, "stucco": tex_stucco, "brownstone": tex_brownstone,
     "dock": tex_dock, "escape": tex_escape, "pole": tex_pole,
     "crate": tex_crate, "dumpster": tex_dumpster,
-    "car_red": lambda r: vehicle(r, (170, 34, 36)),
-    "car_blue": lambda r: vehicle(r, (36, 74, 150)),
-    "car_yellow": lambda r: vehicle(r, (232, 184, 30), stripe=(24, 24, 26)),
-    "car_silver": lambda r: vehicle(r, (168, 174, 182)),
-    "van_white": lambda r: vehicle(r, (224, 224, 220), glass_frac=0.3, stripe=(40, 90, 160)),
-    "bus": lambda r: vehicle(r, (214, 168, 28), glass_frac=0.42, stripe=(24, 24, 26)),
 }
 BUMPED = {"floor", "road", "wall", "brick", "stucco", "brownstone", "dock", "escape", "crate", "dumpster"}
 

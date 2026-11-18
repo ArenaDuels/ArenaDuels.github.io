@@ -26,9 +26,8 @@ def proj(x, y, z, s, ox, oy):
 pts = []
 for x in (-half, half):
     for z in (-half, half):
-        for y in (0, A['wallHeight'] + 2):
+        for y in (0, max(p['h'] for p in A['props']) + 2):
             pts.append(proj(x, y, z, 1, 0, 0))
-pts.append(proj(0, 18, 0, 1, 0, 0))
 minx, maxx = min(p[0] for p in pts), max(p[0] for p in pts)
 miny, maxy = min(p[1] for p in pts), max(p[1] for p in pts)
 margin = 14 * SS
