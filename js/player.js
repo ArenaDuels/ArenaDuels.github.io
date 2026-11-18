@@ -22,6 +22,10 @@ export const MOVE = {
   // true: holding jump keeps hopping every time you land. false: you must
   // let go of jump and press it again for each hop.
   AUTO_HOP: true,
+  // Horizontal speed you can have while jumping, as a fraction of run speed.
+  // Jumping clamps you to this and air steering can't build past it, so
+  // holding space (hopping) is slower than just running: no bunny-hop speed.
+  JUMP_SPEED_CAP: 0.85,
   RADIUS: 0.5,
   // The capsule (CapsuleGeometry(0.5, 1.2, ...)) is 2.2 units tall total
   // and centered on its own position, so its "head" top is 1.1 above
@@ -60,7 +64,8 @@ function applyAccel(vel, wx, wz, wishSpeed, accel, dt) {
 export function moveStep(vel, st, wx, wz, hasInput, jumpKey, dt) {
   if (!jumpKey) st.jumpHeld = false;
   if (st.onGround && jumpKey && (MOVE.AUTO_HOP || !st.jumpHeld)) {
-    vel.y = MOVE.JUMP_VEL; // sets (not adds) upward speed; horizontal speed is untouched
+    vel.y = MOVE.JUMP_VEL; // sets (not adds) upward speed
+    clampHorizontal(vel, MOVE.WISH_SPEED * MOVE.JUMP_SPEED_CAP);
     st.onGround = false;
     st.jumpHeld = true;
   }
@@ -68,8 +73,17 @@ export function moveStep(vel, st, wx, wz, hasInput, jumpKey, dt) {
     applyFriction(vel, hasInput ? MOVE.FRICTION : MOVE.STOP_FRICTION, dt);
     if (hasInput) applyAccel(vel, wx, wz, MOVE.WISH_SPEED, MOVE.GROUND_ACCEL, dt);
   } else if (hasInput) {
-    applyAccel(vel, wx, wz, MOVE.WISH_SPEED, MOVE.AIR_ACCEL, dt);
+    const cap = MOVE.WISH_SPEED * MOVE.JUMP_SPEED_CAP;
+    const before = Math.hypot(vel.x, vel.z);
+    applyAccel(vel, wx, wz, cap, MOVE.AIR_ACCEL, dt);
+    // Air steering can't take you past the jump cap (but never slows an outside push that already did).
+    if (before <= cap) clampHorizontal(vel, cap);
   }
+}
+
+function clampHorizontal(vel, max) {
+  const sp = Math.hypot(vel.x, vel.z);
+  if (sp > max) { vel.x *= max / sp; vel.z *= max / sp; }
 }
 
 // Match-wide values the host can change (Match Settings). Health bars and

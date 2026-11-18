@@ -14,7 +14,8 @@ import { RoomGuard } from "./anticheat.js";
 import { getArena } from "./arenas.js";
 
 const Q = 0.044;
-const MOVE = { WISH_SPEED: 320 * Q * 1.1, GROUND_ACCEL: 15, AIR_ACCEL: 1, FRICTION: 8, STOP_SPEED: 100 * Q, GRAVITY: 800 * Q, JUMP_VEL: 270 * Q, AUTO_HOP: true, STOP_FRICTION: 30, RADIUS: 0.5 };
+function clampH(v, max) { const s = Math.hypot(v.x, v.z); if (s > max) { v.x *= max / s; v.z *= max / s; } }
+const MOVE = { WISH_SPEED: 320 * Q * 1.1, GROUND_ACCEL: 15, AIR_ACCEL: 1, FRICTION: 8, STOP_SPEED: 100 * Q, GRAVITY: 800 * Q, JUMP_VEL: 270 * Q, AUTO_HOP: true, JUMP_SPEED_CAP: 0.85, STOP_FRICTION: 30, RADIUS: 0.5 };
 
 // Small deterministic random numbers so a failure can be reproduced.
 function rng(seed) {
@@ -61,6 +62,7 @@ class Body {
     if (!jumpPressed) this.jumpHeld = false;
     if (this.onGround && jumpPressed && (MOVE.AUTO_HOP || !this.jumpHeld)) {
       v.y = MOVE.JUMP_VEL;
+      clampH(v, MOVE.WISH_SPEED * MOVE.JUMP_SPEED_CAP);
       this.onGround = false;
       this.jumpHeld = true;
     }
@@ -84,7 +86,10 @@ class Body {
       }
       if (has) accelerate(MOVE.WISH_SPEED, MOVE.GROUND_ACCEL);
     } else if (has) {
-      accelerate(MOVE.WISH_SPEED, MOVE.AIR_ACCEL);
+      const cap = MOVE.WISH_SPEED * MOVE.JUMP_SPEED_CAP;
+      const before = Math.hypot(v.x, v.z);
+      accelerate(cap, MOVE.AIR_ACCEL);
+      if (before <= cap) clampH(v, cap);
     }
     const vy1 = v.y - MOVE.GRAVITY * dt;
     v.y = (v.y + vy1) / 2;
