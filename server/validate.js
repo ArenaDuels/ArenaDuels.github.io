@@ -8,7 +8,7 @@
 // been through cleanRelay() (gameplay messages) or one of the helpers below.
 
 import { SKIN_IDS } from "./skins.js";
-export const ARENA_IDS = ["classic", "foundry", "ruins", "neon", "mansion", "glacier", "alley"];
+export const ARENA_IDS = ["classic", "foundry", "ruins", "neon", "mansion", "glacier", "alley", "dock"];
 export const MAX_NAME_LEN = 16;
 export const MAX_BOTS = 8;
 export const MAX_SNAP_ENTRIES = 16;

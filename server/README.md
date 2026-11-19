@@ -290,3 +290,8 @@ dropping (that counts as leaving). Fixing those needs rating or reporting system
 cars. Its textures and thumbnail are made by `tools/alley/` (`texgen.py`, `thumb.py`); check the
 layout with `node tools/glacier/check-arena.mjs alley`. Keep `server/arenas/alley.js` a copy of
 `js/arenas/alley.js`.
+
+**Dock** (`dock`) is a 48x48 pier over open sea. Its textures and thumbnail come from `tools/dock/`
+(the crates are Glacier's). The edge is an invisible wall (a wall with a 7th entry of `"invisible"`)
+plus drawn-only `decor` and an `ocean` plane, which the client draws and the server ignores.
+Keep `server/arenas/dock.js` a copy of `js/arenas/dock.js`, and update the server whenever it changes.

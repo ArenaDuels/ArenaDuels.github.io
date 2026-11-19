@@ -1978,6 +1978,8 @@ async function buildModernArena(arena) {
     "floor", "wall",
     ...(arena.props ?? []).map((p) => p.type),
     ...(arena.floors ?? []).map((f) => f.type),
+    ...(arena.decor ?? []).map((p) => p.type),
+    ...(arena.ocean ? ["water"] : []),
   ]);
   const materials = {};
   await Promise.all(
@@ -2044,8 +2046,38 @@ async function buildModernArena(arena) {
     arenaObjects.push(patch);
   }
 
-  for (const [w, h, d, x, y, z] of arena.walls) addBox("wall", w, h, d, x, y, z);
+  // A wall with a 7th entry of "invisible" blocks movement and shots but isn't drawn, so you can
+  // see past it (the sea beyond a pier's railings).
+  for (const [w, h, d, x, y, z, flag] of arena.walls) {
+    if (flag === "invisible") wallBoxes.push(new THREE.Box3(new THREE.Vector3(x - w / 2, y - h / 2, z - d / 2), new THREE.Vector3(x + w / 2, y + h / 2, z + d / 2)));
+    else addBox("wall", w, h, d, x, y, z);
+  }
   for (const p of arena.props ?? []) addBox(p.type, p.w, p.h, p.d, p.x, p.y, p.z);
+
+  // Scenery you can't touch: drawn, but with no collision (railings, the edge of a quay).
+  for (const p of arena.decor ?? []) {
+    const mesh = new THREE.Mesh(makeBoxGeometry(p.w, p.h, p.d, tileFor(p.type)), materials[p.type]);
+    mesh.position.set(p.x, p.y, p.z);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    scene.add(mesh);
+    arenaObjects.push(mesh);
+  }
+
+  // A sea reaching to the horizon, lying below the floor.
+  if (arena.ocean) {
+    const o = arena.ocean;
+    const geo = new THREE.PlaneGeometry(o.size, o.size);
+    const uv = geo.attributes.uv;
+    const reps = o.size / (o.tile ?? 16);
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * reps, uv.getY(i) * reps);
+    const sea = new THREE.Mesh(geo, materials.water);
+    sea.rotation.x = -Math.PI / 2;
+    sea.position.y = o.y ?? -1.2;
+    sea.receiveShadow = true;
+    scene.add(sea);
+    arenaObjects.push(sea);
+  }
 }
 
 async function buildArena(arena) {
