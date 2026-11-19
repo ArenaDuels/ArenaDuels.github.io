@@ -1980,6 +1980,7 @@ async function buildModernArena(arena) {
     ...(arena.floors ?? []).map((f) => f.type),
     ...(arena.decor ?? []).map((p) => p.type),
     ...(arena.ocean ? ["water"] : []),
+    ...(arena.ceiling ? ["ceiling"] : []),
   ]);
   const materials = {};
   await Promise.all(
@@ -2062,6 +2063,30 @@ async function buildModernArena(arena) {
     mesh.receiveShadow = true;
     scene.add(mesh);
     arenaObjects.push(mesh);
+  }
+
+  // A ceiling over the whole map (a cave roof). Drawn only: nothing can jump that high, and
+  // shots that go up simply keep going.
+  if (arena.ceiling) {
+    const c = arena.ceiling;
+    const size = arena.floorSize + 2;
+    const geo = new THREE.PlaneGeometry(size, size);
+    const uv = geo.attributes.uv;
+    const reps = size / tileFor("ceiling");
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * reps, uv.getY(i) * reps);
+    const roof = new THREE.Mesh(geo, materials.ceiling);
+    roof.rotation.x = Math.PI / 2; // faces down
+    roof.position.y = c.y;
+    scene.add(roof);
+    arenaObjects.push(roof);
+  }
+
+  // Point lights (crystals, lamps...) for dark maps. Keep them few: each one costs on every surface.
+  for (const l of arena.lights ?? []) {
+    const light = new THREE.PointLight(l.color, l.intensity, l.distance ?? 0, l.decay ?? 2);
+    light.position.set(l.x, l.y, l.z);
+    scene.add(light);
+    arenaObjects.push(light);
   }
 
   // A sea reaching to the horizon, lying below the floor.

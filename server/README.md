@@ -295,3 +295,8 @@ layout with `node tools/glacier/check-arena.mjs alley`. Keep `server/arenas/alle
 (the crates are Glacier's). The edge is an invisible wall (a wall with a 7th entry of `"invisible"`)
 plus drawn-only `decor` and an `ocean` plane, which the client draws and the server ignores.
 Keep `server/arenas/dock.js` a copy of `js/arenas/dock.js`, and update the server whenever it changes.
+
+**Cave** (`cave`) is an 80x80 dark cavern under a ceiling 16 up. Its textures and thumbnail come from
+`tools/cave/`. The client draws the ceiling (`ceiling`), the hanging stalactites (`decor`) and nine
+point lights (`lights`); the server ignores all three, so keep `server/arenas/cave.js` a copy of
+`js/arenas/cave.js` and update the server whenever it changes.

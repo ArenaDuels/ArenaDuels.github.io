@@ -6,11 +6,12 @@ import mansion from "./arenas/mansion.js";
 import glacier from "./arenas/glacier.js";
 import alley from "./arenas/alley.js";
 import dock from "./arenas/dock.js";
+import cave from "./arenas/cave.js";
 import training from "./arenas/training-room.js";
 
 // `training` is here so getArena("training") works, but it is left out of ARENA_LIST on purpose: it is not a match arena.
-export const ARENAS = { classic, foundry, ruins, neon, mansion, glacier, alley, dock, training };
-export const ARENA_LIST = [classic, foundry, ruins, neon, mansion, glacier, alley, dock];
+export const ARENAS = { classic, foundry, ruins, neon, mansion, glacier, alley, dock, cave, training };
+export const ARENA_LIST = [classic, foundry, ruins, neon, mansion, glacier, alley, dock, cave];
 
 export function getArena(id) {
   return Object.hasOwn(ARENAS, id) ? ARENAS[id] : ARENAS.classic;
