@@ -508,7 +508,7 @@ function handleData(rawMsg, fromId) {
     // The server says that position wasn't possible: go back to where it has us.
     if (local) {
       local.tp = msg.tp;
-      local.reconcileTo(msg.x, msg.y, msg.z); // eases the camera if it is a small correction
+      local.teleportTo(msg.x, msg.y, msg.z);
     }
   } else if (msg.t === "end") {
     // The relay can end Find Match games when departures leave one player/team.
@@ -2694,7 +2694,7 @@ function loop() {
   const alpha = physicsAccumulator / FIXED_DT;
 
   local.updateLook();
-  local.interpolateView(alpha, dt);
+  local.interpolateView(alpha);
   if (botManager) botManager.interpolate(alpha);
 
   for (const rp of players.values()) rp.update(dt, camera, arenaObjects);

@@ -453,14 +453,7 @@ wss.on("connection", (ws, req) => {
   }, NO_ROOM_TIMEOUT_MS);
 
   ws.on("error", () => {}); // e.g. oversized frame — the socket is closed for us; just don't crash
-  ws.on("pong", () => {
-    ws.alive = true;
-    // How long that ping took to come back is this player's round-trip time; the shot lag compensation uses it.
-    if (ws.pingAt && ws.room) {
-      rooms.get(ws.room)?.guard.setRtt(ws.id, Date.now() - ws.pingAt);
-    }
-    ws.pingAt = 0;
-  });
+  ws.on("pong", () => { ws.alive = true; });
 
   ws.on("message", (raw, isBinary) => {
     try {
@@ -1132,16 +1125,6 @@ setInterval(() => {
   console.log(`[anticheat:${ANTICHEAT}] last minute: ${parts}`);
   rejectCounts.clear();
 }, 60_000).unref();
-
-// Measure everyone's round-trip time (for lag compensation): a ping every two seconds to each player in a room.
-setInterval(() => {
-  for (const ws of wss.clients) {
-    if (ws.room && ws.readyState === ws.OPEN && !ws.pingAt) {
-      ws.pingAt = Date.now();
-      ws.ping();
-    }
-  }
-}, 2000).unref();
 
 // Drop connections that stopped answering pings (half-open sockets pile up otherwise).
 setInterval(() => {

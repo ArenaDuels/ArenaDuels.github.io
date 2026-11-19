@@ -300,23 +300,3 @@ Keep `server/arenas/dock.js` a copy of `js/arenas/dock.js`, and update the serve
 `tools/cave/`. The client draws the ceiling (`ceiling`), the hanging stalactites (`decor`) and nine
 point lights (`lights`); the server ignores all three, so keep `server/arenas/cave.js` a copy of
 `js/arenas/cave.js` and update the server whenever it changes.
-
-## Netcode
-
-- **Client-side prediction.** You move yourself immediately (`PlayerController.updatePhysics`); the
-  server never makes you wait for it. It only *checks* where you say you are (`anticheat.js`).
-- **Server reconciliation.** If the server doesn't accept a position it sends `correct` with where
-  you really are. The client takes that position at once, but if it is within 3 m of where you
-  were drawn the camera eases over about 140 ms instead of jumping (`reconcileTo`).
-- **Snapshot interpolation.** Other players (and bots) are drawn `NET.INTERP_DELAY_MS` (100 ms, two
-  updates) in the past, blended between the two timestamped snapshots either side of that
-  moment (`RemotePlayer._sampleAt`). If updates run late it carries on at the last speed for at
-  most 100 ms. Respawns and teleports (over 10 m) are not smoothed.
-- **Lag compensation.** The relay measures each player's round-trip time with a WebSocket ping every
-  two seconds. When it judges a beam it rewinds the targets to where the shooter saw them: the
-  shooter's round trip plus `TUNING.INTERP_DELAY_MS`, capped at `MAX_REWIND_MS` (350 ms), and
-  counts a hit if the target was in the line within `REWIND_TOL_MS` (100 ms) of that moment.
-
-`NET.INTERP_DELAY_MS` (js/player.js) and `TUNING.INTERP_DELAY_MS` (server/anticheat.js) must stay
-equal; `netcode.test.js` checks that. Put the new `server/anticheat.js` and `server/index.js` on the
-server and restart it; the website and the server can be updated in either order.

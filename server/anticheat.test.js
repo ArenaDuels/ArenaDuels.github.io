@@ -1,8 +1,7 @@
 // Run with:  cd server && npm test
 import test from "node:test";
 import assert from "node:assert/strict";
-import { RoomGuard, TUNING, positionAt } from "./anticheat.js";
-const TUNING_MAX_REWIND_FOR_TEST = TUNING.MAX_REWIND_MS - TUNING.INTERP_DELAY_MS;
+import { RoomGuard } from "./anticheat.js";
 import { cleanRelay, SERVER_ONLY } from "./validate.js";
 
 const FACE_PLUS_X = -Math.PI / 2;  // yaw that looks toward +x
@@ -440,85 +439,14 @@ test("joining or restarting gives a short window to appear at a spawn point", ()
   assert.ok(put("host", -12, 14).correct);
 });
 
-test("a target who steps out of the line of fire is still hit for the moment the shooter still saw them there", () => {
+test("a cheater who 'jumps' out of the line of fire is still hit where the server last accepted them", () => {
   const { put, clock, run, hp } = setup();
   put("host", -10, 0, FACE_PLUS_X);
   put("p2", 10, 0, FACE_MINUS_X);
   clock.now += 50;
-  put("p2", 10, 14); // leap sideways out of the line of fire
+  put("p2", 10, 14); // cheat: leap sideways out of the line of fire
   run(1, { hostFiring: true });
-  // the shooter's screen showed them in the line for the round trip plus the interpolation delay (about 0.3 s)...
-  assert.ok(hp("p2") < 95, `should be hit while they were still seen there, got ${hp("p2")}`);
-  // ...but not for the whole second
-  assert.ok(hp("p2") > 80, `should stop being hit once the shooter would have seen them move, got ${hp("p2")}`);
-});
-
-// ================================================================ lag compensation
-
-// p2 stands in the line of fire, then steps out of it; how much damage does a one second burst do?
-function damageAfterStepOut(rtt) {
-  const { g, put, clock, run, hp } = setup();
-  if (rtt !== undefined) g.setRtt("host", rtt);
-  put("host", -10, 0, FACE_PLUS_X);
-  put("p2", 10, 0, FACE_MINUS_X);
-  clock.now += 50;
-  put("p2", 10, 14);
-  run(1, { hostFiring: true });
-  return 100 - hp("p2");
-}
-
-test("a shooter with a slower connection is judged against an older view of the target", () => {
-  const fast = damageAfterStepOut(20);
-  const slow = damageAfterStepOut(250);
-  assert.ok(slow > fast + 4, `slow ${slow.toFixed(1)} should be more than fast ${fast.toFixed(1)}`);
-});
-
-test("rewinding is capped, so a very laggy shooter cannot hit someone long after they took cover", () => {
-  const capped = damageAfterStepOut(2000);
-  const atCap = damageAfterStepOut(TUNING_MAX_REWIND_FOR_TEST);
-  assert.ok(Math.abs(capped - atCap) < 1.5, `capped ${capped.toFixed(1)} vs at the cap ${atCap.toFixed(1)}`);
-  assert.ok(capped < 25, `got ${capped.toFixed(1)}`);
-});
-
-test("a target moving across the view is hit where the shooter saw them, not where they are now", () => {
-  const { g, put, clock, hp } = setup();
-  g.setRtt("host", 100); // so the shooter sees the world 200 ms ago (100 ms round trip + 100 ms interpolation)
-  // p2 runs along z at 10 m/s, reporting every 50 ms; the host aims where p2 was 200 ms ago
-  let z = -5;
-  let hits = 0;
-  for (let i = 0; i < 40; i++) {
-    clock.now += 50;
-    z += 0.5;
-    put("p2", 10, z, FACE_MINUS_X);
-    const seenZ = z - 2; // 200 ms ago = 2 m back
-    const yaw = Math.atan2(-20, -seenZ);   // aim from (-10,0) at (10, seenZ): the view direction is (-sin yaw, -cos yaw)
-    put("host", -10, 0, yaw, { firing: true });
-    if (i > 8) { const before = hp("p2"); g.tick(clock.now); if (hp("p2") < before) hits++; }
-  }
-  assert.ok(hits > 20, `expected steady hits on the lagged position, got ${hits}`);
-});
-
-test("positionAt blends between the two recorded samples either side of a moment", () => {
-  const hist = [{ t: 0, x: 0, y: 0, z: 0 }, { t: 100, x: 10, y: 0, z: 20 }, { t: 200, x: 10, y: 4, z: 20 }];
-  assert.deepEqual(positionAt(hist, 50), { t: 50, x: 5, y: 0, z: 10 });
-  assert.equal(positionAt(hist, -10).x, 0);       // before the first: the first
-  assert.equal(positionAt(hist, 999).y, 4);       // after the last: the last
-  assert.equal(positionAt([], 5), null);
-});
-
-test("setRtt ignores nonsense and smooths real measurements", () => {
-  const { g } = setup();
-  const a = g.actors.get("host");
-  g.setRtt("host", NaN);
-  g.setRtt("host", -5);
-  g.setRtt("nobody", 50);
-  assert.equal(a.rttKnown, false);
-  g.setRtt("host", 40);
-  assert.equal(a.rtt, 40);              // the first measurement is taken as it is
-  g.setRtt("host", 140);
-  assert.ok(a.rtt > 40 && a.rtt < 140); // then smoothed
-  g.setRtt("host", 1e9);
-  assert.ok(a.rtt < 2000);
+  assert.ok(hp("p2") < 80, `got ${hp("p2")}`);
 });
 
 // ===================================================================== bots
