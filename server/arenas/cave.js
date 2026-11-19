@@ -4,8 +4,8 @@
 //
 //   - The CENTRE: a worn stone plateau (1.92 high, a stair on each side) around a tall glowing
 //     crystal spire. The high ground, and the brightest place on the map.
-//   - Four LOBES (east, west, north, south) of open cavern, each with a glowing pool, a crystal,
-//     and a few boulders (2.0, with a taller 4.0 one beside it to climb).
+//   - Four LOBES (east, west, north, south) of open cavern, each with a glowing pool and a crystal.
+//     No boulders or boxes: it's all aim, nothing to peek round.
 //   - Four CORNER HIDEOUTS: rock walls (floor to ceiling) with a doorway at each end, an amber lamp
 //     and a crystal inside, and two spawn points. Eight spawns in all.
 //   - Floor-to-ceiling PILLARS on the diagonals to break up the long sightlines.
@@ -33,12 +33,8 @@ const quarter = [
   block("rock", 30.5, 24, 10, 3, H),          // 25.5..35.5; the gap beyond it to the outer wall is the doorway
   block("crystal", 31, 31, 1.8, 1.8, 2.4),    // inside the hideout
 
-  // ---- a lobe (the east one, x 22.5..40); the same is made for the other three by swapping ----
+  // ---- a crystal in each lobe (the east one is at x 30; the others come from swapping) ----
   block("crystal", 30, 0, 2, 2, 3.2),
-  block("rock", 31, 10, 3, 3, 2.0),
-  block("rock", 33.7, 10, 2.4, 2.4, 4.0),     // a taller one right beside it: hop up
-  block("rock", 27, 15.5, 3, 3, 2.0),
-  block("rock", 36, 17, 2.4, 2.4, 2.0),
 ];
 
 // ---- stalactites: not solid, just hanging from the ceiling ----

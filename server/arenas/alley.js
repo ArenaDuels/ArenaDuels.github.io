@@ -3,30 +3,21 @@
 // down the avenues that you cross at a run.
 //
 //   - Two AVENUES (14 wide) cross in the middle at a small plaza, and a RING ROAD runs round the
-//     edge. Crates, dumpsters and low barriers are left on them for cover.
+//     edge. They're left bare: no crates, barriers or lamps, so it's all aim and no peeking.
 //   - Twelve SKYSCRAPERS (30–46 high) and four low HOUSES (8) fill the blocks between the roads.
 //     You can't get in, and the towers are walls you can't climb. Each block is cut by 5-wide
-//     ALLEYS with dumpsters and crates.
+//     (empty) ALLEYS.
 //   - One low house (north-east, on the alley) has a way up: hop on the crate, then the loading
 //     dock, then the two fire-escape landings, and step onto the roof. The roof has a taller back
 //     wing for cover and looks down the alley and over the street.
-//   - Street lamps along the pavements are thin cover.
 //
-// The towers and houses are mirrored four ways (a mirror image across each avenue). The street
-// and alley clutter is also the same when you swap x and z.
+// The towers and houses are mirrored four ways (a mirror image across each avenue).
 
 import { block, perimeter, spawnAt, mirror4 } from "./helpers.js";
 
 const T = "./assets/textures/alley/";
 
 // Swap x and z (a diagonal mirror). Blocks are axis-aligned, so width and depth swap too.
-const swap = (p) => ({ ...p, x: p.z, z: p.x, w: p.d, d: p.w });
-// Mirror a north-east quarter four ways and across the diagonal. Things on the diagonal are
-// not doubled.
-const sym8 = (list) => mirror4(list.flatMap((p) => (p.x === p.z ? [p] : [p, swap(p)])));
-
-const lamp = (x, z) => block("pole", x, z, 0.5, 0.5, 7);
-
 // ---- the buildings: 18×18 blocks with 5-wide alleys between them (29..34) and 4 of pavement to
 // the avenue. Three towers and one low house in each quarter.
 const buildings = [
@@ -46,34 +37,6 @@ const roofClimb = [
   block("escape", 17.5, 33.3, 3, 1.4, 7.0),
   block("dumpster", 30.2, 33.1, 2.4, 1.4, 1.6), // junk piled by the crate
 ];
-
-// ---- cover in the alleys and streets; the north-east quarter, mirrored and swapped ----
-const clutter = [
-  // alleys (the one along x, z 29..34; swapping gives the one along z)
-  block("dumpster", 14.5, 30.2, 2.4, 1.4, 1.6),
-  block("crate", 22, 29.8, 1.6, 1.6, 2.0),
-  block("dumpster", 38.5, 32.7, 2.4, 1.4, 1.6),
-  block("crate", 46, 30.3, 1.6, 1.6, 2.0),
-  block("crate", 47.7, 30.3, 1.6, 1.6, 2.0),
-  block("crate", 31.5, 31.5, 1.8, 1.8, 2.0),  // the alley crossing
-
-  // the avenue along z (x 0..7)
-  block("dock", 3.0, 20, 1.0, 3.2, 1.1),      // low barrier
-  block("crate", 4.6, 34, 1.8, 1.8, 2.0),
-  block("dumpster", 2.6, 46, 1.4, 2.4, 1.6),
-  lamp(8.6, 16),
-  lamp(8.6, 38),
-
-  // the ring road (x 52..60)
-  block("dock", 54.5, 18, 1.0, 3.2, 1.1),
-  block("dumpster", 57.5, 36, 1.4, 2.4, 1.6),
-  block("crate", 55, 46, 1.8, 1.8, 2.0),
-  block("crate", 57, 57, 2, 2, 2.0),          // the corner
-  block("dock", 54.2, 56.5, 3, 1.2, 1.1),
-];
-
-// the fountain in the plaza
-const centre = [block("dock", 0, 0, 4, 4, 1.2)];
 
 // ---- visual-only ground: roads, and the paint on them ----
 const floors = [
@@ -133,7 +96,7 @@ export default {
   bumpScale: 1.5,
   tile: {
     default: 4, floor: 8, road: 8, paint_yellow: 2, paint_white: 2,
-    wall: 8, brick: 8, stucco: 8, brownstone: 8, dock: 4, escape: 2, pole: 2,
+    wall: 8, brick: 8, stucco: 8, brownstone: 8, dock: 4, escape: 2,
     crate: 2, dumpster: 2,
   },
   material: {
@@ -147,21 +110,20 @@ export default {
     brownstone: { roughness: 0.9, metalness: 0 },
     dock: { roughness: 0.95, metalness: 0 },
     escape: { roughness: 0.55, metalness: 0.6 },
-    pole: { roughness: 0.5, metalness: 0.6 },
     crate: { roughness: 0.8, metalness: 0.05 },
     dumpster: { roughness: 0.6, metalness: 0.4 },
   },
   fallbackColors: {
     floor: 0xb0aea8, road: 0x44464a, paint_yellow: 0xe2b622, paint_white: 0xe8e8e2,
     wall: 0x7a4e40, brick: 0xa8503a, stucco: 0xe0cfa8, brownstone: 0x7a5f4e,
-    dock: 0x908e88, escape: 0x3a3e44, pole: 0x2c3036, crate: 0x9a6b3a, dumpster: 0x2f6a46,
+    dock: 0x908e88, escape: 0x3a3e44, crate: 0x9a6b3a, dumpster: 0x2f6a46,
   },
 
   floors,
 
   walls: perimeter(120, 12),
 
-  props: [...centre, ...mirror4(buildings), ...roofClimb, ...sym8(clutter)],
+  props: [...mirror4(buildings), ...roofClimb],
 
   spawns: [
     // on the ring road, between the cars
