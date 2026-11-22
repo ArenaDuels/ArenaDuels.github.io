@@ -43,6 +43,15 @@ export const TUNING = Object.freeze({
   AIM_SLACK_PER_M: 0,       // no distance-based expansion of the hit area
   WALL_SHRINK: 0.12,
   RANGE_MARGIN: 12,
+  // --- lag compensation ---
+  // A player sees everyone INTERP_DELAY_MS in the past (the client draws other players that far behind,
+  // see NET in js/player.js: keep the two equal) and on top of that their messages take time to
+  // travel. So when we judge their shot we rewind the target to where the shooter saw it: the
+  // shooter's round-trip time plus the interpolation delay before the state that carried the shot.
+  INTERP_DELAY_MS: 100,
+  MAX_REWIND_MS: 350,        // never rewind further than this (a very laggy player can't shoot around corners)
+  REWIND_TOL_MS: 100,        // how far either side of the rewound moment a position still counts
+  DEFAULT_RTT_MS: 100,       // until we have measured the connection
   // --- history (lag tolerance) ---
   SAMPLE_GAP_MS: 40,
   HISTORY_MS: 1200,
@@ -241,6 +250,8 @@ class Actor {
     this.supports = [];       // recent { t, top }: the surfaces we've been over lately
     this.safe = null;         // last accepted position that was near the ground
     this.lastCorrectAt = 0;
+    this.rtt = TUNING.DEFAULT_RTT_MS; // round-trip time to this player (ms), measured by the relay
+    this.rttKnown = false;
   }
 
   last() {
@@ -258,6 +269,20 @@ class Actor {
     }
     while (this.hist.length && sample.t - this.hist[0].t > TUNING.HISTORY_MS) this.hist.shift();
   }
+}
+
+/** Where an actor was at time `t`, blended between the two recorded samples either side of it. */
+export function positionAt(hist, t) {
+  const n = hist.length;
+  if (n === 0) return null;
+  if (t <= hist[0].t) return hist[0];
+  if (t >= hist[n - 1].t) return hist[n - 1];
+  let i = n - 2;
+  while (i > 0 && hist[i].t > t) i--;
+  const a = hist[i];
+  const b = hist[i + 1];
+  const f = b.t === a.t ? 0 : (t - a.t) / (b.t - a.t);
+  return { t, x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, z: a.z + (b.z - a.z) * f };
 }
 
 function takeFrom(bucket, now, rate, cap, wanted) {
@@ -316,6 +341,18 @@ export class RoomGuard {
   }
 
   // ---- roster / host events ----
+
+  /**
+   * Tell the guard how long a round trip to this player takes (ms), as measured by the relay. Smoothed,
+   * so one slow packet doesn't swing the lag compensation.
+   */
+  setRtt(id, ms) {
+    const a = this.actors.get(id);
+    if (!a || !Number.isFinite(ms) || ms < 0) return;
+    const sample = Math.min(2000, ms);
+    a.rtt = a.rttKnown ? a.rtt * 0.7 + sample * 0.3 : sample;
+    a.rttKnown = true;
+  }
 
   addMember(id, now = Date.now()) {
     if (this.actors.has(id)) return;
@@ -518,16 +555,36 @@ export class RoomGuard {
   // ---- the beam ----
 
   // Can a ray from (ox,oy,oz) along d reach `tgt` — near one of its recent positions, with a clear line?
-  #rayVsTarget(ox, oy, oz, dx, dy, dz, tgt, now) {
+  // With `rewindT` (lag compensation) only where the target was around that moment counts; without it
+  // (a bot shooting a player) any recent position does.
+  #rayVsTarget(ox, oy, oz, dx, dy, dz, tgt, now, rewindT = null) {
     const T = TUNING;
     const { boxes, maxRange } = this.geo;
     let sawRange = false;
     let sawAim = false;
 
-    for (let j = tgt.hist.length - 1; j >= 0; j--) {
-      const t = tgt.hist[j];
-      if (now - t.t > (tgt.isBot ? T.BOT_TARGET_WINDOW_MS : T.TARGET_WINDOW_MS)) break;
+    // the positions to try, newest first
+    let tries;
+    if (rewindT === null) {
+      tries = [];
+      for (let j = tgt.hist.length - 1; j >= 0; j--) {
+        const t = tgt.hist[j];
+        if (now - t.t > (tgt.isBot ? T.BOT_TARGET_WINDOW_MS : T.TARGET_WINDOW_MS)) break;
+        tries.push(t);
+      }
+    } else {
+      tries = [];
+      const exact = positionAt(tgt.hist, rewindT);
+      if (exact) tries.push(exact);
+      for (let j = tgt.hist.length - 1; j >= 0; j--) {
+        const t = tgt.hist[j];
+        if (t.t > rewindT + T.REWIND_TOL_MS) continue;
+        if (t.t < rewindT - T.REWIND_TOL_MS) break;
+        tries.push(t);
+      }
+    }
 
+    for (const t of tries) {
       const dist = Math.hypot(t.x - ox, t.y - oy, t.z - oz);
       if (dist > maxRange) continue;
       sawRange = true;
@@ -564,13 +621,16 @@ export class RoomGuard {
     const oy = s.y + TUNING.EYE_HEIGHT;
     const oz = s.z;
     const [dx, dy, dz] = aimDirection(s.yaw, s.pitch);
+    // Lag compensation: judge the shot against where the shooter saw everyone, not where they are now.
+    const rewind = Math.min(TUNING.MAX_REWIND_MS, Math.max(0, shooter.rtt + TUNING.INTERP_DELAY_MS));
+    const rewindT = s.t - rewind;
     let best = null;
     let bestDist = Infinity;
     for (const c of this.actors.values()) {
       if (c === shooter) continue;
       if (this.teams.has(shooter.id) && this.teams.get(shooter.id) === this.teams.get(c.id)) continue;
       if (c.isBot ? !this.#botAlive(c, now) : !c.alive) continue;
-      const r = this.#rayVsTarget(ox, oy, oz, dx, dy, dz, c, now);
+      const r = this.#rayVsTarget(ox, oy, oz, dx, dy, dz, c, now, rewindT);
       if (r.pass && r.dist < bestDist) {
         best = c;
         bestDist = r.dist;

@@ -198,11 +198,12 @@ class Target {
 export class TrainingSession {
   // makeTarget(color, name) -> a RemotePlayer (or anything shaped like one).
   // onHud(info) is called every frame; onFinish(result) once, when the drill ends.
-  constructor({ camera, makeTarget, onHud = () => {}, onFinish = () => {} }) {
+  constructor({ camera, makeTarget, onHud = () => {}, onFinish = () => {}, onDown = () => {} }) {
     this.camera = camera;
     this.makeTarget = makeTarget;
     this.onHud = onHud;
     this.onFinish = onFinish;
+    this.onDown = onDown; // a target went down: onDown(position), for the death sound
     this.targets = [];
     this.drillId = null;
     this.phase = "idle"; // idle | ready | run | done
@@ -423,6 +424,7 @@ export class TrainingSession {
   }
 
   #trackingKill(t) {
+    this.onDown(t.rp?.mesh?.position);
     this.score += 1;
     t.show(false);
     t.respawn = 0.4;
@@ -555,6 +557,7 @@ export class TrainingSession {
   }
 
   #takedown(t) {
+    this.onDown(t.rp?.mesh?.position);
     this.score += 1;
     t.show(false);
     t.timer = 0.6; // brief pause before the next one

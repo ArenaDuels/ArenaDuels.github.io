@@ -1,1 +1,335 @@
-readme
+# ArenaDuels relay server
+
+A tiny WebSocket relay. No WebRTC, no STUN/TURN, no NAT traversal —
+just plain WebSocket over TCP (port 443 once deployed with HTTPS), which
+passes through essentially any router or firewall without special
+configuration, since it looks identical to normal web traffic.
+
+## Deploy it (free) — Render.com
+
+1. Push this whole project (including this `server/` folder) to GitHub —
+   you're already doing that.
+2. Go to [render.com](https://render.com) → sign in with GitHub.
+3. **New +** → **Web Service** → pick your repo.
+4. Settings:
+   - **Root Directory:** `server`
+   - **Runtime:** Node
+   - **Build Command:** `npm install`
+   - **Start Command:** `npm start`
+   - **Instance Type:** Free
+5. Click **Deploy**. Render will give you a URL like
+   `https://capsules-relay.onrender.com`.
+6. Your WebSocket URL is the same thing with `wss://` instead of `https://`:
+   `wss://capsules-relay.onrender.com`
+
+Open `js/net.js` in the client project and set:
+```js
+const SERVER_URL = "wss://capsules-relay.onrender.com";
+```
+
+## Heads up: free tier sleeps
+
+Render's free tier spins the server down after ~15 minutes of no traffic,
+and takes 30-60 seconds to wake back up on the next connection. That means
+the *first* Host/Join after a while idle might time out or feel slow —
+just try again once it's woken up. Fine for a hobby project; if this
+becomes a real problem, either upgrade to a paid instance or ping the
+server periodically to keep it warm (e.g. an external uptime-monitor
+service hitting the URL every 10 minutes).
+
+## Alternatives
+
+Railway and Fly.io both work the same way (Node + `ws`, no special
+WebSocket config needed) if you'd rather not use Render. A $5/mo VPS
+(DigitalOcean, etc.) also works and doesn't sleep, if you outgrow the
+free tier.
+
+## Running it locally to test
+
+```
+cd server
+npm install
+npm start
+```
+Then in `js/net.js`, temporarily set:
+```js
+const SERVER_URL = "ws://localhost:8080";
+```
+(No `s` in `ws://` for local plain HTTP — switch back to `wss://` once
+you point at your real deployed HTTPS server.)
+
+## Security settings
+
+The relay treats every client as untrusted. Built in (no setup needed):
+message size cap (8 KB), per-connection rate limit, 8 connections per IP,
+strict validation of every gameplay message, host-only messages enforced,
+no impersonation of other players, brute-force limiting on room codes.
+
+Optional environment variables:
+
+- `ALLOWED_ORIGINS` — comma-separated list of sites allowed to connect.
+  Defaults to `https://arenaduels.github.io` only. Connections from any other
+  website (or with no Origin header) are refused. Add extra entries here if you
+  need local testing, e.g. `https://arenaduels.github.io,http://localhost:5500`.
+- `TRUST_PROXY` — whether to believe Cloudflare's `CF-Connecting-IP` header for per-IP limits.
+  On Render it is on automatically (Render sets `RENDER=true`); everywhere else it is **off** and the
+  real connection address is used. Set `TRUST_PROXY=1` only on a host that is genuinely behind
+  Cloudflare (Railway and Fly.io are not), and `0` to force it off. Trusting the header on a host
+  that isn't behind Cloudflare lets anyone fake an address and bypass every per-IP limit.
+
+`server/validate.js` is an identical copy of `js/validate.js`. If you change
+the message rules, copy the file to both places.
+
+## The server runs the fight (anticheat.js)
+
+The server is now the authority on health, hits, deaths and respawns. Browsers
+still simulate their own movement (so it stays smooth) but no longer decide
+anything that matters:
+
+- **Hits and damage:** browsers don't report hits at all. They say where they are,
+  where they're aiming and whether the trigger is held. About 30 times a second
+  the server works out who each beam is on (aim, range, walls in the way, with a
+  little lag allowance) and takes 40 damage per second off them. Health steal is
+  applied here too.
+- **Health, deaths, respawns:** the server keeps everyone's health, announces each
+  kill (and who gets it), waits out the respawn delay and puts the player back at a
+  spawn point it picks. Other players see the server's health number, not the
+  player's own claim.
+- **Movement:** every reported position is checked: top speed (21 m/s, honest play
+  peaks at ~19.75), saved-up allowance for lag (~1s), arena bounds, walking into or
+  through walls, jump height and hovering. A position that can't be real is thrown
+  away and the player is snapped back (`correct` message).
+- **Bots** run on the host's browser, so the host still owns them. A bot shooting a
+  player is checked (aim, line of sight, damage rate) and then applied to that
+  player's health by the server. A player's beam on a bot is forwarded to the host.
+  The host announces bot deaths, once per life.
+
+Everyone's health is announced by the server the moment it changes (`health` messages),
+not read from each player's own position updates. That matters because browsers slow
+the timers of a hidden or covered window to about once a second, so a player whose
+window is behind another one reports their position (and used to report their health)
+only once a second. If you test with two windows on one computer and maximize one, the
+covered window's player will still look jerky to the other (that's the browser, not the
+game) but their health bar now moves smoothly. Side by side, or a second device, avoids it.
+
+What this does *not* stop: an aimbot (perfect aim sent as honest-looking aim), a
+modified client that simply plays well within the movement limits (for example
+~20% faster than normal running), or the host cheating with their own bots and
+score. Aim and the host are the two things a relay has to trust.
+
+Environment variable `ANTICHEAT`:
+
+- `enforce` (default): impossible movement is undone, impossible bot shots refused.
+- `log`: movement problems and bot shots are only counted, nothing is undone.
+  Use it to look for false positives before enforcing.
+
+(`off` no longer exists: the game depends on the server for health.)
+
+Once a minute the server prints a line like
+`[anticheat:enforce] last minute: move:speed=12 bot-hit:off-target=3`
+(nothing is printed when nothing was rejected).
+
+The browser and the server must be deployed together: an older cached copy of the
+game doesn't understand the server's health and respawn messages.
+
+## Matchmaking (matchmaker.js, modes.js)
+
+**Find Match** on the main menu: pick a game mode, search, vote on the map, play.
+
+- **Game modes** (`js/modes.js`): 1v1, Free For All (2 to 5 players) and Team Deathmatch.
+  Each is a preset of the match rules the host of a private game can already change (time limit,
+  kills to win, health, health steal, respawn delay). To add or tweak one, edit the list in
+  `modes.js` and copy it to `js/modes.js` / `server/modes.js` (identical copies; a test checks).
+- **No skill-based matchmaking.** Everyone searching the same mode is in one queue, and the queue
+  knows nothing about anyone's kills, wins, rank or account. First come, first matched.
+- **Forming a match:** with two players waiting, the queue holds for 10 seconds so more can join
+  (up to four). A fourth player starts it at once. Searches that find nobody for 10 minutes end.
+- **Map vote:** three random maps are offered for 15 seconds, with live vote counts. The most
+  votes wins; ties and empty ballots are settled at random. It ends early once everyone has voted.
+- **Starting the game:** the server makes a private room. The player who has waited longest is the
+  host (their browser runs the clock and scores, as in any match). The others are let in only
+  once the host's browser has finished building the map, so nobody joins a half-loaded game. If
+  the host never gets ready (30 seconds) or leaves, everyone else is put back in line, ahead of
+  anyone who started searching since. If a player leaves mid-vote and fewer than two remain, the
+  vote is called off and the rest go back to searching.
+
+Settings (all optional): `MATCH_FILL_SECONDS` (default 10), `MATCH_VOTE_SECONDS` (default 15),
+`MATCH_READY_TIMEOUT_SECONDS` (default 30).
+
+Each mode has its own player cap (1v1 two, Free For All five, Team Deathmatch eight). Games already running don't take
+new players from the queue.
+
+## Account names (names.js, nameTickets.js)
+
+Every name the game hands out is **Adjective + Noun + two digits**, like `SwiftViper42`
+or `GallantCheetah98`: 274 adjectives x 320 nouns x 88 numbers = about **7.7 million**
+different names, all at most 16 characters. Guests get one at random in the browser;
+account names come from the server.
+
+You can't create an account with a name you made up:
+
+1. The dice button asks the server for a name. The server picks one at random,
+   checks it's free, and signs it (a "name ticket", good for 15 minutes).
+2. Signing up needs the name **and** its ticket. The server refuses a name that
+   isn't one the generator can produce, and a name without a valid ticket for that
+   exact name, so a script can't pick `NovaViper99` for itself.
+3. Each address can roll 60 names per 10 minutes, so nobody can sit rolling
+   thousands of times to cherry-pick one. (Rolling a few times until you like what
+   you get is how the dice button is meant to work.)
+
+Old accounts (one word + two digits, like `Blaze42`) keep working at sign-in; that
+style just isn't handed out any more. The numbers 69 and 88 are never handed out,
+and a few word pairs that run together into something rude are banned. `npm test`
+scans **every** pair of words for that, so adding a word that creates a new accident
+fails the tests.
+
+Setting: `NAME_TICKET_SECRET` — a long random string (any 30+ characters). Without
+it the server makes up a temporary one at start-up: fine for one server, but name
+offers still open at a restart stop working (the page just rolls a new name).
+
+`js/names.js` and `server/names.js` are identical copies (a test checks that). To add
+words, edit one and copy it over the other.
+
+The map list includes **Glacier**, a 112x112 map (more than five times Foundry's floor) for
+three or four players. Its art and layout tools are in `tools/glacier/`.
+
+`server/arenas.js` and `server/arenas/` are identical copies of `js/arenas.js`
+and `js/arenas/`. **If you change an arena's walls or props, copy the files to
+both places** — otherwise the server checks line of sight against old walls.
+
+Run the tests with `cd server && npm test`. `movement-replay.test.js` replays random
+honest play through a port of the browser's physics on every arena and fails if the
+movement rules would ever flag it; if you change the movement numbers in
+`js/player.js`, update the port at the top of that file and re-run.
+
+
+## Optional username/password accounts
+
+The game remains playable as a guest. The account system is optional and uses randomly generated names (the register UI allows rerolling); it does not ask for email.
+
+Render setup:
+- Secret File: `/etc/secrets/firebase-service-account.json`
+- Environment variable: `GOOGLE_APPLICATION_CREDENTIALS=/etc/secrets/firebase-service-account.json`
+- Environment variable: `FIREBASE_PROJECT_ID=arenaduels-7dc31`
+- Keep the service-account JSON out of Git and never put it in the browser bundle.
+- Firebase Authentication must be enabled for the project; the client signs in with server-created Firebase custom tokens.
+- Firestore client rules should remain deny-all. The server uses Admin SDK access.
+- The server stores password hashes made with scrypt plus per-account random salts, never plaintext passwords.
+- Account creation and login are served from `/api/auth/register` and `/api/auth/login`; `/api/auth/random-name` returns an available generated name.
+- Every WebSocket connection must now send either `authenticate` with a Firebase **ID token** or `authenticate_guest` before it can list lobbies, create/join a room, search, or send gameplay messages.
+- For signed-in players, the relay verifies the ID token with Firebase Admin, looks up `arenaAccounts/{uid}`, and uses that Firestore username for the player's network identity. It does not trust the username supplied by the browser.
+- Guests remain supported. Guest display names are checked against `arenaUsernames`; a guest cannot take a registered account's username.
+- The browser sends the Firebase ID token only; it never sends the account password or the Firebase custom sign-in token over WebSocket.
+
+There is no email-based password recovery in this version. If a password is lost, the account cannot currently be recovered.
+
+
+### Cloudflare Turnstile for account registration
+
+- The registration form uses the public Turnstile site key configured in `index.html`.
+- Add a Render environment variable named `TURNSTILE_SECRET_KEY` with the widget's **secret key**. Never commit the secret key to GitHub or put it in browser code.
+- The server validates every registration token against Cloudflare Siteverify and checks that the returned hostname is `arenaduels.github.io`. Login and guest play do not require a challenge.
+- If you recreate the Turnstile widget or change hostnames, update the site key and server-side hostname check accordingly.
+
+
+## Custom matches
+
+**Custom Match** on the main menu is one settings screen: game mode, rules, bots, public or private,
+whether a code is needed, and the map. **Create Match** sends all of it in one `create_room` message
+and the host is in the game straight away.
+
+- Public matches are listed in **Browse Public Lobbies**. If a code is required, the list shows a
+  lock and does not include the code.
+- Private matches are never listed and always need the code.
+- In Team Deathmatch you choose the bots' team (Balanced, Blue or Red; the host is always Blue). Bots never fight their own team.
+
+
+## Stats and leaderboards (stats.js)
+
+Signed-in players get **kills, deaths, wins and losses**, shown on the **Profile** screen, plus two
+**leaderboards** (most kills, most wins). Both are on the main menu.
+
+- **Only Find Match games count.** The server makes a score-keeper (`MatchTally`) only when it builds a
+  matchmade room, so a custom match (public or private) never touches anyone's stats.
+- **Only accounts are saved.** A guest has no identity to keep numbers under. Guests still count in
+  the tally, so the winner is worked out from everyone who played.
+- **The server keeps score, not the host's browser.** Kills come from the same events that run the
+  fight. When the host says the game is over, the server only believes it if the score limit was really
+  reached, or the time limit really ran out (give or take a few seconds), and the match lasted at least
+  30 seconds. Otherwise the ending is ignored and nobody gets a win or loss (the log says
+  `[stats] ignored an "score" ending`). In matchmade rooms the host also can't change the rules: the
+  mode's own settings are always used.
+- **Who wins:** most kills, then fewest deaths. An exact tie at the top is a draw (no win or loss for
+  anyone). Team Deathmatch: the team with more kills wins; equal is a draw.
+- **Leaving loses.** Anyone who leaves a Find Match game that is still going gets a loss, even if they
+  were winning (their kills and deaths are saved too). If that leaves nobody to play against (a 1v1, the
+  last player in a free-for-all, a whole team), the players still in win, as long as the game had been
+  going for 30 seconds. Leaving after the game is over (on the scoreboard) is never a loss. If a match
+  never finishes for other reasons, kills and deaths are kept but nobody else gets a win or loss.
+- **Storage:** Firestore collection `arenaStats`, one document per account (`uid`, `username`, `kills`,
+  `deaths`, `wins`, `losses`, `matches`). Written by the server with increments, never by browsers, so
+  the "deny-all" client rules stay as they are. No new environment variables and no manual index.
+  Existing accounts start at zero.
+- **API (read-only):** `GET /api/leaderboard?board=kills|wins` (public, cached 30 s) and
+  `GET /api/stats/me` (needs the signed-in player's token). Both are rate limited per address.
+
+The lobby list always starts with an **Always Open** lobby (Free For All, 5 players, 3 bots, 10-minute games
+that restart by themselves; the preset is `FEATURED_LOBBY` in `modes.js`). Nobody hosts it full time: the
+first player to click it opens it and their browser runs the bots and the clock, so it closes when that
+player leaves and goes back on the list as an empty slot. The relay builds the room from the preset, so a
+client can't pick its own rules for it.
+
+One account can only be in one place at a time: a second tab signed in as the same account
+can't search while the first is searching, loading or in a room, and can't join that account's match
+by code (`sessions.js`).
+
+What this does *not* stop: two accounts queueing together to feed each other wins, and a player's connection
+dropping (that counts as leaving). Fixing those needs rating or reporting systems, not just counting.
+
+**Backstreets** (`alley`) is a 120x120 city-block map: houses, narrow alleys and avenues full of
+cars. Its textures and thumbnail are made by `tools/alley/` (`texgen.py`, `thumb.py`); check the
+layout with `node tools/glacier/check-arena.mjs alley`. Keep `server/arenas/alley.js` a copy of
+`js/arenas/alley.js`.
+
+**Dock** (`dock`) is a 48x48 pier over open sea. Its textures and thumbnail come from `tools/dock/`
+(the crates are Glacier's). The edge is an invisible wall (a wall with a 7th entry of `"invisible"`)
+plus drawn-only `decor` and an `ocean` plane, which the client draws and the server ignores.
+Keep `server/arenas/dock.js` a copy of `js/arenas/dock.js`, and update the server whenever it changes.
+
+**Cave** (`cave`) is an 80x80 dark cavern under a ceiling 16 up. Its textures and thumbnail come from
+`tools/cave/`. The client draws the ceiling (`ceiling`), the hanging stalactites (`decor`) and nine
+point lights (`lights`); the server ignores all three, so keep `server/arenas/cave.js` a copy of
+`js/arenas/cave.js` and update the server whenever it changes.
+
+## Netcode
+
+- **Client-side prediction.** You move yourself immediately (`PlayerController.updatePhysics`); the
+  server never makes you wait for it. It only *checks* where you say you are (`anticheat.js`).
+- **Server reconciliation.** If the server doesn't accept a position it sends `correct` with where
+  you really are. The client takes that position at once, but if it is within 3 m of where you
+  were drawn the camera eases over about 140 ms instead of jumping (`reconcileTo`).
+- **Snapshot interpolation.** Other players (and bots) are drawn `NET.INTERP_DELAY_MS` (100 ms, two
+  updates) in the past, blended between the two timestamped snapshots either side of that
+  moment (`RemotePlayer._sampleAt`). If updates run late it carries on at the last speed for at
+  most 100 ms. Respawns and teleports (over 10 m) are not smoothed.
+- **Lag compensation.** The relay measures each player's round-trip time with a WebSocket ping every
+  two seconds. When it judges a beam it rewinds the targets to where the shooter saw them: the
+  shooter's round trip plus `TUNING.INTERP_DELAY_MS`, capped at `MAX_REWIND_MS` (350 ms), and
+  counts a hit if the target was in the line within `REWIND_TOL_MS` (100 ms) of that moment.
+
+`NET.INTERP_DELAY_MS` (js/player.js) and `TUNING.INTERP_DELAY_MS` (server/anticheat.js) must stay
+equal; `netcode.test.js` checks that. Put the new `server/anticheat.js` and `server/index.js` on the
+server and restart it; the website and the server can be updated in either order.
+
+## Sound
+
+`js/audio.js` makes every sound in the browser with the Web Audio API (no audio files). There are
+three: the laser gun (a deep plasma rumble that runs while a trigger is held; other players' beams are
+placed in 3D), the laser hit (an electric-arc sizzle that runs while *your* beam is on a player or a
+training target) and one death sound for everyone (a power-down: a tone that slows like a stopping
+tape, a deep boom and sparks; for other players it comes from where they died). The sizzle and the
+sparks are generated once, when sound is unlocked (`makeSizzleSamples`, `makeSparkSamples`).
+`main.js` calls `updateSfx` every frame and `applyKill` for deaths. The "Sound Effects" slider in
+settings sets the volume (saved with the other settings). Browsers only allow sound after a click
+or key press, so it unlocks on the first one. `audio.test.js` checks every sound starts and stops
+cleanly against a fake audio device, and that the sizzle is a real crackly loop.

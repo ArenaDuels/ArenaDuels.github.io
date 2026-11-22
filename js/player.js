@@ -90,6 +90,22 @@ function clampHorizontal(vel, max) {
 // respawns read maxHp from here so everyone agrees on what "full" means.
 export const GAME = { maxHp: 100 };
 
+// Netcode. Other players are drawn a little in the past (INTERP_DELAY_MS), blended between the two
+// network snapshots either side of that moment, so their movement is smooth even though updates
+// only come 20 times a second. The relay server rewinds shots by the same amount when it judges
+// whether a beam hit (see TUNING.INTERP_DELAY_MS in server/anticheat.js: keep the two equal).
+export const NET = Object.freeze({
+  INTERP_DELAY_MS: 100,    // how far behind the newest snapshot other players are drawn (two updates)
+  MAX_EXTRAPOLATE_MS: 100, // if updates run late, carry on at the last speed for at most this long
+  TELEPORT_DIST: 10,       // a jump bigger than this (respawn, server move) is not smoothed
+  BUFFER_MS: 1000,         // how much history to keep
+  CORRECTION_SMOOTH_MS: 140, // how long the view takes to ease out a small server correction
+  CORRECTION_SMOOTH_MAX_M: 3, // bigger corrections than this just snap
+});
+
+const wrapAngle = (a) => ((a + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+const lerpAngle = (a, b, f) => a + wrapAngle(b - a) * f;
+
 // Builds a glossy "Tic Tac" capsule mesh in the given color.
 export function makeCapsuleMesh(color) {
   const mat = new THREE.MeshPhysicalMaterial({
@@ -595,6 +611,7 @@ export class PlayerController {
     // motion looks perfectly smooth regardless of display Hz.
     this.viewRoot = new THREE.Object3D();
     scene.add(this.viewRoot);
+    this.viewOffset = new THREE.Vector3(); // eases a server correction out of the camera (see reconcileTo)
 
     this.camPivot = new THREE.Object3D();
     this.camPivot.position.set(0, MOVE.EYE_HEIGHT, 0);
@@ -743,8 +760,14 @@ export class PlayerController {
   // eliminates the stutter — physics stepping alone only makes each
   // individual step consistent, it doesn't make the steps line up with
   // however often the screen redraws.
-  interpolateView(alpha) {
+  interpolateView(alpha, dt = 0) {
     this.viewRoot.position.lerpVectors(this.prevPos, this.mesh.position, alpha);
+    if (this.viewOffset.lengthSq() > 1e-8) {
+      // the camera is still easing out a small server correction
+      this.viewRoot.position.add(this.viewOffset);
+      this.viewOffset.multiplyScalar(Math.exp(-(dt * 1000) / (NET.CORRECTION_SMOOTH_MS / 3)));
+      if (this.viewOffset.lengthSq() < 1e-6) this.viewOffset.set(0, 0, 0);
+    }
   }
 
   // Physics/movement — called with a FIXED dt from a timestep accumulator
@@ -806,7 +829,18 @@ export class PlayerController {
     this.mesh.position.set(x, y, z);
     this.prevPos.copy(this.mesh.position);
     this.viewRoot.position.copy(this.mesh.position);
+    this.viewOffset.set(0, 0, 0);
     this.vel.set(0, 0, 0);
+  }
+
+  // Server reconciliation: the server has told us where we really are. We always take its position
+  // (it is the authority), but if it is close to where we drew ourselves the camera eases over
+  // instead of jumping, so a small correction doesn't feel like a glitch. Big ones just snap.
+  reconcileTo(x, y, z) {
+    const from = this.viewRoot.position.clone();
+    this.teleportTo(x, y, z);
+    const off = from.sub(this.mesh.position);
+    if (off.length() <= NET.CORRECTION_SMOOTH_MAX_M) this.viewOffset.copy(off);
   }
 
   // Returns true if this hit was the killing blow.
@@ -867,6 +901,12 @@ export class RemotePlayer {
     this.targetPitch = 0;
     this.firing = false;
     this.visible = true;
+    // Timestamped network snapshots, oldest first. While it is empty (training dummies, the host's own
+    // bots) the player eases toward targetPos/targetYaw instead.
+    this.snaps = [];
+    this.shownYaw = 0;
+    this.shownPitch = 0;
+    this.shownFiring = false;
 
     this.accessory = null;
     this.accessoryKey = "";
@@ -931,13 +971,58 @@ export class RemotePlayer {
     this.targetPitch = state.pitch;
     this.hp = state.hp;
     this.firing = state.firing;
+    const now = performance.now();
+    const last = this.snaps[this.snaps.length - 1];
     if (state.hp <= 0) {
       this.setVisible(false);
-    } else if (!this.visible) {
-      // Respawned — snap straight there instead of lerping across the map.
+      this.snaps.length = 0;
+      return;
+    }
+    if (!this.visible) {
+      // Respawned — snap straight there instead of gliding across the map.
+      this.snaps.length = 0;
       this.mesh.position.copy(this.targetPos);
       this.setVisible(true);
+    } else if (last && Math.hypot(state.x - last.x, state.y - last.y, state.z - last.z) > NET.TELEPORT_DIST) {
+      this.snaps.length = 0;   // a teleport: start the history again
+      this.mesh.position.copy(this.targetPos);
     }
+    // Stamp it with when it arrived. (Always later than the one before, so the buffer stays in order.)
+    const t = last ? Math.max(now, last.t + 1) : now;
+    this.snaps.push({ t, x: state.x, y: state.y, z: state.z, yaw: state.yaw, pitch: state.pitch, firing: state.firing });
+    while (this.snaps.length > 2 && t - this.snaps[1].t > NET.BUFFER_MS) this.snaps.shift();
+  }
+
+  // Where this player should be drawn at time `rt` (performance.now() minus the interpolation delay):
+  // blended between the two snapshots either side of it. If we have run out of snapshots (late
+  // packets) it carries on at the last speed for a moment, then holds still.
+  _sampleAt(rt) {
+    const s = this.snaps;
+    const n = s.length;
+    if (n === 0) return null;
+    const newest = s[n - 1];
+    if (n === 1 || rt <= s[0].t) return s[0];
+    if (rt >= newest.t) {
+      const prev = s[n - 2];
+      const span = newest.t - prev.t;
+      const ahead = Math.min(rt - newest.t, NET.MAX_EXTRAPOLATE_MS);
+      if (span <= 0 || ahead <= 0) return newest;
+      const k = ahead / span;
+      return {
+        x: newest.x + (newest.x - prev.x) * k, y: newest.y + (newest.y - prev.y) * k, z: newest.z + (newest.z - prev.z) * k,
+        yaw: lerpAngle(newest.yaw, newest.yaw + wrapAngle(newest.yaw - prev.yaw), k), pitch: newest.pitch + (newest.pitch - prev.pitch) * k,
+        firing: newest.firing,
+      };
+    }
+    let i = n - 2;
+    while (i > 0 && s[i].t > rt) i--;
+    const a = s[i], b = s[i + 1];
+    const f = (rt - a.t) / (b.t - a.t);
+    return {
+      x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, z: a.z + (b.z - a.z) * f,
+      yaw: lerpAngle(a.yaw, b.yaw, f), pitch: a.pitch + (b.pitch - a.pitch) * f,
+      firing: a.firing,    // a beam shows from the snapshot it was reported in
+    };
   }
 
   // Health straight from the server (a "health" message), which doesn't wait for this player's own
@@ -968,15 +1053,31 @@ export class RemotePlayer {
 
   // `solids` = the arena's walls and floor. Beams stop at them, so you can't see a laser go through a wall.
   update(dt, camera, solids = null) {
-    const t = Math.min(1, dt * 12);
-    this.mesh.position.lerp(this.targetPos, t);
-    this.mesh.rotation.y += (this.targetYaw - this.mesh.rotation.y) * t;
-    // The remote weapon is a separate child of the body. Apply the networked
-    // camera pitch to it too; otherwise the body turns but the gun stays level.
-    this.heldGun.rotation.x += (this.targetPitch - this.heldGun.rotation.x) * t;
-    // The head looks up and down with the player's aim (positive pitch = up).
-    const headTarget = Math.max(-ROBOT.HEAD_PITCH_MAX, Math.min(ROBOT.HEAD_PITCH_MAX, this.targetPitch));
-    this.headPivot.rotation.x += (headTarget - this.headPivot.rotation.x) * t;
+    const snap = this._sampleAt(performance.now() - NET.INTERP_DELAY_MS);
+    if (snap) {
+      // Snapshot interpolation: drawn where they were INTERP_DELAY_MS ago, smoothly between updates.
+      this.mesh.position.set(snap.x, snap.y, snap.z);
+      this.mesh.rotation.y = snap.yaw;
+      this.shownYaw = snap.yaw;
+      this.shownPitch = snap.pitch;
+      this.shownFiring = snap.firing;
+      this.heldGun.rotation.x = snap.pitch;
+      this.headPivot.rotation.x = Math.max(-ROBOT.HEAD_PITCH_MAX, Math.min(ROBOT.HEAD_PITCH_MAX, snap.pitch));
+    } else {
+      // No snapshots (a training dummy or one of our own bots): ease toward where we were told to be.
+      const t = Math.min(1, dt * 12);
+      this.mesh.position.lerp(this.targetPos, t);
+      this.mesh.rotation.y += (this.targetYaw - this.mesh.rotation.y) * t;
+      // The remote weapon is a separate child of the body. Apply the networked
+      // camera pitch to it too; otherwise the body turns but the gun stays level.
+      this.heldGun.rotation.x += (this.targetPitch - this.heldGun.rotation.x) * t;
+      // The head looks up and down with the player's aim (positive pitch = up).
+      const headTarget = Math.max(-ROBOT.HEAD_PITCH_MAX, Math.min(ROBOT.HEAD_PITCH_MAX, this.targetPitch));
+      this.headPivot.rotation.x += (headTarget - this.headPivot.rotation.x) * t;
+      this.shownYaw = this.targetYaw;
+      this.shownPitch = this.targetPitch;
+      this.shownFiring = this.firing;
+    }
 
     if (this.visible && this.hp > 0) {
       this.hpBar.position.copy(this.mesh.position);
@@ -986,12 +1087,12 @@ export class RemotePlayer {
       this.nameSprite.position.copy(this.mesh.position);
       this.nameSprite.position.y += 1.85;
 
-      if (this.firing) {
+      if (this.shownFiring) {
         // Read the actual barrel muzzle in world space. This includes the
         // body yaw, weapon pitch, weapon offset and weapon scale.
         const origin = new THREE.Vector3();
         this.gunMuzzle.getWorldPosition(origin);
-        const dir = dirFromYawPitch(this.targetYaw, this.targetPitch);
+        const dir = dirFromYawPitch(this.shownYaw, this.shownPitch);
         let end = origin.clone().addScaledVector(dir, 50);
         let hitWall = false;
         if (solids && solids.length) {
@@ -1011,7 +1112,7 @@ export class RemotePlayer {
       } else {
         this.laser.visible = false;
       }
-      animateGun(this.heldGun, this.firing, performance.now() / 1000);
+      animateGun(this.heldGun, this.shownFiring, performance.now() / 1000);
     }
   }
 }
