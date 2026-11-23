@@ -1639,3 +1639,40 @@ body.training-mode #hud-hp-corner { display: none !important; }
 
 /* Inside the desktop app the game hides the cursor itself while it has the mouse. */
 body.native-mouse, body.native-mouse * { cursor: none !important; }
+
+/* =====================================================================
+   ABOUT (a closed section on the front page: plain text for people and search engines)
+===================================================================== */
+.home-about {
+  margin-top: 22px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  text-align: left;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.home-about summary {
+  cursor: pointer;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  list-style: none;
+}
+.home-about summary::-webkit-details-marker { display: none; }
+.home-about summary:hover, .home-about summary:focus-visible { color: var(--mint); }
+.home-about[open] summary { margin-bottom: 12px; }
+.about-body p { margin: 0 0 12px; }
+.about-body h2 {
+  margin: 16px 0 6px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--mint);
+}
+.about-body ul { margin: 0 0 8px; padding-left: 18px; }
+.about-body li { margin: 0 0 3px; }
+.about-body strong { color: var(--mint); font-weight: 600; }

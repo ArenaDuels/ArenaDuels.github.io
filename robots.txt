@@ -1,3 +1,7 @@
 User-agent: *
 Allow: /
+# the game's code and tooling are not pages
+Disallow: /server/
+Disallow: /tools/
+
 Sitemap: https://arenaduels.github.io/sitemap.xml

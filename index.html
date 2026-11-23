@@ -4,18 +4,29 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Arena Duels — Free Browser Arena Shooter</title>
-<meta name="description" content="Play Arena Duels, a free browser-based arena shooter. Choose an arena, customize your player, fight bots, or host and join multiplayer matches with friends.">
+<meta name="description" content="Play Arena Duels, a free browser arena shooter: no download. Pick an arena, customize your player, fight bots, or host and join multiplayer matches with friends.">
 <link rel="canonical" href="https://arenaduels.github.io/">
 <link rel="modulepreload" href="vendor/three/three.module.min.js">
+<link rel="preconnect" href="https://arenaduels-relay.onrender.com" crossorigin>
+<link rel="preconnect" href="https://www.gstatic.com" crossorigin>
 <meta name="robots" content="index, follow, max-image-preview:large">
 <meta name="theme-color" content="#0a0a0d">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Arena Duels">
+<meta property="og:url" content="https://arenaduels.github.io/">
+<meta property="og:locale" content="en_US">
 <meta property="og:title" content="Arena Duels — Free Browser Arena Shooter">
-<meta property="og:description" content="Choose an arena, customize your player, fight bots, and host or join multiplayer matches in this free browser arena shooter.">
-<meta name="twitter:card" content="summary">
+<meta property="og:description" content="Choose an arena, customize your player, fight bots, and host or join multiplayer matches in this free browser arena shooter. No download.">
+<meta property="og:image" content="https://arenaduels.github.io/og-image.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Arena Duels, a free browser arena shooter, shown with four of its arenas.">
+<meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Arena Duels — Free Browser Arena Shooter">
-<meta name="twitter:description" content="A free browser arena shooter with customizable players, bots, multiple arenas, and multiplayer matches.">
+<meta name="twitter:description" content="A free browser arena shooter with customizable players, bots, multiple arenas, and multiplayer matches. No download.">
+<meta name="twitter:image" content="https://arenaduels.github.io/og-image.png">
+<meta name="twitter:image:alt" content="Arena Duels, a free browser arena shooter, shown with four of its arenas.">
 <meta name="application-name" content="Arena Duels">
 <link rel="icon" type="image/svg+xml" href="./favicon.svg">
 <link rel="icon" type="image/png" sizes="64x64" href="./favicon.png">
@@ -24,25 +35,50 @@
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
-  "@type": "VideoGame",
-  "name": "Arena Duels",
-  "description": "A free browser-based arena shooter with customizable players, bots, multiple arenas, and multiplayer matches.",
-  "genre": ["Action", "Shooter"],
-  "playMode": ["SinglePlayer", "MultiPlayer"],
-  "gamePlatform": "Web browser",
-  "applicationCategory": "Game"
+  "@graph": [
+    {
+      "@type": "WebSite",
+      "@id": "https://arenaduels.github.io/#website",
+      "url": "https://arenaduels.github.io/",
+      "name": "Arena Duels",
+      "inLanguage": "en"
+    },
+    {
+      "@type": "VideoGame",
+      "@id": "https://arenaduels.github.io/#game",
+      "name": "Arena Duels",
+      "url": "https://arenaduels.github.io/",
+      "description": "A free browser-based arena shooter with customizable players, bots, multiple arenas, and multiplayer matches. No download needed.",
+      "image": "https://arenaduels.github.io/og-image.png",
+      "genre": ["Action", "Shooter"],
+      "playMode": ["SinglePlayer", "MultiPlayer"],
+      "gamePlatform": "Web browser",
+      "applicationCategory": "Game",
+      "operatingSystem": "Any (runs in a web browser)",
+      "inLanguage": "en",
+      "isAccessibleForFree": true,
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD",
+        "availability": "https://schema.org/InStock"
+      },
+      "isPartOf": { "@id": "https://arenaduels.github.io/#website" }
+    }
+  ]
 }
 </script>
 </head>
 <body>
+  <noscript><p style="position:relative;z-index:10;color:#edf2ff;font-family:sans-serif;padding:16px">Arena Duels is a free first-person arena shooter that runs in your web browser. It needs JavaScript turned on to play.</p></noscript>
   
   <!-- ===================== MAIN MENU ===================== -->
   <div id="screen-menu" class="screen menu-screen">
     <button id="btn-settings" class="settings-btn" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/><circle cx="12" cy="12" r="6.6"/></svg></button>
 
-    <div class="home">
+    <main class="home">
       <p class="hero-kicker"><span class="hero-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.6"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><path d="M12 1.5v4M12 18.5v4M1.5 12h4M18.5 12h4"/></svg></span>Browser arena shooter</p>
-      <h1 class="logo">ARENA<span>DUELS</span></h1>
+      <h1 class="logo">ARENA <span>DUELS</span></h1>
       <p class="tagline">Strafe, aim and out-duel your friends.</p>
 
       <div class="home-actions">
@@ -75,7 +111,43 @@
         <li><kbd>Tab</kbd> scores</li>
         <li><kbd>Esc</kbd> pause</li>
       </ul>
-    </div>
+
+      <details class="home-about" id="about">
+        <summary>About Arena Duels</summary>
+        <div class="about-body">
+          <p>Arena Duels is a free first-person arena shooter that runs in your web browser. There is nothing to download or install: open the page, pick a name and jump into a match with other players, play against bots, or practise in the training room.</p>
+          <h2>Ways to play</h2>
+          <ul>
+            <li><strong>Find Match</strong>: get put into a match with other players.</li>
+            <li><strong>Custom Match</strong>: host a match of your own and share the code with friends, or join one with a code.</li>
+            <li><strong>Browse Public Lobbies</strong>: look through open matches and join one.</li>
+            <li><strong>Training Room</strong>: practise your aim on targets, on your own.</li>
+          </ul>
+          <h2>Game modes</h2>
+          <ul>
+            <li><strong>1v1</strong>: a standard duel, first to 30 kills.</li>
+            <li><strong>Free For All</strong>: everyone for themselves, up to five players.</li>
+            <li><strong>Team Deathmatch</strong>: two teams of up to four.</li>
+          </ul>
+          <h2>Arenas</h2>
+          <ul>
+<!-- arenas:start -->
+            <li><strong>Classic Box</strong>: Just a box (30 by 30).</li>
+            <li><strong>Foundry</strong>: Abandoned steel works (48 by 48).</li>
+            <li><strong>Ruins</strong>: Sun-bleached courtyard (56 by 56).</li>
+            <li><strong>Neon Grid</strong>: Night-time data arena (44 by 44).</li>
+            <li><strong>Mansion</strong>: Dusk at the manor (72 by 72).</li>
+            <li><strong>Glacier</strong>: Frozen research station (112 by 112).</li>
+            <li><strong>Backstreets</strong>: Skyscraper alleys at dusk (120 by 120).</li>
+            <li><strong>Dock</strong>: Open pier over the sea (48 by 48).</li>
+            <li><strong>Cave</strong>: Dark cavern, crystal light (80 by 80).</li>
+<!-- arenas:end -->
+          </ul>
+          <h2>Controls</h2>
+          <p>Move with WASD, jump with Space, and aim and fire with the mouse. Tab shows the scores and Esc pauses. You can play as a guest, or make an optional account (no email needed) to keep your name.</p>
+        </div>
+      </details>
+    </main>
   </div>
 
   <!-- ===================== OPTIONAL ACCOUNT MODAL ===================== -->
@@ -227,14 +299,6 @@
           <span id="crosshair-value" class="setting-value">6</span>
         </div>
         <input id="crosshair-slider" type="range" min="2" max="16" step="1" value="6" class="slider">
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-label">
-          <span>Sound Effects</span>
-          <span id="sfx-value" class="setting-value">60</span>
-        </div>
-        <input id="sfx-slider" type="range" min="0" max="100" step="1" value="60" class="slider">
       </div>
 
       <button id="btn-customization-open" class="btn btn-secondary">Customize Player</button>
