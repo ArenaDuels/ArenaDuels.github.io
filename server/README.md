@@ -320,16 +320,3 @@ point lights (`lights`); the server ignores all three, so keep `server/arenas/ca
 `NET.INTERP_DELAY_MS` (js/player.js) and `TUNING.INTERP_DELAY_MS` (server/anticheat.js) must stay
 equal; `netcode.test.js` checks that. Put the new `server/anticheat.js` and `server/index.js` on the
 server and restart it; the website and the server can be updated in either order.
-
-## Sound
-
-`js/audio.js` makes every sound in the browser with the Web Audio API (no audio files). There are
-three: the laser gun (a deep plasma rumble that runs while a trigger is held; other players' beams are
-placed in 3D), the laser hit (an electric-arc sizzle that runs while *your* beam is on a player or a
-training target) and one death sound for everyone (a power-down: a tone that slows like a stopping
-tape, a deep boom and sparks; for other players it comes from where they died). The sizzle and the
-sparks are generated once, when sound is unlocked (`makeSizzleSamples`, `makeSparkSamples`).
-`main.js` calls `updateSfx` every frame and `applyKill` for deaths. The "Sound Effects" slider in
-settings sets the volume (saved with the other settings). Browsers only allow sound after a click
-or key press, so it unlocks on the first one. `audio.test.js` checks every sound starts and stops
-cleanly against a fake audio device, and that the sizzle is a real crackly loop.

@@ -2,7 +2,6 @@ import * as THREE from "../vendor/three/three.module.min.js";
 import { ARENA_LIST, getArena } from "./arenas.js";
 import { PlayerController, RemotePlayer, makeLaserMesh, aimLaser, setLaserColor, GAME } from "./player.js";
 import { Net } from "./net.js";
-import { Sfx } from "./audio.js";
 import { randomName } from "./names.js";
 import { initializeAccountUi, getCurrentFirebaseIdToken, API_BASE } from "./auth.js";
 import { initStatsUi } from "./stats-ui.js";
@@ -23,7 +22,7 @@ import { TrainingSession, DRILLS, DRILL_IDS, LEVELS, LEVEL_IDS, DEFAULT_LEVEL, b
    SETTINGS — persisted to localStorage.
 ========================================================= */
 const SETTINGS_KEY = "capsules-settings";
-const DEFAULT_SETTINGS = { sensitivity: 6, sensScale: SENS_SCALE, controllerEnabled: false, controllerSensitivity: 3.0, fov: 90, crosshairSize: 6, sfxVolume: 60 };
+const DEFAULT_SETTINGS = { sensitivity: 6, sensScale: SENS_SCALE, controllerEnabled: false, controllerSensitivity: 3.0, fov: 90, crosshairSize: 6 };
 
 function loadSettings() {
   try {
@@ -39,7 +38,6 @@ function loadSettings() {
       controllerSensitivity: typeof parsed.controllerSensitivity === "number" ? parsed.controllerSensitivity : DEFAULT_SETTINGS.controllerSensitivity,
       fov: typeof parsed.fov === "number" ? parsed.fov : DEFAULT_SETTINGS.fov,
       crosshairSize: typeof parsed.crosshairSize === "number" ? parsed.crosshairSize : DEFAULT_SETTINGS.crosshairSize,
-      sfxVolume: typeof parsed.sfxVolume === "number" ? Math.max(0, Math.min(100, parsed.sfxVolume)) : DEFAULT_SETTINGS.sfxVolume,
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -51,11 +49,6 @@ function saveSettings() {
 }
 
 let settings = loadSettings();
-
-// Sound effects (js/audio.js). Browsers only allow sound after a click or key press, so unlock on the first one.
-const sfx = new Sfx();
-sfx.setVolume(settings.sfxVolume / 100);
-for (const type of ["pointerdown", "keydown", "touchstart"]) addEventListener(type, () => sfx.unlock(), { passive: true });
 
 function sensitivityMultiplier() {
   return radiansPerCount(settings.sensitivity);
@@ -83,8 +76,6 @@ const fovSlider = document.getElementById("fov-slider");
 const fovValue = document.getElementById("fov-value");
 const crosshairSlider = document.getElementById("crosshair-slider");
 const crosshairValue = document.getElementById("crosshair-value");
-const sfxSlider = document.getElementById("sfx-slider");
-const sfxValue = document.getElementById("sfx-value");
 
 function refreshSettingsUI() {
   sensSlider.value = settings.sensitivity;
@@ -98,8 +89,6 @@ function refreshSettingsUI() {
   fovValue.textContent = settings.fov;
   crosshairSlider.value = settings.crosshairSize;
   crosshairValue.textContent = settings.crosshairSize;
-  sfxSlider.value = settings.sfxVolume;
-  sfxValue.textContent = settings.sfxVolume;
 }
 
 let paused = false;
@@ -194,14 +183,6 @@ crosshairSlider.addEventListener("input", () => {
   saveSettings();
   applyCrosshairSize();
 });
-
-sfxSlider.addEventListener("input", () => {
-  settings.sfxVolume = parseInt(sfxSlider.value, 10);
-  sfxValue.textContent = settings.sfxVolume;
-  sfx.setVolume(settings.sfxVolume / 100);
-  saveSettings();
-});
-sfxSlider.addEventListener("change", () => { sfx.unlock(); sfx.preview(); }); // a zap when you let go, to hear the level
 
 controllerMode.addEventListener("change", () => {
   settings.controllerEnabled = controllerMode.value === "controller";
@@ -332,7 +313,6 @@ const canvas = document.getElementById("game-canvas");
 const crosshair = document.getElementById("crosshair");
 
 function showScreen(name) {
-  sfx.silence();
   for (const key in screens) screens[key].classList.toggle("hidden", key !== name);
   canvas.classList.add("hidden");
   hud.classList.add("hidden");
@@ -1132,7 +1112,6 @@ async function enterTrainingRoom() {
     makeTarget: (color, name) => new RemotePlayer(scene, color, name),
     onHud: updateTrainingHud,
     onFinish: onTrainingFinished,
-    onDown: (position) => sfx.death({ position }),
   });
   renderConsoleDrills();
   consolePanelOpen = false;
@@ -2363,49 +2342,12 @@ function addKillFeed(attackerId, victimId) {
   }, 4500);
 }
 
-/* ---- sound ----
-   Your laser, the sizzle while it is on someone, and everyone else's lasers (placed in 3D).
-   Called every frame. The voices stop and start themselves, so this only says what should be on. */
-const ownBeamSfx = sfx.beamVoice(false);
-const ownHitSfx = sfx.hitVoice();
-const remoteBeamSfx = new Map(); // player id -> that player's beam voice
-const sfxListenerPos = new THREE.Vector3();
-const sfxListenerDir = new THREE.Vector3();
-function updateSfx(ownFiring, ownOnTarget) {
-  if (!sfx.ready) return;
-  if (paused || match.over) { sfx.silence(); return; }
-  camera.getWorldPosition(sfxListenerPos);
-  camera.getWorldDirection(sfxListenerDir);
-  sfx.setListener(sfxListenerPos, sfxListenerDir);
-
-  if (ownFiring) ownBeamSfx.start(); else ownBeamSfx.stop();
-  if (ownFiring && ownOnTarget) ownHitSfx.start(); else ownHitSfx.stop();
-
-  for (const [id, rp] of players) {
-    const want = rp.visible && rp.shownFiring && rp.hp > 0;
-    let voice = remoteBeamSfx.get(id);
-    if (want) {
-      if (!voice) { voice = sfx.beamVoice(true); remoteBeamSfx.set(id, voice); }
-      voice.setPosition(rp.mesh.position.x, rp.mesh.position.y, rp.mesh.position.z);
-      voice.start();
-    } else if (voice) {
-      voice.stop();
-    }
-  }
-  for (const [id, voice] of remoteBeamSfx) {
-    if (!players.has(id)) { voice.dispose(); remoteBeamSfx.delete(id); }
-  }
-}
-
 /* ---- kills ----
    The server announces every player's death (the host announces its bots');
    everyone applies it — so all scoreboards agree. Only the host decides
    when that adds up to the end of the match. */
 function applyKill(attackerId, victimId) {
   if (!match.addKill(attackerId, victimId)) return;
-  // the death sound: the same for everyone, from where they were standing (just plain for you)
-  if (victimId === myId) sfx.death();
-  else { const rp = players.get(victimId); if (rp) sfx.death({ position: rp.mesh.position }); }
   addKillFeed(attackerId, victimId);
   refreshHud(true);
   if (net.isHost) {
@@ -2773,7 +2715,6 @@ function loop() {
   const solidObjects = arenaObjects; // includes the floor now, so floor shots register too
 
   let beamHitMesh = null; // which training target the beam reached first, if any
-  let beamOnTarget = false; // the beam is on a player or a training target right now (for the hit sound)
   if (activeFiring) {
     const origin = new THREE.Vector3();
     camera.getWorldPosition(origin);
@@ -2797,7 +2738,6 @@ function loop() {
     if (hit) {
       const idx = targets.indexOf(hit.object);
       if (idx !== -1) {
-        beamOnTarget = true;
         // The beam is only drawn here. The server sees the same trigger and aim in our state
         // messages, works out who it hits, takes their health off (and heals us, with health
         // steal on), so there's nothing to report.
@@ -2816,7 +2756,6 @@ function loop() {
     laser.visible = false;
     endScorchStroke();
   }
-  updateSfx(activeFiring, beamOnTarget);
 
   if (training) {
     training.afterBeam(dt, activeFiring, beamHitMesh, trainingPlayer());
